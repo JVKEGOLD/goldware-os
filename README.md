@@ -89,6 +89,47 @@ make setup
 
 Setup skips what is already done and rebuilds the app. After an update macOS may forget the app's permissions (see Troubleshooting).
 
+## Uninstalling
+
+Quit GoldWare OS first (menu bar icon, then Quit). If you turned on Open at Login, turn it off in the app first, or remove it later in System Settings > General > Login Items.
+
+1. Remove the app and everything it stores on this Mac (history, recordings, the speech model, Face ID, settings):
+
+```sh
+osascript -e 'tell application id "io.goldware.os" to quit'
+rm -rf "/Applications/GoldWare OS.app"
+rm -rf "$HOME/Library/Application Support/GoldWare OS"
+rm -rf "$HOME/Library/Caches/io.goldware.os" "$HOME/Library/WebKit/io.goldware.os" \
+       "$HOME/Library/HTTPStorages/io.goldware.os" "$HOME/Library/Saved Application State/io.goldware.os.savedState"
+defaults delete io.goldware.os
+tccutil reset All io.goldware.os
+```
+
+The last line clears the camera, microphone, and other permissions you granted. Accessibility may still list GoldWare OS in System Settings > Privacy & Security > Accessibility; select it and click the minus button.
+
+2. Remove the GoldWare iTerm profile (your other iTerm profiles are not touched):
+
+```sh
+rm -f "$HOME/Library/Application Support/iTerm2/DynamicProfiles/goldware.json"
+```
+
+3. Delete the repo folder. This also deletes your `goldware.json`, tasks, notes, and Office board in `data/`, so copy anything you want to keep first:
+
+```sh
+rm -rf ~/goldware-os
+```
+
+4. Optional: setup also installed some shared tools that other apps may use. Remove only the ones you don't need:
+
+```sh
+ollama rm gemma4:e4b                 # the local model (check the name with: ollama list)
+brew services stop ollama
+brew uninstall ollama whisper-cpp
+brew uninstall --cask iterm2 font-jetbrains-mono-nerd-font
+```
+
+Homebrew and Apple's Command Line Tools stay installed; other software often depends on them.
+
 ## Troubleshooting
 
 Run this first. It checks every piece and prints the fix for anything missing:
