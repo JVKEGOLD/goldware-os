@@ -5,7 +5,7 @@ build/
 .DS_Store
 goldware.json
 goldware.json.bak
-data/
+/data/
 *.bak
 __pycache__/
 *.pyc

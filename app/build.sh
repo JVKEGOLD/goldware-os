@@ -19,7 +19,8 @@ cp Resources/goldware-logo.png "$APP/Contents/Resources/"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/"   # regenerate with make_icon.swift (see its header)
 # Face ID's fingerprint model (SFace, Apache 2.0, see ThirdParty/sface-LICENSE), compiled for Core ML.
 mkdir -p "$APP/Contents/Resources/FaceID"
-xcrun coremlcompiler compile Resources/FaceID/SFace.mlpackage "$APP/Contents/Resources/FaceID" > /dev/null
+# Compiled with the system Core ML framework, so the Command Line Tools are enough (no full Xcode).
+swift compile_model.swift Resources/FaceID/SFace.mlpackage "$APP/Contents/Resources/FaceID"
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
