@@ -1,0 +1,27 @@
+{
+  "assistantName": "GoldWare",
+  "wakePhrase": "Hey GoldWare",
+  "wakeAliases": ["hey gold ware", "hey gold wear", "hey goldwear", "hey goal ware", "okay goldware"],
+  "accentColor": "#C9A24A",
+  "port": 4188,
+  "models": {
+    "local": "gemma4:e4b",
+    "whisper": "ggml-small.en-q5_1.bin"
+  },
+  "dashboard": {
+    "layout": "starter",
+    "cards": [
+      { "id": "welcome", "type": "welcome", "title": "Make this yours", "size": "w" },
+      { "id": "today", "type": "clock", "title": "Today", "size": "s" },
+      { "id": "tasks", "type": "tasks", "title": "Tasks", "size": "m" },
+      { "id": "notes", "type": "notes", "title": "Notes", "size": "m" },
+      { "id": "system", "type": "system", "title": "This Mac", "size": "s" },
+      { "id": "agents", "type": "agents", "title": "Local AI", "size": "s" },
+      { "id": "links", "type": "links", "title": "Links", "size": "s",
+        "options": { "links": [
+          { "label": "GoldWare", "url": "https://goldware.io" },
+          { "label": "Customizing guide", "url": "/docs/CUSTOMIZING.md" }
+        ] } }
+    ]
+  }
+}

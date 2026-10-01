@@ -1,0 +1,8 @@
+.build/
+build/
+.env
+*.log
+.DS_Store
+goldware.json
+goldware.json.bak
+data/
