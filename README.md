@@ -15,38 +15,38 @@ Your Mac, voice, vision, and a dashboard you reshape with your own AI. Everythin
 - About 15 GB of free disk space
 - An internet connection for the first install (after that, everything runs offline)
 
-Setup installs everything else for you.
+Setup installs everything else for you (Homebrew, the speech engine, and the local AI model). No accounts or sign-ups.
 
-## Install (about 20 to 40 minutes, mostly downloads)
+## Install (about 30 minutes, mostly downloads)
 
-Open **Terminal** (press Cmd+Space, type Terminal, press Return) and paste these one at a time.
+You only need Terminal. Open it with Cmd+Space, type **Terminal**, and press Return.
 
-**1. Get the code**
+**1. Download GoldWare OS.** Paste this and press Return:
 
 ```sh
 git clone https://github.com/JVKEGOLD/goldware-os.git ~/goldware-os
 ```
 
-On a brand-new Mac this opens a box asking to install the "command line developer tools". Click **Install**, wait for it to finish, then paste the command again.
+If a box pops up asking to install "command line developer tools", click **Install**. When it finishes, paste the same line again.
 
-> While the repository is private you need to be signed in to GitHub: install [Homebrew](https://brew.sh), then run `brew install gh`, `gh auth login` (choose GitHub.com, HTTPS, log in with a web browser), and `gh repo clone JVKEGOLD/goldware-os ~/goldware-os` instead of the `git clone` line.
-
-**2. Run setup**
+**2. Set it up.** Paste this and press Return:
 
 ```sh
-cd ~/goldware-os
-make setup
+cd ~/goldware-os && make setup
 ```
 
-Setup checks your Mac, installs what is missing, downloads the speech and language models, builds the app, and asks before copying it to your Applications folder (type `y` and press Return). It is safe to run again at any time.
+Answer the questions it asks: type `y` and press Return. When it asks for your password, type your Mac login password (it stays hidden while you type) and press Return. You can leave it running while it downloads.
 
-If setup stops, it prints exactly what to do next (for example the one-line command to install Homebrew). Do that, then run `make setup` again; it picks up where it left off.
+If it stops with an error, it tells you what to do. Do that, then paste the step 2 line again. It picks up where it left off.
 
-**3. Open the app**
+**3. Say yes to permissions.** At the end, setup offers to open GoldWare OS. When macOS asks to allow the Microphone, Accessibility, Speech Recognition, and Camera, allow each one. For Accessibility, macOS opens System Settings: turn on **GoldWare OS** there.
 
-Open **GoldWare OS** from your Applications folder. Because it is not from the App Store, macOS blocks the first launch: right-click the app and choose **Open**, or go to System Settings > Privacy & Security and click **Open Anyway**.
+**Done.** Say **"Hey GoldWare"**. Your dashboard is at http://127.0.0.1:4188.
 
-Then allow these when asked (or turn them on in System Settings > Privacy & Security):
+Later you can open GoldWare OS from your Applications folder like any other app. Leave the `goldware-os` folder in your home folder: the app reads its settings from it.
+
+<details>
+<summary>What the permissions are for</summary>
 
 | Permission | What it is for |
 |---|---|
@@ -55,13 +55,28 @@ Then allow these when asked (or turn them on in System Settings > Privacy & Secu
 | Speech Recognition | the "Hey GoldWare" wake phrase |
 | Camera | Vision (hand tracking, document scan) |
 
-That's it. Say **"Hey GoldWare"**, and open your dashboard at http://127.0.0.1:4188.
+You can change any of them later in System Settings > Privacy & Security.
+</details>
 
-**Keep the `~/goldware-os` folder where it is.** The app reads its settings and dashboard from it.
+<details>
+<summary>While this repository is private</summary>
 
-### Prefer to let an AI do it?
+Step 1 needs you to be signed in to GitHub. First install Homebrew by pasting the install line from https://brew.sh, then run:
 
-If you use an AI coding agent (Claude Code, Codex, Hermes, ...), open it in the `goldware-os` folder after step 1 and paste in [MASTER_PROMPT.md](MASTER_PROMPT.md). It runs setup, explains each step, and asks before installing anything. You still do step 3 yourself.
+```sh
+brew install gh
+gh auth login
+gh repo clone JVKEGOLD/goldware-os ~/goldware-os
+```
+
+For `gh auth login`, choose GitHub.com, then HTTPS, then log in with a web browser. Then continue with step 2.
+</details>
+
+<details>
+<summary>Prefer to let an AI agent do it?</summary>
+
+After step 1, open your AI coding agent (Claude Code, Codex, Hermes, ...) in the `goldware-os` folder and paste in [MASTER_PROMPT.md](MASTER_PROMPT.md). It runs setup, explains each step, and asks before installing anything. You still allow the permissions yourself.
+</details>
 
 ## Updating
 
@@ -82,7 +97,7 @@ make doctor
 ```
 
 - **Voice or camera stopped working after an update.** The app is not signed with an Apple developer certificate, so macOS can forget its permissions after a rebuild. In System Settings > Privacy & Security, open Microphone, Accessibility, Speech Recognition, and Camera, remove GoldWare OS if it is listed (the minus button), and turn it back on.
-- **"GoldWare OS can't be opened".** Right-click the app and choose Open, or System Settings > Privacy & Security > Open Anyway.
+- **"GoldWare OS can't be opened" or "cannot verify the developer".** It is not from the App Store. Right-click the app and choose Open, or go to System Settings > Privacy & Security and click Open Anyway. You only do this once.
 - **You moved or renamed the `goldware-os` folder.** Run `make setup` again from the new location.
 - **A download failed or was interrupted.** Run `make setup` again; downloads resume.
 - **Still stuck?** Copy everything setup printed and paste it into your AI agent, or open an issue.

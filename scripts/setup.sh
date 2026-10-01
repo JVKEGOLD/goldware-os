@@ -91,10 +91,11 @@ step_clt() {
 step_brew() {
   step "3/10 Homebrew"
   if command -v brew >/dev/null 2>&1; then ok "brew $(brew --version | head -1)"; return; fi
-  if (( DRY )); then would "stop: Homebrew missing. Install with: $BREW_INSTALL"; return; fi
-  if (( YES )); then
-    print "  Installing Homebrew (official installer, --yes given)..."
-    NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" \
+  if (( DRY )); then would "ask to install Homebrew with: $BREW_INSTALL"; return; fi
+  if ask "Homebrew (the Mac package manager) is missing. Install it now? It will ask for your Mac password."; then
+    print "  Installing Homebrew (official installer)..."
+    if (( YES )); then export NONINTERACTIVE=1; fi
+    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" \
       || fail "Homebrew install failed." "Run it yourself: $BREW_INSTALL"
     for b in /opt/homebrew/bin/brew; do [[ -x "$b" ]] && eval "$("$b" shellenv)"; done
     command -v brew >/dev/null 2>&1 || fail "brew still not on PATH." "Open a new terminal and rerun scripts/setup.sh"
@@ -270,7 +271,7 @@ step_install() {
   cp -R "$APP_SRC" "$tmp" || { rm -rf "$tmp"; fail "Copy to /Applications failed." "Check permissions on /Applications and free disk space."; }
   rm -rf "$APP_DST" && mv "$tmp" "$APP_DST" || fail "Could not replace $APP_DST." "Check permissions on /Applications."
   ok "installed to $APP_DST"
-  if (( OPEN )); then open "$APP_DST"; ok "opened"; fi
+  if (( OPEN )) || ask "Open GoldWare OS now?"; then open "$APP_DST"; ok "opened"; fi
 }
 
 next_steps() {
