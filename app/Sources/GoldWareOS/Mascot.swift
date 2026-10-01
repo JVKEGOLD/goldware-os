@@ -1,7 +1,7 @@
 import AppKit
 
-/// The GoldWare mark (Resources/goldware-logo.png), drawn smoothly at any size, plus the
-/// plus the dashboard's surfing GoldWare and a peeking GoldWare for the assistant-mode pill.
+/// The GoldWare mark (Resources/goldware-logo.png), drawn smoothly at any size,
+/// plus a peeking GoldWare for the assistant-mode pill.
 enum Mascot {
     static let image: NSImage? = {
         var urls: [URL] = []
@@ -33,93 +33,6 @@ enum Mascot {
         let icon = NSImage(size: size, flipped: true) { r in draw(in: r); return true }
         icon.isTemplate = false
         return icon
-    }
-
-    /// The dashboard's inner tube: one ellipse, white on the upper-left, red on the lower-right,
-    /// drawn as a back half (behind GoldWare) and a front half (in front).
-    static func drawTube(in r: NSRect, front: Bool) {
-        let ring = NSBezierPath(ovalIn: r.insetBy(dx: r.height * 0.17, dy: r.height * 0.17))
-        ring.lineWidth = r.height * 0.33
-        NSGraphicsContext.current?.saveGraphicsState()
-        NSBezierPath(rect: front ? NSRect(x: r.minX - 4, y: r.midY, width: r.width + 8, height: r.height)
-                                 : NSRect(x: r.minX - 4, y: r.minY - 4, width: r.width + 8, height: r.height / 2 + 4)).addClip()
-        NSColor(srgbRed: 0.957, green: 0.957, blue: 0.957, alpha: 1).setStroke()
-        ring.stroke()
-        // red on the right and bottom edges
-        NSBezierPath(rect: NSRect(x: r.midX, y: r.minY - 4, width: r.width, height: r.height + 8)).addClip()
-        NSColor(srgbRed: 0.89, green: 0.286, blue: 0.282, alpha: 1).setStroke()
-        ring.stroke()
-        NSGraphicsContext.current?.restoreGraphicsState()
-    }
-}
-
-/// The mascot in an inner tube, surfing a wave of flipping binary digits, the same scene as the
-/// dashboard's top bar (npStartSurf): 19 × 4 digits on a travelling sine wave, and the mascot
-/// tilting with the slope. Drawn in the dashboard's 132 × 64 space and scaled to fit.
-final class SurfView: NSView {
-    private let cols = 19, rows = 4
-    private var digits: [Bool] = (0..<76).map { _ in Bool.random() }
-    private var t: Double = 1.2
-    private var link: CADisplayLink?
-    private var lastDraw: CFTimeInterval = 0
-    private var lastFlip: CFTimeInterval = 0
-    private let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-
-    override var isFlipped: Bool { true }
-
-    func start() {
-        guard link == nil, !reduceMotion else { return }
-        let l = displayLink(target: self, selector: #selector(tick(_:)))
-        l.add(to: .main, forMode: .common)
-        link = l
-    }
-
-    func stop() {
-        link?.invalidate()
-        link = nil
-    }
-
-    @objc private func tick(_ sender: CADisplayLink) {
-        let now = CACurrentMediaTime()
-        t = now
-        if now - lastFlip > 0.07 {
-            lastFlip = now
-            digits[Int.random(in: 0..<digits.count)].toggle()
-        }
-        if now - lastDraw >= 1.0 / 30 { lastDraw = now; needsDisplay = true }
-    }
-
-    private func wave(_ x: Double) -> Double { 40 + 7 * sin((x + t * 26) * 2 * .pi / 88) }
-
-    override func draw(_ dirtyRect: NSRect) {
-        guard let ctx = NSGraphicsContext.current?.cgContext else { return }
-        let s = min(bounds.width / 132, bounds.height / 64)
-        ctx.saveGState()
-        ctx.scaleBy(x: s, y: s)
-        let tones = [0xE6F0FF, 0x86B6EF, 0x3987E5, 0x1C5CAB].map { Theme.hex($0) }
-        let font = Theme.mono(9, "Bold")
-        let dx = 132.0 / Double(cols - 1)
-        for r in 0..<rows {
-            for c in 0..<cols {
-                let x = Double(c) * dx
-                // Fade the ends, like the dashboard's mask.
-                let edge = min(1, min(x, 132 - x) / (132 * 0.14))
-                let alpha = (1 - Double(r) * 0.2) * edge
-                let y = wave(x) + Double(r) * 8.5
-                Theme.draw(digits[r * cols + c] ? "1" : "0", at: NSPoint(x: x - 2.5, y: y - 9),
-                           font: font, color: tones[r].withAlphaComponent(alpha))
-            }
-        }
-        // The rider: a 40 × 36 box whose bottom centre follows the wave and tilts with it.
-        let riderX = 44.0
-        let y = wave(riderX), slope = (wave(riderX + 2) - wave(riderX - 2)) / 4
-        ctx.translateBy(x: riderX, y: y + 3)
-        ctx.rotate(by: CGFloat(atan(slope) * 0.55))
-        ctx.translateBy(x: -20, y: -36)
-        Mascot.drawTube(in: NSRect(x: 4, y: 20, width: 32, height: 15), front: false)
-        Mascot.draw(in: NSRect(x: 2, y: 0, width: 36, height: 35))
-        Mascot.drawTube(in: NSRect(x: 4, y: 20, width: 32, height: 15), front: true)
-        ctx.restoreGState()
     }
 }
 

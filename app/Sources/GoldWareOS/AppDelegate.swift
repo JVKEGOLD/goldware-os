@@ -126,16 +126,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if !granted { self.statusLine = "Microphone access denied" }
         }
 
-        hud.infoProvider = { [weak self] in self?.indicatorInfo() ?? IndicatorInfo() }
-        hud.onOpenTasks = { [weak self] in self?.openTasks() }
+        hud.historyProvider = { [weak self] in self?.store.recent(limit: HistoryView.limit) ?? [] }
+        hud.onCopy = { [weak self] d in
+            Paster.copy(d.finalText)
+            self?.hud.show("Copied. Paste with ⌘V.", orb: .breathing, autoHide: 1.4)
+        }
         hud.onOpenHistory = { [weak self] in self?.openHistory() }
-        hud.onEditSnippets = { [weak self] in self?.editSnippets() }
-        hud.library = library
         assistant.library = library
-        hud.onUse = { [weak self] item, copyOnly in self?.use(item, copyOnly: copyOnly) }
-        hud.onUndo = { [weak self] in self?.performUndo() }
-        hud.undoLabel = { [weak self] in self?.undoTitle.map { _ in "Undo" } }
-        hud.agendaProvider = { [weak self] in await self?.taskBoard.agenda() ?? Agenda() }
         learner.onLearned = { [weak self] terms in
             self?.hud.show("Learned “\(terms.joined(separator: "”, “"))” from your edit", orb: .breathing, tint: .assistant, autoHide: 2.5)
         }
@@ -209,7 +206,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func showToday() {
-        hud.presentCard(tab: .today)
+        Task { @MainActor in
+            let agenda = await taskBoard.agenda()
+            hud.show(agenda.summary, orb: .breathing, tint: .assistant, autoHide: 4)
+        }
     }
 
     @objc private func reloadDashboard() { dashboard.reload() }
@@ -283,28 +283,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self.library.refresh()
             }
         }
-    }
-
-    /// A prompt, command, or snippet clicked in the card. The indicator never takes focus,
-    /// so the paste lands in whatever the user was typing in.
-    private func use(_ item: LibraryItem, copyOnly: Bool) {
-        guard !item.value.isEmpty else { return }
-        if copyOnly {
-            Paster.copy(item.value)
-            hud.show("Copied \(item.title)", orb: .breathing, autoHide: 1.4)
-        } else {
-            Paster.paste(item.value)
-            rememberPaste(item.title)
-            hud.show("Pasted \(item.title)", orb: .breathing, tint: item.kind == .snippet ? .plain : .assistant, autoHide: 2.5,
-                     action: ("Undo", { [weak self] in self?.performUndo() }))
-        }
-    }
-
-    private func indicatorInfo() -> IndicatorInfo {
-        let today = store.today()
-        return IndicatorInfo(ready: statusLine == "Ready", status: statusLine, dictationsToday: today.dictations,
-                             capturesToday: today.captures, waiting: store.pendingOutbox().count,
-                             lastCapture: today.last, model: cleanupModel)
     }
 
     private func checkPermissions() {
@@ -690,9 +668,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let agenda = await taskBoard.agenda()
             await MainActor.run {
                 Sounds.play(agenda.error == nil ? .done : .error)
-                self.hud.show(agenda.summary, orb: .breathing, tint: .assistant, autoHide: 2.5)
-                let hud = self.hud
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.6) { hud.presentCard(tab: .today) }
+                self.hud.show(agenda.summary, orb: .breathing, tint: .assistant, autoHide: 4)
             }
             return
         case "complete":

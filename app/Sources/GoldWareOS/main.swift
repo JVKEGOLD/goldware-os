@@ -1442,22 +1442,20 @@ if args.count >= 3, args[1] == "--orb-sheet" {
     exit(0)
 }
 
-// Renders the indicator (card, idle pill, active pills) to a PNG for review.
+// Renders the indicator (history list, idle orb, active pills) to a PNG for review.
 if args.count >= 3, args[1] == "--indicator-sheet" {
-    var info = IndicatorInfo()
-    info.ready = true
-    info.dictationsToday = 12
-    info.capturesToday = 3
-    info.lastCapture = "Task added to your tasks: Renew the domain"
-    info.model = GWConfig.current.localModel
-    let library = Library()
-    library.root = VaultContext.resolveRoot()
-    library.refresh()
-    runAndExit {
-        let agenda = await TaskBoard(url: Assistant().commandCenter).agenda()
-        // Drawing into an offscreen bitmap is safe here; the main thread is parked on the semaphore.
-        HUD.renderSheet(to: URL(fileURLWithPath: args[2]), info: info, library: library, agenda: agenda)
+    let now = Date()
+    func row(_ text: String, _ app: String, _ ago: Double, _ mode: String = "dictate") -> Dictation {
+        Dictation(createdAt: now.addingTimeInterval(-ago), appName: app, durationSec: 3, audioPath: "", rawText: text,
+                  finalText: text, asrMs: 0, cleanupMs: 0, mode: mode)
     }
+    let rows = [row("Can we move the call to Thursday at 3? Friday is packed for me.", "Messages", 60),
+                row("Remind me Friday to renew the domain", "Safari", 600, "assistant"),
+                row("The draft looks good. Ship it after the copy pass.", "Slack", 3_600),
+                row("Pick up oat milk and coffee filters on the way home", "Notes", 7_200)]
+    HUD.renderSheet(to: URL(fileURLWithPath: args[2]), rows: rows)
+    print("wrote \(args[2])")
+    exit(0)
 }
 
 if args.count >= 2, args[1] == "--sanitize-check" {
