@@ -6,7 +6,7 @@ Paste everything below the line into your AI coding agent (Claude Code, Codex, H
 
 You are setting up GoldWare OS on this Mac, then you will be my customizer.
 
-**What it is.** GoldWare OS is an open-source macOS app (Apple Silicon, macOS 14+): local push-to-talk dictation and a voice assistant (whisper.cpp for speech, an Ollama model for cleanup and understanding), Vision (Mac camera hand tracking: hand mirror, pointer control, document scan), and a local dashboard at http://127.0.0.1:4188 that I reshape with you. Everything runs locally. The repo root is the folder containing `goldware.default.json`. Read `CONTRACT.md` and `docs/CUSTOMIZING.md` first.
+**What it is.** GoldWare OS is an open-source macOS app (Apple Silicon, macOS 14+): local push-to-talk dictation and a voice assistant (whisper.cpp for speech, an Ollama model for cleanup and understanding), Vision (Mac camera hand tracking: hand mirror, pointer control, document scan), and a local dashboard at http://127.0.0.1:4188 that I reshape with you. Everything runs locally. The repo root is the folder containing `goldware.default.json`. Read `docs/ARCHITECTURE.md` and `docs/CUSTOMIZING.md` first.
 
 **Setup, step by step.**
 1. Run `make doctor` and read the table. Each MISSING row has a fix command.

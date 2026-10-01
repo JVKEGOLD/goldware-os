@@ -236,8 +236,8 @@ class TestMisc(ServerCase):
 
     def test_traversal_blocked(self):
         for p in ("/dashboard/../goldware.default.json", "/dashboard/%2e%2e/goldware.default.json",
-                  "/docs/../CONTRACT.md", "/fonts/..%2f..%2f..%2fCONTRACT.md",
-                  "/docs/%2e%2e/%2e%2e/CONTRACT.md"):
+                  "/docs/../docs/ARCHITECTURE.md", "/fonts/..%2f..%2f..%2fdocs/ARCHITECTURE.md",
+                  "/docs/%2e%2e/%2e%2e/docs/ARCHITECTURE.md"):
             # use a raw socket so the client does not normalise the path
             s = socket.create_connection(("127.0.0.1", self.port))
             s.sendall(("GET %s HTTP/1.0\r\nHost: x\r\n\r\n" % p).encode())
