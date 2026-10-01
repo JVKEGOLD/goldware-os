@@ -46,6 +46,16 @@ final class VisionController {
         get { control.onLockUp }
         set { control.onLockUp = newValue }
     }
+    /// Pointer style: both hands thumb, index, and middle, thumbs touching, pulled apart.
+    var onLetsWork: (() -> Void)? {
+        get { control.onLetsWork }
+        set { control.onLetsWork = newValue }
+    }
+    /// Pointer style: both hands open, then one fist (close the unused agent terminals).
+    var onClearOut: (() -> Void)? {
+        get { control.onClearOut }
+        set { control.onClearOut = newValue }
+    }
     var onDictate: ((Bool) -> Void)? {
         get { quadrants.onDictate }
         set { quadrants.onDictate = newValue }   // only Quadrants dictates; the pointer never does
@@ -68,8 +78,7 @@ final class VisionController {
             guard self.mirror.isShown || (self.modeOn && self.mirrorHidden) else { return }
             guard self.modeOn else { self.mirror.handle(f, driver: nil); return }
             var unlocked = false, relocked = false
-            let open = self.lock.admit(f, unlocked: &unlocked, relocked: &relocked,
-                                       thumbLocks: !self.mirror.scan.isActive && !self.driver.isDictating)
+            let open = self.lock.admit(f, unlocked: &unlocked, relocked: &relocked)
             if open, self.mirrorToggle.feed(f) { self.setMirrorHidden(!self.mirrorHidden) }
             self.faceState = f.face
             self.refreshBadges()

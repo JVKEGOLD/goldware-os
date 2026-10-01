@@ -38,7 +38,7 @@ final class QuadrantDictation: VisionDriver {
     private var unblockSince: CFTimeInterval?
     private var switchHold = HeldGesture()
     private var clearHold = HeldGesture()
-    private var send = TwoHandGesture()
+    private var send = SendGesture()
     private var resting = false
     /// Last frame's fingers, so a finger at the line does not flicker (see `HandGesture.extended`).
     private var lastFingers: [Bool]?
@@ -91,9 +91,9 @@ final class QuadrantDictation: VisionDriver {
             return
         }
 
-        // The two-hand gesture sends what was just pasted. While it is underway (hands together or in
-        // the diamond) nothing else reads the hands, so its open palms never count as fingers or an
-        // open hand.
+        // The two-hand send (the diamond, then let go) presses Return on what was just pasted. While it
+        // is underway nothing else reads the hands, and two hands close together never count as fingers
+        // or an open hand.
         if send.feed(f) {
             cancelChoice()
             onSend?()

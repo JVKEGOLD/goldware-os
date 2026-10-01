@@ -27,7 +27,7 @@ protocol VisionDriver: AnyObject {
 /// The two-hand gesture: both hands start together, palms flat as in prayer; the palms spread while
 /// the index tips stay touching and the thumb tips stay touching (a diamond); then the tips let go.
 /// Each step has to follow the last within a moment, so no one pose on its own completes it. It unlocks
-/// Vision Mode, and in Quadrants it sends what was just pasted.
+/// Vision Mode (`LockGesture`, praying hands held, locks it again).
 struct TwoHandGesture {
     private var togetherAt: CFTimeInterval?      // last frame the hands were together
     private var diamondSince: CFTimeInterval?    // first frame of the diamond that followed "together"
@@ -66,15 +66,113 @@ struct TwoHandGesture {
     }
 }
 
-/// Lock Up by hand (pointer style only): both hands open (four fingers up) for a beat, then both close
-/// into fists. The open hands have to last 0.3 s, the fists have to follow within 1 s and hold 0.15 s,
-/// so one hand closing, or fists that were never open, do nothing. Fires once; the hands have to drop
-/// the shapes before it can fire again.
+/// Send (pointer and Quadrants): the diamond (index tips touching, thumb tips touching, palms apart),
+/// held 0.2 s, then the tips let go. It never goes through praying hands: closing the diamond into
+/// prayer is the lock instead, so prayer calls a send off. The release counts once the tips read apart,
+/// or once they have not read close for 0.25 s (a fingertip lost as the hands part). Hands still
+/// touching at the tips while the palms close toward prayer are not a release.
+struct SendGesture {
+    private var diamondSince: CFTimeInterval?
+    private var diamondAt: CFTimeInterval?       // last frame of the diamond
+    private var closeAt: CFTimeInterval?         // last frame both tip pairs were still close
+
+    /// 0 or 1 step done, for the footer's dot.
+    private(set) var steps = 0
+    var inProgress: Bool { steps > 0 }
+
+    mutating func reset() { diamondSince = nil; diamondAt = nil; closeAt = nil; steps = 0 }
+
+    /// Feeds one frame; true on the frame the tips let go.
+    mutating func feed(_ f: VisionFrame) -> Bool {
+        let t = f.time
+        let pair = f.pair
+        if pair?.together == true { reset(); return false }
+        if let p = pair, p.diamond {
+            if diamondSince == nil { diamondSince = t }
+            diamondAt = t
+        } else if let at = diamondAt, t - at > 1.0 {
+            reset()
+        }
+        if let p = pair, (p.index ?? 9) < 0.6, (p.thumb ?? 9) < 0.6 { closeAt = t }
+        let held = diamondSince.map { since in diamondAt.map { $0 - since >= 0.2 } ?? false } ?? false
+        steps = held ? 1 : 0
+        guard held, let at = closeAt ?? diamondAt, pair?.apart == true || t - at >= 0.25 else { return false }
+        reset()
+        return true
+    }
+}
+
+/// The lock: praying hands (palms together, fingertips touching) held for a moment (`HeldGesture`,
+/// 0.8 s, riding out brief misreads, since praying hands hide each other's joints).
+struct LockGesture {
+    private var hold = HeldGesture()
+
+    mutating func reset() { hold.reset() }
+
+    /// Feeds one frame; true on the frame the prayer has held.
+    mutating func feed(_ f: VisionFrame) -> Bool {
+        hold.update(f.pair?.together == true, now: f.time) == .fired
+    }
+}
+
+/// Let's work by hand (pointer style only): both hands show thumb, index, and middle (ring and little
+/// curled), the two thumb tips touch, then the hands pull apart. The touch has to last 0.2 s and the
+/// pull has to follow within 1.5 s, so hands passing near each other do nothing. Fires once; the hands
+/// have to drop the shape before it can fire again.
+struct ThumbPull {
+    private var touchSince: CFTimeInterval?
+    private var touchAt: CFTimeInterval?
+    private var spent = false
+    private var seenAt: CFTimeInterval = -9     // last frame both hands showed the shape
+
+    /// Both hands are in the shape (or were a moment ago): the pointer should rest meanwhile, since
+    /// one hand alone in this shape reads as two fingers up (scroll).
+    func busy(at t: CFTimeInterval) -> Bool { t - seenAt < 0.5 }
+
+    /// Index and middle straight, ring and little curled, thumb not folded in.
+    static func shape(_ j: HandGesture.Joints) -> Bool {
+        guard let e = HandGesture.extended(j), e.fingers == [true, true, false, false],
+              let thumb = HandGesture.thumb(j) else { return false }
+        return thumb != .tucked
+    }
+
+    mutating func reset() { touchSince = nil; touchAt = nil }
+
+    /// Feeds one frame; true on the frame the hands pull apart.
+    mutating func feed(_ f: VisionFrame) -> Bool {
+        let t = f.time
+        let both = !f.lead.isEmpty && !f.second.isEmpty && Self.shape(f.squared) && Self.shape(f.secondSquared)
+        // Spent until the shape has been gone for half a second (checked before this frame counts).
+        if spent, t - seenAt > 0.5 { spent = false }
+        if both { seenAt = t }
+        if spent { return false }
+        let gap = f.pair?.thumb
+        if both, let g = gap, g < 0.45 {
+            if touchSince == nil { touchSince = t }
+            touchAt = t
+        } else if let at = touchAt, t - at > 1.5 {
+            reset()
+        }
+        guard let since = touchSince, let at = touchAt, at - since >= 0.2,
+              t - seenAt < 0.3, (gap ?? 0) > 1.2 else { return false }
+        reset()
+        spent = true
+        return true
+    }
+}
+
+/// Lock Up and Clear Out by hand (pointer style only). Both start with both hands open (four fingers
+/// up) for a beat. Then both close into fists: Lock Up. Or only one closes and the other stays open:
+/// Clear Out. The open hands have to last 0.3 s and the closing has to start within 1 s. Two fists
+/// fire after 0.15 s; one fist has to hold 0.5 s next to the open hand, so two hands that close a
+/// moment apart still lock up. Fists that were never open do nothing. Fires once; the hands have to
+/// drop the shapes before it can fire again.
 struct OpenToFists {
-    enum Outcome: Equatable { case lockUp }
+    enum Outcome: Equatable { case lockUp, clearOut }
     private var openSince: CFTimeInterval?
     private var openAt: CFTimeInterval?
     private var fistSince: CFTimeInterval?
+    private var oneFistSince: CFTimeInterval?
     private var spent = false
     private var seenAt: CFTimeInterval = -9     // last frame of the gesture: both open, fists, or one of each once armed
 
@@ -83,7 +181,7 @@ struct OpenToFists {
 
     static func fingers(_ j: HandGesture.Joints) -> [Bool]? { j.isEmpty ? nil : HandGesture.extended(j)?.fingers }
 
-    mutating func reset() { openSince = nil; openAt = nil; fistSince = nil }
+    mutating func reset() { openSince = nil; openAt = nil; fistSince = nil; oneFistSince = nil }
 
     /// Feeds one frame; the outcome on the frame that completes it.
     mutating func feed(_ f: VisionFrame) -> Outcome? {
@@ -93,27 +191,38 @@ struct OpenToFists {
         // Open hands apart: praying hands read as two open hands too.
         let open = a == up && b == up && (f.pair?.palms ?? 0) > 1.5
         let fists = a == down && b == down
+        let oneFist = (a == down && b == up) || (a == up && b == down)
         if spent, t - seenAt > 0.5 { spent = false }
-        if open || fists { seenAt = t }
+        if open || fists || (oneFist && (openSince != nil || spent)) { seenAt = t }
         if spent { return nil }
         if open {
             if openSince == nil { openSince = t }
             openAt = t
             fistSince = nil
+            oneFistSince = nil
             return nil
         }
         // The open hands count only if they were held, and only for a moment after they close.
         guard let since = openSince, let at = openAt, at - since >= 0.3,
-              t - at < 1.0 || fistSince != nil else {
+              t - at < 1.0 || fistSince != nil || oneFistSince != nil else {
             if let at = openAt, t - at > 0.2 { reset() }   // a brief misread keeps the open hands
             return nil
         }
         if fists {
+            oneFistSince = nil
             if fistSince == nil { fistSince = t }
             guard t - (fistSince ?? t) >= 0.15 else { return nil }
             reset()
             spent = true
             return .lockUp
+        }
+        if oneFist {
+            fistSince = nil
+            if oneFistSince == nil { oneFistSince = t }
+            guard t - (oneFistSince ?? t) >= 0.5 else { return nil }
+            reset()
+            spent = true
+            return .clearOut
         }
         if t - at > 1.0 { reset() }
         return nil
@@ -122,48 +231,47 @@ struct OpenToFists {
 
 /// The passcode: Vision Mode turns on locked, and the hands drive nothing until the two-hand gesture.
 /// The mirror only counts the steps with dots and never says what they are. After a minute with no
-/// hand in view it locks again, and a thumbs up held while open locks it on the spot.
+/// hand in view it locks again, and praying hands held (`LockGesture`) lock it on the spot.
 struct VisionLock {
     enum State: Equatable { case locked, open }
     private(set) var state = State.locked
     private var lastHand: CFTimeInterval = 0
     private var settleUntil: CFTimeInterval = 0
     private var gesture = TwoHandGesture()
-    private var thumbHold = HeldGesture()
-    /// A thumbs up that was used for something else (filing a scan) cannot also lock until it goes away.
-    private var thumbSpentAt: CFTimeInterval?
+    private var closer = LockGesture()
+    /// The prayer that just locked, until the hands have been out of it for a second: lowering them from
+    /// prayer passes through the diamond and apart, which is the unlock, so that prayer cannot start one.
+    private var lockedPrayerAt: CFTimeInterval?
     static let relockAfter = 60.0
 
     var steps: Int { gesture.steps }
     var status: String { state == .locked ? "LOCKED" + String(repeating: " ·", count: steps) : "" }
 
-    mutating func lock() { state = .locked; lastHand = 0; gesture.reset(); thumbHold.reset(); thumbSpentAt = nil }
+    mutating func lock() { state = .locked; lastHand = 0; gesture.reset(); closer.reset(); lockedPrayerAt = nil }
 
     /// Seconds since a hand was last in view.
     func idle(at now: CFTimeInterval) -> CFTimeInterval { lastHand == 0 ? 0 : now - lastHand }
 
     /// Feeds one frame; returns true when the frame may drive the hand. `unlocked` is set on the frame
-    /// the passcode is accepted, `relocked` on the frame a held thumbs up locks it again. `thumbLocks` is
-    /// false while a thumbs up means something else (a scan waiting to be filed).
-    mutating func admit(_ f: VisionFrame, unlocked: inout Bool, relocked: inout Bool, thumbLocks: Bool = true) -> Bool {
+    /// the passcode is accepted, `relocked` on the frame the lock gesture locks it again.
+    mutating func admit(_ f: VisionFrame, unlocked: inout Bool, relocked: inout Bool) -> Bool {
         let t = f.time
         if lastHand == 0 { lastHand = t }
         let away = t - lastHand
         if !f.lead.isEmpty { lastHand = t }
         if state == .open {
             if away > Self.relockAfter { lock(); return false }
-            let thumb = HandGesture.classify(f.squared) == .thumbsUp
-            if !thumbLocks {
-                thumbHold.reset()
-                if thumb { thumbSpentAt = t }
-            } else if let spent = thumbSpentAt {
-                if thumb { thumbSpentAt = t } else if t - spent > 0.5 { thumbSpentAt = nil }
-            } else if thumbHold.update(thumb, now: t) == .fired {
+            if closer.feed(f) {
                 lock()
+                lockedPrayerAt = t
                 relocked = true
                 return false
             }
             return t >= settleUntil   // a beat for the hands to come down before anything moves
+        }
+        if let at = lockedPrayerAt {
+            if f.pair?.together == true { lockedPrayerAt = t } else if t - at > 1.0 { lockedPrayerAt = nil }
+            return false
         }
         if gesture.feed(f) {
             state = .open
@@ -249,7 +357,7 @@ final class HandControl: VisionDriver {
 
     enum Pose: String { case none = "NO HAND", track = "POINTING", pinch = "PINCHED", scroll = "SCROLLING",
                          open = "OPEN HAND", other = "RESTING", switching = "FOUR FINGERS · TO QUADRANTS",
-                         lockUp = "TWO HANDS · FISTS TO LOCK UP",
+                         letsWork = "LET'S WORK · PULL APART", lockUp = "TWO HANDS · FISTS LOCK UP · ONE FIST CLEARS OUT",
                          clear = "PINKY · CLEAR" }
 
     private(set) var pose: Pose = .none {
@@ -270,12 +378,17 @@ final class HandControl: VisionDriver {
     private var spread: CGFloat?
     var onIdleTimeout: (() -> Void)?
     var onSwitchStyle: ((HandControl.Style) -> Void)?
+    /// Both hands thumb, index, and middle, thumbs touching, pulled apart: open Let's work.
+    var onLetsWork: (() -> Void)?
+    private var thumbPull = ThumbPull()
     /// Both hands open, then both fists: Lock Up (close every terminal).
     var onLockUp: (() -> Void)?
+    /// Both hands open, then one fist: Clear Out (close the Hermes terminals nobody wrote in).
+    var onClearOut: (() -> Void)?
     private var openToFists = OpenToFists()
     /// The two-hand gesture after a hand dictation pasted: press Return there (as in Quadrants).
     var onSend: (() -> Void)?
-    private var send = TwoHandGesture()
+    private var send = SendGesture()
     /// The pinky alone, held: clear what was just pasted.
     var onClear: (() -> Void)?
     private var clearHold = HeldGesture()
@@ -429,7 +542,18 @@ final class HandControl: VisionDriver {
         lastHand = now
         let size = hypot(wrist.x - mid.x, wrist.y - mid.y)
         guard size > 0.025 else { lost(now); return }
-        // Lock Up: two open hands, then two fists. Meanwhile nothing else reads them.
+        // Let's work: while both hands hold the shape nothing else reads them.
+        let home = thumbPull.feed(frame)
+        if home || thumbPull.busy(at: now) {
+            dropPinch()
+            switchHold.reset()
+            pose = .letsWork
+            resetMotion()
+            if home { onLetsWork?() }
+            return
+        }
+        // Lock Up (two open hands, then two fists) and Clear Out (then one fist). Meanwhile nothing else
+        // reads them.
         let ending = openToFists.feed(frame)
         if ending != nil || openToFists.busy(at: now) {
             dropPinch()
@@ -437,6 +561,7 @@ final class HandControl: VisionDriver {
             pose = .lockUp
             resetMotion()
             if ending == .lockUp { onLockUp?() }
+            if ending == .clearOut { onClearOut?() }
             return
         }
         // Two hands close together (praying, or resting one on the other) read as four fingers or an
