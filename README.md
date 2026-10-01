@@ -97,15 +97,15 @@ Quit GoldWare OS first (menu bar icon, then Quit). If you turned on Open at Logi
 
 ```sh
 osascript -e 'tell application id "io.goldware.os" to quit'
+tccutil reset All io.goldware.os
 rm -rf "/Applications/GoldWare OS.app"
 rm -rf "$HOME/Library/Application Support/GoldWare OS"
 rm -rf "$HOME/Library/Caches/io.goldware.os" "$HOME/Library/WebKit/io.goldware.os" \
        "$HOME/Library/HTTPStorages/io.goldware.os" "$HOME/Library/Saved Application State/io.goldware.os.savedState"
 defaults delete io.goldware.os
-tccutil reset All io.goldware.os
 ```
 
-The last line clears the camera, microphone, and other permissions you granted. Accessibility may still list GoldWare OS in System Settings > Privacy & Security > Accessibility; select it and click the minus button.
+The `tccutil` line clears the camera, microphone, and other permissions you granted. It has to run while the app is still in Applications; if you already deleted it, macOS no longer knows the app and says "No such bundle identifier", which is harmless (the leftover permission entries do nothing). Accessibility may still list GoldWare OS in System Settings > Privacy & Security > Accessibility; select it and click the minus button.
 
 2. Remove the GoldWare iTerm profile (your other iTerm profiles are not touched):
 
@@ -121,12 +121,16 @@ rm -rf ~/goldware-os
 
 4. Optional: setup also installed some shared tools that other apps may use. Remove only the ones you don't need:
 
+Run `ollama list` to see the model name setup pulled (`gemma4:e2b`, `gemma4:e4b`, or `gemma4:12b`), then remove it before uninstalling Ollama:
+
 ```sh
-ollama rm gemma4:e4b                 # the local model (check the name with: ollama list)
+ollama rm gemma4:e4b
 brew services stop ollama
-brew uninstall ollama whisper-cpp
+brew uninstall ollama whisper.cpp
 brew uninstall --cask iterm2 font-jetbrains-mono-nerd-font
 ```
+
+If you are removing Ollama completely and no other app uses it, also delete its model folder: `rm -rf ~/.ollama`
 
 Homebrew and Apple's Command Line Tools stay installed; other software often depends on them.
 
