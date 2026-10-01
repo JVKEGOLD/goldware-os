@@ -15,7 +15,7 @@ Your Mac, voice, vision, and a dashboard you reshape with your own AI. Everythin
 - About 15 GB of free disk space
 - An internet connection for the first install (after that, everything runs offline)
 
-Setup installs everything else for you (Homebrew, the speech engine, and the local AI model). No accounts or sign-ups.
+Setup installs everything else for you (Homebrew, the speech engine, the local AI model, iTerm2, and the JetBrains Mono Nerd Font). It also adds a **GoldWare** profile to iTerm for the Let's work terminals; this sits alongside iTerm's default profile and does not replace it or change your other profiles. No accounts or sign-ups.
 
 ## Install (about 30 minutes, mostly downloads)
 
@@ -114,13 +114,31 @@ make doctor
 
 Nothing leaves your Mac. Speech, language models, camera frames, tasks, and notes are all processed and stored locally. The plan usage card reads local CLI credentials only to show your own limits.
 
+## Vision and voice shortcuts
+
+Vision Mode starts locked. Your unlock gesture opens it; praying hands held for under a second lock it again. A thumbs up only files a scan.
+
+| What | Gesture (pointer style) | Voice |
+|---|---|---|
+| Lock | Praying hands, held | |
+| Send what you just dictated | Both hands in a diamond (index tips touching, thumb tips touching), then let go. Also works in Quadrants | |
+| Let's work | Both hands thumb, index, and middle out, thumbs touching, then pull apart | "Let's work" |
+| Lock up | Both hands open, then both fists | "Lock up" |
+| Clear out | Both hands open, then one fist | "Clear out" |
+
+Say a voice phrase on its own (optionally after "Hey" or the assistant's name) with Right Command, or after the wake phrase. A task that merely mentions the words stays a task.
+
+- **Let's work** opens one terminal window in each corner of the screen. What each runs comes from `letsWork` in `goldware.json`: `command` (empty opens a plain shell), `terminal` (`iTerm`), and `profile` (default `GoldWare`, the profile setup installs; if iTerm does not have it, the default profile is used; empty always uses the default profile). The Dashboard's **Shortcuts** card has one-click buttons for Let's work, Lock up and Clear out, the same as the voice phrases and gestures.
+- **Lock up** closes every terminal except those with an agent mid-task (a Hermes chat holding a turn lease, or Claude Code or Codex using CPU). If the busy state cannot be read, nothing is closed.
+- **Clear out** closes only the Hermes terminals nobody has written in. Without Hermes installed it finds nothing to close.
+
 ## Make it yours
 
 GoldWare OS is meant to be reshaped. Rename the assistant, change the wake phrase, add dashboard cards, swap the model, or add voice commands by asking your AI agent. [docs/CUSTOMIZING.md](docs/CUSTOMIZING.md) maps every setting and where it lives.
 
 ## Other permissions
 
-The "Finish up" and "Lock up" voice commands, which talk to your open terminals, ask for Automation access the first time you use them, and the control center's Today tab asks for Calendar access. Allow them only if you want those features.
+The "Let's work", "Finish up", "Lock up", and "Clear out" commands, which talk to your open terminals, ask for Automation access the first time you use them, and the control center's Today tab asks for Calendar access. Allow them only if you want those features.
 
 ## License
 

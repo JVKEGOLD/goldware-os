@@ -17,6 +17,7 @@ Then `make check` for the full gate. Back up first: `cp goldware.json goldware.j
 | `assistantName` | Name shown everywhere and used in prompts (1 to 24 chars) | `"Juno"` |
 | `wakePhrase` | Phrase that wakes the assistant. Must not be blank (the app rejects a blank phrase and falls back to defaults, although `--check` does not catch it) | `"Hey Juno"` |
 | `wakeAliases` | Other spellings the recognizer may produce (case-insensitive, punctuation-tolerant) | `["hey june oh", "hey juneo"]` |
+| `letsWork` | What the "Let's work" voice phrase and two-hand gesture open: one iTerm window per screen corner. `command` runs in each (empty opens a plain shell), `terminal` is `"iTerm"`, `profile` is an iTerm profile name (default `GoldWare`, installed by setup from `app/Resources/iTerm/goldware-profile.json` into iTerm's DynamicProfiles folder; a missing profile falls back to the default one, empty always uses the default) | `{"command": "claude", "terminal": "iTerm", "profile": "GoldWare"}` |
 | `accentColor` | Accent as `#RRGGBB` | `"#4A9CC9"` |
 | `port` | Dashboard server port, whole number 1024 to 65535, not 4177 (default 4188). Restart the app after changing it | `4188` |
 | `models.local` | Ollama model tag | `"gemma4:e4b"` |
@@ -33,6 +34,7 @@ Each card: `{ "id": "unique-slug", "type": "...", "title": "...", "size": "s" | 
 |---|---|---|
 | `welcome` | Intro and tips | none |
 | `clock` | Date and time | none |
+| `shortcuts` | One-click Let's work, Lock up and Clear out buttons, each showing its voice phrase and gesture (the buttons are fixed, not configurable) | none |
 | `tasks` | Your task list (stored in `data/tasks.json`) | none |
 | `notes` | Free text, saved per card id | none |
 | `links` | Link list | `links`: `[{ "label": "Docs", "url": "https://example.com" }]` |
@@ -83,9 +85,9 @@ To use a different speech model, put the `ggml-*.bin` file in `~/Library/Applica
 
 Voice commands are Swift code in `app/Sources/GoldWareOS`:
 
-- Fixed phrases: `AppDelegate.swift`, function `handleAssistant(_:record:)`. It first checks `TerminalCommands.matchesFinishUp` and `matchesLockUp` (defined with their actions in `TerminalCommands.swift`). For a phrase such as "open Spotify", write a `matchesX` function and an action the same way, call it from `handleAssistant` before the generic request handling, and show feedback with `self.hud.show(...)`.
+- Fixed phrases: `AppDelegate.swift`, function `handleAssistant(_:record:)`. It first checks `LetsWork.matches`, then `TerminalCommands.matchesFinishUp`, `matchesLockUp`, and `matchesClearOut` (defined with their actions in `TerminalCommands.swift`). For a phrase such as "open Spotify", write a `matchesX` function and an action the same way, call it from `handleAssistant` before the generic request handling, and show feedback with `self.hud.show(...)`.
 - Anything else goes to the language model in `Assistant.swift`: `interpret` returns an intent from a fixed list (task, draft, note, paste, recall, agenda, complete, undo, closeout, vision_on, vision_off) and `perform` acts on it. A new intent means editing the prompt text, the schema `enum`, and `perform`.
-- Tests are `--test-*` flags handled in `app/Sources/GoldWareOS/main.swift` (phrase matching: `--test-terminal-commands`). Add cases there.
+- Tests are `--test-*` flags handled in `app/Sources/GoldWareOS/main.swift` (phrase matching: `--test-terminal-commands`, `--test-lets-work`). Add cases there.
 
 Pattern: find an existing command, copy its shape, add your trigger phrases and the action, then:
 

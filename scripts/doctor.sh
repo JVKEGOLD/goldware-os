@@ -36,6 +36,12 @@ else
   row "model pulled" NO "cannot check, ollama is down" "ollama pull ${MODEL:-gemma4:e4b}"
 fi
 [[ -f "$MD" ]] && (( $(stat -f%z "$MD") > 190000000 )) && row "whisper model file" OK "$MD" || row "whisper model file" NO "$WFILE" "make setup   (downloads to ~/Library/Application Support/GoldWare OS/models/)"
+IT_APP="$(for a in /Applications/iTerm.app "$HOME/Applications/iTerm.app"; do [[ -d "$a" ]] && { echo "$a"; break; }; done)"
+[[ -z "$IT_APP" ]] && IT_APP="$(mdfind "kMDItemCFBundleIdentifier == 'com.googlecode.iterm2'" 2>/dev/null | head -1)"
+[[ -n "$IT_APP" ]] && row "iTerm2" OK "$IT_APP" || row "iTerm2" NO "Let's work opens iTerm windows" "brew install --cask iterm2   (or: make setup)"
+{ ls ~/Library/Fonts /Library/Fonts 2>/dev/null | grep -qi JetBrainsMonoNerd; } && row "terminal font" OK "JetBrains Mono Nerd Font" || row "terminal font" NO "JetBrains Mono Nerd Font" "brew install --cask font-jetbrains-mono-nerd-font   (or: make setup)"
+ITP="$HOME/Library/Application Support/iTerm2/DynamicProfiles/goldware.json"
+[[ -f "$ITP" ]] && row "GoldWare iTerm profile" OK "$ITP" || row "GoldWare iTerm profile" NO "not installed" "scripts/setup.sh --only iterm-profile"
 [[ -d app/build/GoldWareOS.app ]] && row "app built" OK "app/build/GoldWareOS.app" || row "app built" NO "" "make app"
 [[ -d "/Applications/GoldWare OS.app" ]] && row "app installed" OK "/Applications/GoldWare OS.app" || row "app installed" NO "" "make install"
 if [[ -d "/Applications/GoldWare OS.app" ]]; then

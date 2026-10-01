@@ -1,7 +1,8 @@
 #!/bin/zsh
 # GoldWare OS installer. Idempotent: safe to rerun.
 #   scripts/setup.sh [--dry-run] [--yes] [--open] [--only STEP]
-# Steps: platform clt brew packages memory config pull whisper build install
+# Steps (11): platform clt brew packages (whisper-cpp, ollama, iTerm2, JetBrains Mono Nerd Font)
+#   iterm-profile (GoldWare profile for Let's work) memory config pull whisper build install
 set -uo pipefail
 
 ROOT="${0:A:h:h}"
@@ -15,7 +16,7 @@ while (( $# )); do
     --open) OPEN=1 ;;
     --only) shift; ONLY="${1:-}" ;;
     --only=*) ONLY="${1#--only=}" ;;
-    -h|--help) sed -n '2,4p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,6p' "$0"; exit 0 ;;
     *) echo "Unknown option: $1 (try --help)"; exit 2 ;;
   esac
   shift
@@ -55,7 +56,7 @@ want() { [[ -z "$ONLY" || "$ONLY" == "$1" ]]; }
 (( DRY )) && print "DRY RUN: nothing will be installed, downloaded, built, or copied."
 
 step_platform() {
-  step "1/10 Check Mac (Apple Silicon, macOS 14+)"
+  step "1/11 Check Mac (Apple Silicon, macOS 14+)"
   # hw.optional.arm64 is 1 on Apple Silicon even in a Rosetta terminal, where uname -m says x86_64.
   [[ "$(sysctl -n hw.optional.arm64 2>/dev/null)" == "1" ]] || fail "This Mac is not Apple Silicon ($(uname -m))." \
     "GoldWare OS needs an Apple Silicon Mac (M1 or newer)."
@@ -73,7 +74,7 @@ step_platform() {
 }
 
 step_clt() {
-  step "2/10 Xcode Command Line Tools, swift, python3"
+  step "2/11 Xcode Command Line Tools, swift, python3"
   if ! xcode-select -p >/dev/null 2>&1; then
     if (( DRY )); then would "xcode-select --install, then ask you to rerun"; return; fi
     xcode-select --install >/dev/null 2>&1
@@ -89,7 +90,7 @@ step_clt() {
 }
 
 step_brew() {
-  step "3/10 Homebrew"
+  step "3/11 Homebrew"
   if command -v brew >/dev/null 2>&1; then ok "brew $(brew --version | head -1)"; return; fi
   if (( DRY )); then would "ask to install Homebrew with: $BREW_INSTALL"; return; fi
   if ask "Homebrew (the Mac package manager) is missing. Install it now? It will ask for your Mac password."; then
@@ -108,8 +109,15 @@ step_brew() {
   fi
 }
 
+# Where iTerm2 is installed, if anywhere (/Applications, ~/Applications, or wherever Spotlight finds it).
+iterm_app() {
+  local a
+  for a in /Applications/iTerm.app "$HOME/Applications/iTerm.app"; do [[ -d "$a" ]] && { print -r -- "$a"; return; }; done
+  mdfind "kMDItemCFBundleIdentifier == 'com.googlecode.iterm2'" 2>/dev/null | head -1
+}
+
 step_packages() {
-  step "4/10 whisper-cpp and ollama"
+  step "4/11 whisper-cpp, ollama, iTerm2 and the terminal font"
   local f
   for f in whisper-cpp ollama; do
     local bin="$f"; [[ "$f" == whisper-cpp ]] && bin=whisper-server
@@ -125,6 +133,21 @@ step_packages() {
       fi
     fi
   done
+  # iTerm2 (what Let's work opens) and its font. Casks: skipped when already present.
+  if [[ -n "$(iterm_app)" ]] || { command -v brew >/dev/null 2>&1 && brew list --cask iterm2 >/dev/null 2>&1; }; then
+    skip "iTerm2 already installed"
+  elif (( DRY )); then would "brew install --cask iterm2"
+  else
+    brew install --cask iterm2 || fail "brew install --cask iterm2 failed." "Run: brew doctor, fix what it reports, then rerun."
+    ok "iTerm2 installed"
+  fi
+  if ls ~/Library/Fonts /Library/Fonts 2>/dev/null | grep -qi JetBrainsMonoNerd || { command -v brew >/dev/null 2>&1 && brew list --cask font-jetbrains-mono-nerd-font >/dev/null 2>&1; }; then
+    skip "JetBrains Mono Nerd Font already installed"
+  elif (( DRY )); then would "brew install --cask font-jetbrains-mono-nerd-font"
+  else
+    brew install --cask font-jetbrains-mono-nerd-font || fail "brew install --cask font-jetbrains-mono-nerd-font failed." "Run: brew doctor, then rerun."
+    ok "JetBrains Mono Nerd Font installed"
+  fi
   if curl -fsS --max-time 2 http://127.0.0.1:11434/ >/dev/null 2>&1; then
     skip "ollama already answering on 127.0.0.1:11434"
   elif (( DRY )); then
@@ -140,6 +163,18 @@ step_packages() {
       && ok "ollama started" \
       || fail "ollama is not answering on 127.0.0.1:11434." "Try: brew services restart ollama   or run: ollama serve"
   fi
+}
+
+step_iterm_profile() {
+  step "5/11 GoldWare iTerm profile"
+  local src="$ROOT/app/Resources/iTerm/goldware-profile.json"
+  local dstdir="$HOME/Library/Application Support/iTerm2/DynamicProfiles" dst
+  dst="$dstdir/goldware.json"
+  [[ -f "$src" ]] || fail "Missing $src." "Run: git pull"
+  if [[ -f "$dst" ]] && cmp -s "$src" "$dst"; then skip "profile already installed at $dst"; return; fi
+  if (( DRY )); then would "copy app/Resources/iTerm/goldware-profile.json to \"$dst\" (adds a GoldWare profile; your other profiles are not touched)"; return; fi
+  mkdir -p "$dstdir" && cp "$src" "$dst" || fail "Could not install the iTerm profile." "Copy $src to $dst by hand."
+  ok "GoldWare profile added to iTerm (Dynamic Profile, your default profile is unchanged)"
 }
 
 TIER=""; MODEL=""
@@ -158,7 +193,7 @@ pick_tier() {
 }
 
 step_memory() {
-  step "5/10 Pick a model for this Mac's memory"
+  step "6/11 Pick a model for this Mac's memory"
   pick_tier
   case "$TIER" in
     small) ok "tier small (${MEM_GB} GB RAM): $MODEL, the lightest model that leaves room for macOS" ;;
@@ -168,7 +203,7 @@ step_memory() {
 }
 
 step_config() {
-  step "6/10 goldware.json"
+  step "7/11 goldware.json"
   pick_tier
   if [[ ! -f goldware.json ]]; then
     if (( DRY )); then would "create goldware.json from goldware.default.json with models.local = $MODEL"; return; fi
@@ -205,7 +240,7 @@ PY
 }
 
 step_pull() {
-  step "7/10 Pull the language model"
+  step "8/11 Pull the language model"
   pick_tier
   if [[ -f goldware.json ]]; then
     local cfg; cfg="$(python3 -c 'import json;print(json.load(open("goldware.json")).get("models",{}).get("local",""))' 2>/dev/null)"
@@ -222,7 +257,7 @@ step_pull() {
 }
 
 step_whisper() {
-  step "8/10 Whisper speech model ($WHISPER_FILE)"
+  step "9/11 Whisper speech model ($WHISPER_FILE)"
   local f="$MODEL_DIR/$WHISPER_FILE" size=0
   [[ -f "$f" ]] && size="$(stat -f%z "$f")"
   if (( size > WHISPER_MIN )); then skip "already present ($(( size / 1048576 )) MB)"; return; fi
@@ -240,7 +275,7 @@ step_whisper() {
 }
 
 step_build() {
-  step "9/10 Build the app"
+  step "10/11 Build the app"
   if (( DRY )); then would "(cd app && ./build.sh) -> app/build/GoldWareOS.app"; return; fi
   (cd app && ./build.sh) || fail "App build failed." \
     "Read the swift error above. Common fix: xcode-select --install, or sudo xcode-select -s /Library/Developer/CommandLineTools" \
@@ -250,7 +285,7 @@ step_build() {
 }
 
 step_install() {
-  step "10/10 Install to /Applications"
+  step "11/11 Install to /Applications"
   if (( DRY )); then would "copy app/build/GoldWareOS.app to \"$APP_DST\" (asks first unless --yes)"; return; fi
   [[ -d "$APP_SRC" ]] || fail "No built app at app/build/GoldWareOS.app." "Run: make app"
   if [[ -e "$APP_DST" ]]; then
@@ -291,16 +326,16 @@ TXT
 }
 
 if [[ -n "$ONLY" ]]; then
-  case "$ONLY" in platform|clt|brew|packages|memory|config|pull|whisper|build|install) ;;
-    *) echo "Unknown step '$ONLY'. Steps: platform clt brew packages memory config pull whisper build install"; exit 2 ;;
+  case "$ONLY" in platform|clt|brew|packages|iterm-profile|memory|config|pull|whisper|build|install) ;;
+    *) echo "Unknown step '$ONLY'. Steps: platform clt brew packages iterm-profile memory config pull whisper build install"; exit 2 ;;
   esac
   step_platform
-  want platform || "step_$ONLY"
+  want platform || "step_${ONLY//-/_}"
   (( DRY )) || [[ "$ONLY" != install ]] || next_steps
   exit 0
 fi
 
-step_platform; step_clt; step_brew; step_packages; step_memory
+step_platform; step_clt; step_brew; step_packages; step_iterm_profile; step_memory
 step_config; step_pull; step_whisper; step_build; step_install
 if (( DRY )); then print -P "\n%F{green}Dry run complete. Nothing was changed.%f"; exit 0; fi
 print -P "\n%F{green}Setup finished.%f"

@@ -18,7 +18,8 @@ Install by copying `build/GoldWareOS.app` to `/Applications` yourself. The build
 
 The app reads `goldware.json` in the repo root, and falls back to `goldware.default.json` when the
 file is missing or invalid (the reason is shown in the app). Settings used here: `assistantName`,
-`wakePhrase`, `wakeAliases`, `accentColor`, `port`, `models.local`, `models.whisper`.
+`wakePhrase`, `wakeAliases`, `accentColor`, `port`, `models.local`, `models.whisper`,
+`letsWork.command`, `letsWork.terminal`, `letsWork.profile`.
 The repo root is `GOLDWARE_ROOT`, or the checkout the app was built in.
 
 ## Self-tests
