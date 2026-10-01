@@ -5,7 +5,7 @@ import Vision
 /// GoldWare Vision: camera features around a mirror that drops out of the camera notch.
 ///   Hand mirror   rest the pointer behind the notch; it opens while you stay there
 ///   Scan          hold a card, receipt, or page up in the mirror; GoldWare reads and files it
-///   Vision Mode   the mirror stays pinned open and your hand drives the pointer
+///   Vision Mode   your hand drives the pointer; the mirror starts hidden (OK sign shows it)
 /// The camera runs only while the mirror is open or Vision Mode is on, so the green light
 /// always matches something visible on screen.
 /// Face ID setup rules, kept pure for the self-test.
@@ -205,7 +205,15 @@ final class VisionController {
         onNotice?("Face ID is off and your face is forgotten")
     }
     /// The OK sign hid the mirror; Vision Mode keeps running without it until the OK sign again.
-    private(set) var mirrorHidden = false
+    /// Starts hidden, so a relaunch into Vision Mode (already on) also comes up without the preview.
+    private(set) var mirrorHidden = true
+    /// Whether the mirror is hidden after `setMode`. Turning Vision Mode on starts with it hidden: the
+    /// notch badges already show locked or unlocked, so the preview is not needed. The OK sign (once
+    /// unlocked) or the Hand Mirror spot behind the notch brings it back. A style switch keeps it as is.
+    static func mirrorHidden(on: Bool, wasOn: Bool, hidden: Bool) -> Bool {
+        guard on else { return false }
+        return wasOn ? hidden : true
+    }
     private var mirrorToggle = MirrorToggle()
     private var notchScreen: NSScreen? { NSScreen.screens.first { $0.safeAreaInsets.top > 0 } ?? NSScreen.main }
 
@@ -233,15 +241,15 @@ final class VisionController {
             HandControl.style = style
         }
         // Turning on (not a style switch while on) starts locked until the unlock gesture, with the
-        // mirror showing.
-        if on && !HandControl.enabled { lock.lock(); mirrorHidden = false }
+        // mirror hidden (see `mirrorHidden(on:wasOn:hidden:)`).
+        if on && !HandControl.enabled { lock.lock() }
+        mirrorHidden = Self.mirrorHidden(on: on, wasOn: HandControl.enabled, hidden: mirrorHidden)
         HandControl.enabled = on
         if on {
             if !AXIsProcessTrusted() { onNotice?("Vision Mode needs Accessibility access to move the pointer") }
             camera.claim("mode")
             if !mirrorHidden { mirror.pin(on: notchScreen) }     // asks for camera access itself if needed
         } else {
-            mirrorHidden = false
             control.stop()
             quadrants.stop()
             camera.release("mode")

@@ -696,6 +696,11 @@ if args.count >= 2, args[1] == "--test-hand" {
     for i in 0..<10 { feedL(pointL.mapValues { CGPoint(x: $0.x + CGFloat(i) * 0.01, y: $0.y) }, nil, 1.0 / 30) }
     expect("pointing with one hand still moves the pointer", "\(lockMoves > 0)", "true")
     lc.stop()
+    expect("turning Vision Mode on starts with the camera preview hidden",
+           "\(VisionController.mirrorHidden(on: true, wasOn: false, hidden: false)) \(VisionController.mirrorHidden(on: true, wasOn: false, hidden: true))", "true true")
+    expect("switching style while on keeps the preview as it was; turning off clears it",
+           "\(VisionController.mirrorHidden(on: true, wasOn: true, hidden: false)) \(VisionController.mirrorHidden(on: true, wasOn: true, hidden: true)) \(VisionController.mirrorHidden(on: false, wasOn: true, hidden: true))",
+           "false true false")
     print(failures == 0 ? "All hand checks passed" : "\(failures) hand check(s) failed")
     exit(failures == 0 ? 0 : 1)
 }
