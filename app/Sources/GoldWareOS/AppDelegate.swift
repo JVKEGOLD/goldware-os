@@ -18,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private lazy var dashboard: DashboardWindow = {
         let d = DashboardWindow(home: commandCenter.baseURL)
         d.onRetry = { [weak self] in self?.startCommandCenter() }
+        d.onShortcut = { [weak self] route in self?.run(route) }
         d.onState = { [weak self] state in self?.dashboardState = state; self?.writeStatus() }
         return d
     }()
@@ -74,6 +75,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Opened by macOS at login: start quietly in the menu bar and Dock, no window.
         if let e = NSAppleEventManager.shared().currentAppleEvent {
             launchedAtLogin = e.paramDescriptor(forKeyword: keyAEPropData)?.enumCodeValue == keyAELaunchedAsLogInItem
+        }
+    }
+
+    /// goldwareos:// links from the dashboard open in the browser or other apps. Only the three
+    /// whitelisted routes do anything.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls { if let route = ShortcutRoute(url: url) { run(route) } }
+    }
+
+    /// Runs a dashboard shortcut: the same handler the voice phrase and the gesture call.
+    func run(_ route: ShortcutRoute) {
+        switch route {
+        case .letsWork: Task { await openLetsWork() }
+        case .lockUp: Task { await lockUp() }
+        case .clearOut: Task { await clearOut() }
         }
     }
 
@@ -143,6 +159,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         vision.onSend = { [weak self] in self?.visionSend() }
         vision.onClear = { [weak self] in self?.visionClear() }
         vision.onLockUp = { [weak self] in Task { await self?.lockUp() } }
+        vision.onLetsWork = { [weak self] in Task { await self?.openLetsWork() } }
+        vision.onClearOut = { [weak self] in Task { await self?.clearOut() } }
         vision.start()
         configureWake()
 
@@ -626,18 +644,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: Assistant (Right Command)
 
-    /// Lock Up, from the spoken phrase or the Vision hand gesture: close every Hermes terminal.
+    /// Lock Up, from the spoken phrase or the Vision hand gesture: close every stagnant terminal, keeping
+    /// any with an agent mid-task.
     private func lockUp() async {
         await MainActor.run { self.hud.show("Locking up…", orb: .connecting, tint: .assistant) }
-        let (closed, error) = await Task.detached { TerminalCommands.lockUp() }.value
+        let (closed, kept, error) = await Task.detached { TerminalCommands.lockUp() }.value
         await MainActor.run {
             Sounds.play(error == nil ? .done : .error)
-            self.hud.show(error ?? "Closed \(closed) terminal\(closed == 1 ? "" : "s")", orb: error == nil ? .breathing : .shaping,
+            let keptText = kept == 0 ? "" : ", kept \(kept) working"
+            self.hud.show(error ?? "Closed \(closed) terminal\(closed == 1 ? "" : "s")\(keptText)", orb: error == nil ? .breathing : .shaping,
+                          tint: .assistant, autoHide: error == nil ? 2.5 : 6)
+        }
+    }
+
+    /// Clear Out, from the spoken phrase or the Vision hand gesture: close the Hermes terminals nobody wrote in.
+    private func clearOut() async {
+        await MainActor.run { self.hud.show("Clearing out unused terminals…", orb: .connecting, tint: .assistant) }
+        let (closed, left, error) = await Task.detached { TerminalCommands.clearOut() }.value
+        await MainActor.run {
+            Sounds.play(error == nil ? .done : .error)
+            let msg = closed == 0 ? "No unused Hermes terminals" : "Closed \(closed) unused terminal\(closed == 1 ? "" : "s"), \(left) left"
+            self.hud.show(error ?? msg, orb: error == nil ? .breathing : .shaping, tint: .assistant, autoHide: error == nil ? 2.5 : 6)
+        }
+    }
+
+    /// Let's work, from the spoken phrase or the Vision hand gesture: the single handler both call.
+    private func openLetsWork() async {
+        await MainActor.run { self.hud.show("Opening your workspace…", orb: .connecting, tint: .assistant) }
+        let script = await MainActor.run { LetsWork.script() }
+        let error = await Task.detached { LetsWork.open(script) }.value
+        await MainActor.run {
+            Sounds.play(error == nil ? .done : .error)
+            self.hud.show(error ?? "Four terminals, one per quadrant", orb: error == nil ? .breathing : .shaping,
                           tint: .assistant, autoHide: error == nil ? 2.5 : 6)
         }
     }
 
     private func handleAssistant(_ raw: String, record: inout Dictation) async throws {
+        if LetsWork.matches(raw) {
+            await openLetsWork()
+            return
+        }
         if TerminalCommands.matchesFinishUp(raw) {
             await MainActor.run { self.hud.show("Asking every Hermes to finish up…", orb: .connecting, tint: .assistant) }
             let (sent, error) = await Task.detached { TerminalCommands.finishUp() }.value
@@ -650,6 +697,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         if TerminalCommands.matchesLockUp(raw) {
             await lockUp()
+            return
+        }
+        if TerminalCommands.matchesClearOut(raw) {
+            await clearOut()
             return
         }
         // A request to GoldWare needs at least a few real words. Anything shorter is a stray press.
@@ -919,8 +970,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         visionMenu.addItem(submenu("Pointer Speed", speed))
         for (title, lines) in [
-            ("VISION MODE", ["Press ⌘⌥ together and let go: Vision on or off", "Starts locked until your unlock gesture (gold lock right of the notch opens when unlocked; left: arrow pointer, grid Quadrants)", "Thumbs up, held: lock again", "OK sign, held: hide or show the mirror", "Face ID on: only your hands drive (the lock shows a crossed-out person when you are not seen)",
+            ("VISION MODE", ["Press ⌘⌥ together and let go: Vision on or off", "Starts locked until your unlock gesture (gold lock right of the notch opens when unlocked; left: arrow pointer, grid Quadrants)", "Praying hands, held: lock again", "OK sign, held: hide or show the mirror", "Face ID on: only your hands drive (the lock shows a crossed-out person when you are not seen)",
                              "Say \"turn on Vision Mode\" with Right Command",
+                             "Say \"Let's work\" with Right Command: a terminal in every quadrant",
                              "Say \"Finish up\": every Hermes wraps up and commits",
                              "Say \"Lock up\": close idle terminals, keep working agents",
                              "Say \"Clear out\": close Hermes terminals you haven't written in",
@@ -928,8 +980,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                              "Thumb far from index: fast. Thumb close: slow and precise", "Pinch and let go: click",
                              "Pinch twice quickly: double-click", "Pinch, hold, and move: scroll (the page follows your hand; let go mid-move to fling)",
                              "Open hand or fist: nothing, rest here",
-                             "Your unlock gesture after a paste: press Return to send it",
+                             "After a paste, diamond with both hands (index tips touching, thumb tips touching), then let go: press Return to send it",
                              "Pinky alone, held: clear what was just pasted",
+                             "Both hands thumb, index, middle; thumbs touch, pull apart: Let's work",
                              "Both hands open, then both fists: Lock Up (close every terminal)",
                              "Both hands open, then one fist: Clear Out (close unused Hermes terminals)",
                              "Four fingers (thumb folded in), held: switch to Quadrants"]),
@@ -937,7 +990,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                            "1 top left, 2 top right, 3 bottom left, 4 bottom right",
                            "Keep them up: \(GWConfig.name) opens that window's text box and listens",
                            "Lower your hand: \(GWConfig.name) pastes into that text box",
-                           "Your unlock gesture after a paste: press Return to send it",
+                           "After a paste, diamond with both hands, then let go: press Return to send it",
                            "Pinky alone, held: clear what was just pasted",
                            "Switching in snaps every window into the corners",
                            "Holding a count brings that corner's window to the front",

@@ -11,6 +11,8 @@ struct GWSettings {
     var whisperModel = "ggml-small.en-q5_1.bin"
     /// How long Ollama keeps the model in RAM after a request ("5m", "0", "-1" for forever).
     var keepAlive = "5m"
+    /// "Let's work": what each quadrant terminal runs, in which app and profile.
+    var letsWork = LetsWork.Settings()
     /// Why the live file was not used, for the UI. nil when everything is fine.
     var error: String?
     var source = "defaults"
@@ -46,6 +48,21 @@ struct GWSettings {
         if let v = obj["port"] {
             guard let p = v as? Int, (1024...65535).contains(p) else { throw EngineError.message("port must be a number from 1024 to 65535") }
             s.port = p
+        }
+        if let v = obj["letsWork"] {
+            guard let l = v as? [String: Any] else { throw EngineError.message("letsWork must be an object") }
+            if let c = l["command"] {
+                guard let c = c as? String, !c.contains("\n") else { throw EngineError.message("letsWork.command must be a one-line string") }
+                s.letsWork.command = c.trimmingCharacters(in: .whitespaces)
+            }
+            if let t = l["terminal"] {
+                guard let t = t as? String, t == "iTerm" else { throw EngineError.message("letsWork.terminal must be \"iTerm\"") }
+                s.letsWork.terminal = t
+            }
+            if let pr = l["profile"] {
+                guard let pr = pr as? String else { throw EngineError.message("letsWork.profile must be a string") }
+                s.letsWork.profile = pr.trimmingCharacters(in: .whitespaces)
+            }
         }
         if let m = obj["models"] as? [String: Any] {
             if let l = m["local"] as? String, !l.isEmpty { s.localModel = l }

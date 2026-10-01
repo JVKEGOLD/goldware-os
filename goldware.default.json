@@ -3,6 +3,7 @@
   "wakePhrase": "Hey GoldWare",
   "wakeAliases": ["hey gold ware", "hey gold wear", "hey goldwear", "hey goal ware", "okay goldware"],
   "accentColor": "#C9A24A",
+  "letsWork": { "command": "", "terminal": "iTerm", "profile": "GoldWare" },
   "port": 4188,
   "models": {
     "local": "gemma4:e4b",
@@ -18,6 +19,7 @@
       { "id": "notes", "type": "notes", "title": "Notes", "size": "m" },
       { "id": "system", "type": "system", "title": "This Mac", "size": "s" },
       { "id": "agents", "type": "agents", "title": "Local AI", "size": "s" },
+      { "id": "shortcuts", "type": "shortcuts", "title": "Shortcuts", "size": "s" },
       { "id": "links", "type": "links", "title": "Links", "size": "s",
         "options": { "links": [
           { "label": "GoldWare", "url": "https://goldware.io" },

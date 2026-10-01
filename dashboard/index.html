@@ -116,6 +116,13 @@ kbd { font-family: var(--mono); font-size: .82em; background: var(--surface2); b
 
 textarea.notes { width: 100%; min-height: 140px; height: 100%; resize: vertical; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); font: inherit; font-size: 14px; padding: 12px; outline: none; line-height: 1.55; }
 textarea.notes:focus { border-color: var(--accent); }
+.shortcuts { display: flex; flex-direction: column; gap: 8px; }
+.shortcut { display: flex; flex-direction: column; gap: 3px; padding: 10px 14px; border: 1px solid var(--gold-line); border-radius: var(--radius-sm); background: var(--gold-soft); color: var(--accent); text-decoration: none; font-size: 14px; font-weight: 600; transition: all var(--t) var(--ease); }
+.shortcut:hover { background: var(--accent); border-color: var(--accent); color: #17130a; }
+.shortcut:hover small { color: #17130a; }
+.shortcut small { color: var(--text-muted); font-size: 11px; font-weight: 400; line-height: 1.4; }
+.shortcut-inline { display: inline-block; margin-top: 10px; padding: 6px 12px; border: 1px solid var(--gold-line); border-radius: var(--radius-sm); color: var(--accent); text-decoration: none; font-size: 13px; font-weight: 600; }
+.shortcut-inline:hover { background: var(--accent); color: #17130a; border-color: var(--accent); }
 .links { display: flex; flex-direction: column; gap: 6px; }
 .links a { display: block; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); text-decoration: none; font-size: 14px; transition: all var(--t) var(--ease); }
 .links a:hover { border-color: var(--accent); color: var(--accent); }
@@ -315,6 +322,7 @@ details p { color: var(--text-muted); font-size: 14px; margin-top: 8px; }
     <dl class="menu">
       <div><dt>Days it understands</dt><dd>&ldquo;Thursday&rdquo;, &ldquo;tomorrow&rdquo;, and &ldquo;end of next week&rdquo; become real due dates. Say &ldquo;urgent&rdquo; to mark a task high priority.</dd></div>
       <div><dt>Snippets</dt><dd>Saved text such as an address or a link, kept only on this Mac. The model sees their names, never their values. Keep passwords and card numbers in a password manager instead.</dd></div>
+      <div id="voice-terminals"><dt>Terminal commands</dt><dd>Say &ldquo;Let&rsquo;s work&rdquo; to open a terminal in each corner (what they run is set by <code>letsWork</code> in <code>goldware.json</code>). &ldquo;Finish up&rdquo; asks every Hermes to wrap up. &ldquo;Lock up&rdquo; closes idle terminals and keeps any agent that is mid-task. &ldquo;Clear out&rdquo; closes only the Hermes terminals you have not written in. The whole clip has to be the phrase, so a task that mentions them stays a task.<br><a class="shortcut-inline" href="goldwareos://lets-work">Let&rsquo;s work</a> <a class="shortcut-inline" href="goldwareos://lock-up">Lock up</a> <a class="shortcut-inline" href="goldwareos://clear-out">Clear out</a></dd></div>
       <div><dt>Where tasks go</dt><dd>Everything arrives in the <b>Tasks</b> card on your dashboard with status inbox, ready for you to check off.</dd></div>
     </dl>
   </section>
@@ -400,8 +408,16 @@ details p { color: var(--text-muted); font-size: 14px; margin-top: 8px; }
   <div class="gsub"><h2>Lock and unlock</h2><span>So a stray hand never acts.</span></div>
   <div class="gcards c3">
     <div class="gcard" data-gesture="unlock"><div class="gicon">🙌</div><div class="gdoes">Two-hand unlock</div><p class="say">A short gesture with both hands.</p><p>It stays off the screen on purpose so nobody else learns it. Set yours the first time you turn Vision Mode on.</p></div>
-    <div class="gcard" data-gesture="lock"><div class="gicon"><svg class="hand-art" viewBox="0 0 100 100" role="img" aria-label="Thumbs up: lock"><circle cx="40" cy="20" r="16" fill="url(#ha-halo)"/><g class="hand"><g transform="rotate(-8.0 43.0 52.0)"><rect x="37.2" y="16.0" width="11.5" height="41.8" rx="5.8" fill="url(#ha-gold)" class="lit"/><path d="M38.9 29.0 q4.2 1.6 8.3 0" class="crease on"/><path d="M38.9 39.8 q4.2 1.6 8.3 0" class="crease on"/><rect x="39.9" y="17.6" width="6.2" height="7.1" rx="2.9" class="nail on"/></g><path d="M34 50 C34 46 38 44 44 44 L62 46 C66 46.5 68 50 67.5 54 L66 84 C65.5 88 62 90 58 90 L42 90 C37 90 34 87 34 83 Z" fill="url(#ha-skin)" class="skin glowrim"/><rect x="58.0" y="49.0" width="17.0" height="10.5" rx="5.2" fill="url(#ha-skin-side)" class="skin"/><rect x="56.8" y="59.0" width="16.0" height="10.5" rx="5.2" fill="url(#ha-skin-side)" class="skin"/><rect x="55.6" y="69.0" width="15.0" height="10.5" rx="5.2" fill="url(#ha-skin-side)" class="skin"/><rect x="54.4" y="79.0" width="14.0" height="10.5" rx="5.2" fill="url(#ha-skin-side)" class="skin"/><rect x="40" y="90" width="20" height="8" fill="url(#ha-skin)" class="skin"/></g><g class="padlock" transform="translate(76 22)"><rect x="-7" y="0" width="14" height="11" rx="2.5"/><path d="M-4.5 0 v-4 a4.5 4.5 0 0 1 9 0 v4"/></g></svg></div><div class="gdoes">Thumbs up locks it again</div><p class="say">Hold a thumbs up.</p><p>Nothing moves until you unlock again. After 15 minutes with no hand in view, the camera turns off.</p></div>
+    <div class="gcard" data-gesture="lock"><div class="gicon">🔒</div><div class="gdoes">Lock again</div><p class="say">Praying hands, held.</p><p>Palms together, fingertips touching, for about a second. Nothing moves until you unlock again.</p></div>
     <div class="gcard" data-gesture="chord"><div class="gicon"><kbd>&#8984;</kbd> <kbd>&#8997;</kbd></div><div class="gdoes">Switch Vision on or off</div><p class="say">Press both and let go.</p><p>Command-Option shortcuts still work: another key or a click while you hold them does nothing here.</p></div>
+  </div>
+
+  <div class="gsub"><h2>Send and two-hand shortcuts</h2><span>Pointer style, unless noted.</span></div>
+  <div class="gcards c3">
+    <div class="gcard" data-gesture="send"><div class="gicon">↵</div><div class="gdoes">Press Return</div><p class="say">Both hands in a diamond, then let go.</p><p>Index tips touching and thumb tips touching, held for a moment, then let go. Sends what you just dictated by hand, within two minutes, if that window is still in front. Works in Quadrants too. Praying hands call it off.</p></div>
+    <div class="gcard" data-gesture="letswork"><div class="gicon"><svg class="hand-art" viewBox="0 0 100 100" role="img" aria-label="Both hands, thumbs touching, then pulled apart"><circle cx="50" cy="46" r="12" fill="url(#ha-halo)"/><g transform="translate(47.00 18.00) scale(0.6)"><g class="hand"><g transform="rotate(-50.8 35.0 74.0)"><rect x="29.8" y="39.2" width="10.5" height="40.1" rx="5.2" fill="url(#ha-gold)" class="lit"/><path d="M31.4 51.7 q3.6 1.6 7.3 0" class="crease on"/><path d="M31.4 62.2 q3.6 1.6 7.3 0" class="crease on"/><rect x="32.2" y="40.8" width="5.7" height="6.5" rx="2.6" class="nail on"/></g><g transform="rotate(-2.1 37.5 46.0)"><rect x="32.8" y="13.0" width="9.4" height="37.7" rx="4.7" fill="url(#ha-gold)" class="lit"/><path d="M34.4 24.9 q3.1 1.6 6.2 0" class="crease on"/><path d="M34.4 34.8 q3.1 1.6 6.2 0" class="crease on"/><rect x="35.0" y="14.6" width="5.1" height="5.8" rx="2.4" class="nail on"/></g><g transform="rotate(-0.3 47.5 44.5)"><rect x="42.6" y="7.5" width="9.8" height="41.9" rx="4.9" fill="url(#ha-gold)" class="lit"/><path d="M44.2 20.8 q3.3 1.6 6.6 0" class="crease on"/><path d="M44.2 31.9 q3.3 1.6 6.6 0" class="crease on"/><rect x="44.9" y="9.1" width="5.3" height="6.1" rx="2.5" class="nail on"/></g><path d="M33 47 C33 44 37 42.5 41 43 L66 45 C71 45.5 73 48 72.5 52 L71 72 C70.5 80 66 85 60 87 L60 97 L40 97 L40 87 C34 84.5 31 79 31 72 Z" fill="url(#ha-skin)" class="skin"/><path d="M37 70 C45 75 56 74 65 66" class="crease palmline"/><path d="M37 61 C46 59 57 58 68 56" class="crease palmline"/><rect x="52.5" y="42.0" width="10.0" height="17" rx="4.6" fill="url(#ha-skin-side)" class="skin"/><path d="M54.1 50.0 q3.4 2 6.8 0" class="crease"/><path d="M54.5 44.6 q3.0 -1.6 6.0 0" class="sheen"/><rect x="62.2" y="46.0" width="8.6" height="17" rx="3.9" fill="url(#ha-skin-side)" class="skin"/><path d="M63.8 54.0 q2.7 2 5.4 0" class="crease"/><path d="M64.2 48.6 q2.3 -1.6 4.6 0" class="sheen"/></g></g><g transform="translate(53.00 18.00) scale(-0.6 0.6)"><g class="hand"><g transform="rotate(-50.8 35.0 74.0)"><rect x="29.8" y="39.2" width="10.5" height="40.1" rx="5.2" fill="url(#ha-gold)" class="lit"/><path d="M31.4 51.7 q3.6 1.6 7.3 0" class="crease on"/><path d="M31.4 62.2 q3.6 1.6 7.3 0" class="crease on"/><rect x="32.2" y="40.8" width="5.7" height="6.5" rx="2.6" class="nail on"/></g><g transform="rotate(-2.1 37.5 46.0)"><rect x="32.8" y="13.0" width="9.4" height="37.7" rx="4.7" fill="url(#ha-gold)" class="lit"/><path d="M34.4 24.9 q3.1 1.6 6.2 0" class="crease on"/><path d="M34.4 34.8 q3.1 1.6 6.2 0" class="crease on"/><rect x="35.0" y="14.6" width="5.1" height="5.8" rx="2.4" class="nail on"/></g><g transform="rotate(-0.3 47.5 44.5)"><rect x="42.6" y="7.5" width="9.8" height="41.9" rx="4.9" fill="url(#ha-gold)" class="lit"/><path d="M44.2 20.8 q3.3 1.6 6.6 0" class="crease on"/><path d="M44.2 31.9 q3.3 1.6 6.6 0" class="crease on"/><rect x="44.9" y="9.1" width="5.3" height="6.1" rx="2.5" class="nail on"/></g><path d="M33 47 C33 44 37 42.5 41 43 L66 45 C71 45.5 73 48 72.5 52 L71 72 C70.5 80 66 85 60 87 L60 97 L40 97 L40 87 C34 84.5 31 79 31 72 Z" fill="url(#ha-skin)" class="skin"/><path d="M37 70 C45 75 56 74 65 66" class="crease palmline"/><path d="M37 61 C46 59 57 58 68 56" class="crease palmline"/><rect x="52.5" y="42.0" width="10.0" height="17" rx="4.6" fill="url(#ha-skin-side)" class="skin"/><path d="M54.1 50.0 q3.4 2 6.8 0" class="crease"/><path d="M54.5 44.6 q3.0 -1.6 6.0 0" class="sheen"/><rect x="62.2" y="46.0" width="8.6" height="17" rx="3.9" fill="url(#ha-skin-side)" class="skin"/><path d="M63.8 54.0 q2.7 2 5.4 0" class="crease"/><path d="M64.2 48.6 q2.3 -1.6 4.6 0" class="sheen"/></g></g><circle cx="50" cy="47" r="2.6" class="spark"/><path d="M42 92 L14 92" class="trail"/><path d="M-4 -3.6 L1.5 0 L-4 3.6" class="arrowhead" transform="translate(14 92) rotate(180)"/><path d="M58 92 L86 92" class="trail"/><path d="M-4 -3.6 L1.5 0 L-4 3.6" class="arrowhead" transform="translate(86 92) rotate(0)"/></svg></div><div class="gdoes">Let&rsquo;s work</div><p class="say">Both hands: thumb, index, and middle out, thumbs touching, then pull apart.</p><p>Opens one terminal window in each corner, as if you said &ldquo;Let&rsquo;s work&rdquo;. What each one runs comes from <code>letsWork</code> in <code>goldware.json</code>. Fires once until you drop your hands.</p><a class="shortcut-inline" href="goldwareos://lets-work">Let&rsquo;s work now</a></div>
+    <div class="gcard" data-gesture="lockup"><div class="gicon">🔐</div><div class="gdoes">Lock up</div><p class="say">Both hands open, then both close into fists.</p><p>Closes every idle terminal. Any with an agent working right now stays open. Also: say &ldquo;Lock up&rdquo;.</p><a class="shortcut-inline" href="goldwareos://lock-up">Lock up now</a></div>
+    <div class="gcard" data-gesture="clearout"><div class="gicon">🧹</div><div class="gdoes">Clear out</div><p class="say">Both hands open, then one closes into a fist.</p><p>Closes only the Hermes terminals nobody has written in yet. Also: say &ldquo;Clear out&rdquo;.</p><a class="shortcut-inline" href="goldwareos://clear-out">Clear out now</a></div>
   </div>
 
   <div class="gsub"><h2>How a scan becomes a task</h2><span>Every step runs on this Mac.</span></div>
@@ -442,7 +458,8 @@ details p { color: var(--text-muted); font-size: 14px; margin-top: 8px; }
     { id: "tasks", type: "tasks", title: "Tasks", size: "m", options: {} },
     { id: "system", type: "system", title: "This Mac", size: "s", options: {} },
     { id: "notes", type: "notes", title: "Notes", size: "m", options: {} },
-    { id: "agents", type: "agents", title: "Agents", size: "m", options: {} }
+    { id: "agents", type: "agents", title: "Agents", size: "m", options: {} },
+    { id: "shortcuts", type: "shortcuts", title: "Shortcuts", size: "s", options: {} }
   ];
   var LAYOUTS = {
     focus: [
@@ -465,11 +482,11 @@ details p { color: var(--text-muted); font-size: 14px; margin-top: 8px; }
     ]
   };
   var TYPES = [
-    ["welcome", "Welcome"], ["clock", "Clock"], ["tasks", "Tasks"], ["notes", "Notes"], ["links", "Links"],
+    ["welcome", "Welcome"], ["clock", "Clock"], ["tasks", "Tasks"], ["notes", "Notes"], ["links", "Links"], ["shortcuts", "Shortcuts"],
     ["system", "System"], ["agents", "Agents"], ["embed", "Embed a page"], ["html", "Custom HTML"]
   ];
-  var DEFAULT_TITLE = { welcome: "Welcome", clock: "Today", tasks: "Tasks", notes: "Notes", links: "Links", system: "This Mac", agents: "Agents", embed: "Embed", html: "Custom" };
-  var DEFAULT_SIZE = { welcome: "w", clock: "s", tasks: "m", notes: "m", links: "m", system: "s", agents: "m", embed: "w", html: "m" };
+  var DEFAULT_TITLE = { welcome: "Welcome", clock: "Today", tasks: "Tasks", notes: "Notes", links: "Links", shortcuts: "Shortcuts", system: "This Mac", agents: "Agents", embed: "Embed", html: "Custom" };
+  var DEFAULT_SIZE = { welcome: "w", clock: "s", tasks: "m", notes: "m", links: "m", shortcuts: "s", system: "s", agents: "m", embed: "w", html: "m" };
   var PROMPTS = [
     "Rename my assistant to Nova and change the wake word to Hey Nova",
     "Add a card to my GoldWare dashboard for my GitHub pull requests",
@@ -772,6 +789,7 @@ details p { color: var(--text-muted); font-size: 14px; margin-top: 8px; }
       case "tasks": return tasksBody(body);
       case "notes": return notesBody(body, c);
       case "links": return linksBody(body, o);
+      case "shortcuts": return shortcutsBody(body);
       case "system": return systemBody(body);
       case "agents": return agentsBody(body);
       case "embed":
@@ -856,6 +874,23 @@ details p { color: var(--text-muted); font-size: 14px; margin-top: 8px; }
     ta.addEventListener("blur", function () { if (timer) send(); });
     (state.notes ? Promise.resolve(state.notes) : api("/api/notes").then(function (r) { state.notes = (r.json && r.json.notes) || {}; return state.notes; }))
       .then(function (n) { if (document.activeElement !== ta) ta.value = n[c.id] || ""; }).catch(function () {});
+  }
+
+  /* One-click voice commands. goldwareos:// links are handled by the GoldWare OS app, which runs the
+     same code as the spoken phrase. Fixed list: nothing here is read from config. */
+  var SHORTCUTS = [
+    { route: "lets-work", name: "Let's work", say: "Say \u201cLet's work\u201d", gesture: "Both hands: thumb, index, middle; thumbs touch, pull apart" },
+    { route: "lock-up", name: "Lock up", say: "Say \u201cLock up\u201d", gesture: "Both hands open, then both fists" },
+    { route: "clear-out", name: "Clear out", say: "Say \u201cClear out\u201d", gesture: "Both hands open, then one fist" }
+  ];
+  function shortcutsBody(body) {
+    var box = h("div", { class: "shortcuts" });
+    SHORTCUTS.forEach(function (c) {
+      box.appendChild(h("a", { class: "shortcut", href: "goldwareos://" + c.route, "data-shortcut": c.route },
+        h("span", { text: c.name }), h("small", { text: c.say }), h("small", { text: c.gesture })));
+    });
+    box.appendChild(h("p", { class: "muted", style: "font-size:12px;margin:2px 0 0", text: "Works from the GoldWare OS app window. In a browser, allow the prompt to open GoldWare OS." }));
+    body.appendChild(box);
   }
 
   function linksBody(body, o) {

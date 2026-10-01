@@ -438,6 +438,11 @@ class TestHardening(ServerCase):
             ("wakePhrase", mod(lambda c: c.update(wakePhrase="x" * 101))),
             ("wakeAliases", mod(lambda c: c.update(wakeAliases=["a"] * 51))),
             ("wakeAliases", mod(lambda c: c.update(wakeAliases=["a" * 101]))),
+            ("letsWork", mod(lambda c: c.update(letsWork="x"))),
+            ("letsWork.command", mod(lambda c: c.update(letsWork={"command": "a\nb"}))),
+            ("letsWork.command", mod(lambda c: c.update(letsWork={"command": 5}))),
+            ("letsWork.terminal", mod(lambda c: c.update(letsWork={"terminal": "Warp"}))),
+            ("letsWork.profile", mod(lambda c: c.update(letsWork={"profile": 5}))),
             ("models.local", mod(lambda c: c["models"].update(local=5))),
             ("models.whisper", mod(lambda c: c["models"].update(whisper="../../etc/passwd"))),
             ("models.whisper", mod(lambda c: c["models"].update(whisper="a\\b.bin"))),
@@ -508,10 +513,45 @@ class TestHardening(ServerCase):
         with open(os.path.join(REPO, "dashboard", "index.html"), encoding="utf-8") as f:
             html = f.read()
         import re
-        for g in ("scan", "file", "point", "pinch", "scroll", "open", "lock"):
+        for g in ("scan", "file", "point", "pinch", "scroll", "open"):
             self.assertRegex(html, r'data-gesture="%s"><div class="gicon"><svg class="hand-art"' % g, g)
-        # 7 cards plus one hand per quadrant
+        # the lock, send, lock up and clear out cards are emoji, not hands
+        for g in ("lock", "send", "letswork", "lockup", "clearout"):
+            self.assertIn('data-gesture="%s"' % g, html)
+        self.assertRegex(html, r'data-gesture="letswork"><div class="gicon"><svg class="hand-art"')
+        self.assertNotRegex(html, r'(?i)thumbs up[^<]{0,12}lock|Thumbs up: lock')
+        # 6 hand cards, the Let's work card, and 4 quadrant hands
         self.assertEqual(len(re.findall(r'<svg class="hand-art"', html)), 11)
+
+    def test_shortcut_buttons_and_card(self):
+        with open(os.path.join(REPO, "dashboard", "index.html"), encoding="utf-8") as f:
+            html = f.read()
+        # the Shortcuts card renders three fixed goldwareos:// buttons
+        self.assertIn('case "shortcuts"', html)
+        for route in ("lets-work", "lock-up", "clear-out"):
+            self.assertIn('href: "goldwareos://" + c.route', html)
+            self.assertIn('route: "%s"' % route, html)
+            # and the Voice tab docs carry a plain link too
+            self.assertIn('href="goldwareos://%s"' % route, html)
+        self.assertNotIn("goldwareos://\" + o.", html)  # never built from config
+        with open(os.path.join(REPO, "goldware.default.json"), encoding="utf-8") as f:
+            cfg = json.load(f)
+        cards = cfg["dashboard"]["cards"]
+        self.assertIn("shortcuts", [c["type"] for c in cards])
+        self.assertEqual(cfg["letsWork"]["profile"], "GoldWare")
+        self.assertEqual(self.req("/api/config", cfg)[0], 200)
+
+    def test_goldware_iterm_profile(self):
+        path = os.path.join(REPO, "app", "Resources", "iTerm", "goldware-profile.json")
+        with open(path, encoding="utf-8") as f:
+            raw = f.read()
+        prof = json.loads(raw)["Profiles"][0]
+        self.assertEqual(prof["Name"], "GoldWare")
+        self.assertEqual(prof["Guid"], "goldware-os-profile")
+        self.assertTrue(prof["Normal Font"].startswith("JetBrainsMonoNF-Regular 15"))
+        # a look only: nothing that would run in every window Let's work opens
+        for k in ("Initial Text", "Custom Command", "Command"):
+            self.assertNotIn(k, prof)
 
     def test_sandboxed_frame_origin_cannot_call_api(self):
         # A sandboxed iframe without allow-same-origin sends Origin: null.

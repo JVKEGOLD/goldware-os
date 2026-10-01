@@ -14,6 +14,8 @@ final class DashboardWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, W
     private var pendingTab: String?
     let home: URL
     var onRetry: () -> Void = {}
+    /// A whitelisted goldwareos:// link was clicked in the page.
+    var onShortcut: (ShortcutRoute) -> Void = { _ in }
     /// Reports "loaded <url>" or the failure, for status.json.
     var onState: (String) -> Void = { _ in }
 
@@ -159,6 +161,11 @@ final class DashboardWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, W
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
                  decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         guard let url = action.request.url else { return decisionHandler(.allow) }
+        // Dashboard shortcut buttons run in-app: no browser prompt. Unknown goldwareos:// links are dropped.
+        if url.scheme?.lowercased() == ShortcutRoute.scheme {
+            if let route = ShortcutRoute(url: url) { onShortcut(route) }
+            return decisionHandler(.cancel)
+        }
         // Outside links (newspaper sources, client sites) and original-file downloads go to the browser.
         if !isLocal(url) || url.path.hasPrefix("/api/original") {
             NSWorkspace.shared.open(url)

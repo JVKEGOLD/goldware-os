@@ -21,7 +21,7 @@ run-server: ## Run the local dashboard server on 127.0.0.1:4188
 
 test: ## Run python tests and the app self-tests
 	python3 -m unittest discover -s tests -v
-	@for t in hand quadrants chord wake shelf; do \
+	@for t in hand quadrants chord wake shelf lets-work terminal-commands; do \
 	  echo "== app self-test: $$t"; \
 	  GOLDWARE_DATA="$${TMPDIR:-/tmp}/gw-test-data" app/.build/release/GoldWareOS --test-$$t || exit 1; \
 	done

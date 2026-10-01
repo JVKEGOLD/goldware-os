@@ -35,6 +35,10 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>NSHumanReadableCopyright</key><string>GoldWare. Local-first: recordings and records stay on this Mac.</string>
   <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
   <key>CFBundleVersion</key><string>1</string>
+  <key>CFBundleURLTypes</key><array><dict>
+    <key>CFBundleURLName</key><string>io.goldware.os.shortcuts</string>
+    <key>CFBundleURLSchemes</key><array><string>goldwareos</string></array>
+  </dict></array>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>
   <key>NSCameraUsageDescription</key><string>GoldWare OS shows your camera as a hand mirror while the pointer is behind the notch. Nothing is recorded.</string>

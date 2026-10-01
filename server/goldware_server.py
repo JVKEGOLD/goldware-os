@@ -22,7 +22,7 @@ DATA_ROOT = os.path.abspath(os.environ.get("GOLDWARE_DATA_ROOT") or os.path.join
 # Static assets live next to the code, not in a test-only root copy.
 CODE_ROOT = os.path.dirname(HERE)
 DEFAULT_PORT = 4188
-CARD_TYPES = ["welcome", "clock", "tasks", "notes", "links", "system", "agents", "embed", "html"]
+CARD_TYPES = ["welcome", "clock", "tasks", "notes", "links", "shortcuts", "system", "agents", "embed", "html"]
 CARD_SIZES = ["s", "m", "l", "w"]
 STATUSES = ["inbox", "ready", "doing", "done", "dropped"]
 TASK_FIELDS = ["title", "context", "status", "due_on", "priority", "focus_on"]
@@ -87,6 +87,18 @@ def validate_config(cfg):
         if (not isinstance(al, list) or len(al) > 50
                 or not all(isinstance(a, str) and len(a) <= 100 for a in al)):
             return "wakeAliases must be a list of up to 50 text values, each up to 100 characters."
+    if "letsWork" in cfg:
+        lw = cfg["letsWork"]
+        if not isinstance(lw, dict):
+            return "letsWork must be an object."
+        cmd = lw.get("command", "")
+        if not isinstance(cmd, str) or len(cmd) > 500 or re.search(r"[\r\n\x00]", cmd):
+            return "letsWork.command must be one line of text up to 500 characters."
+        if lw.get("terminal", "iTerm") != "iTerm":
+            return "letsWork.terminal must be \"iTerm\"."
+        prof = lw.get("profile", "")
+        if not isinstance(prof, str) or len(prof) > 100 or re.search(r"[\r\n\x00]", prof):
+            return "letsWork.profile must be text up to 100 characters."
     if "models" in cfg:
         models = cfg["models"]
         if not isinstance(models, dict):

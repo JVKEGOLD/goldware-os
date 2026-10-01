@@ -245,13 +245,14 @@ if args.count >= 2, args[1] == "--test-hand" {
     }
     let praying = twoHands(palms: 0.03, tips: 0.005), diamond = twoHands(palms: 0.14, tips: 0.01),
         letGo = twoHands(palms: 0.16, tips: 0.1)
+    let closing = twoHands(palms: 0.09, tips: 0.005)
     expect("reads praying hands, the diamond, and letting go",
            "\(HandGesture.Pair(praying.0, praying.1)!.together) \(HandGesture.Pair(diamond.0, diamond.1)!.diamond) \(HandGesture.Pair(letGo.0, letGo.1)!.apart)",
            "true true true")
     expect("one pose is not another", "\(HandGesture.Pair(praying.0, praying.1)!.diamond) \(HandGesture.Pair(diamond.0, diamond.1)!.together)",
            "false false")
     var lock = VisionLock()
-    var thumbLocks = true
+    var relocks = 0
     func feedL(_ hands: (HandGesture.Joints, HandGesture.Joints)?, _ seconds: Double, one: HandGesture.Joints? = nil) -> Bool {
         var admitted = false
         let end = t + seconds
@@ -259,7 +260,8 @@ if args.count >= 2, args[1] == "--test-hand" {
             var f = VisionFrame(); f.time = t
             if let h = hands { f.lead = h.0; f.second = h.1 } else if let one { f.lead = one }
             var u = false, r = false
-            admitted = lock.admit(f, unlocked: &u, relocked: &r, thumbLocks: thumbLocks)
+            admitted = lock.admit(f, unlocked: &u, relocked: &r)
+            if r { relocks += 1 }
             t += 1.0 / 30
         }
         return admitted
@@ -289,17 +291,28 @@ if args.count >= 2, args[1] == "--test-hand" {
     expect("a minute away locks again", "\(feedL(nil, 0.1, one: fist)) \(lock.state)", "false locked")
     lock = VisionLock(); _ = feedL(praying, 0.6); _ = feedL(diamond, 0.6); _ = feedL(nil, 0.5)
     expect("dropping both hands out of the diamond also counts as letting go", "\(lock.state)", "open")
+    // The lock is praying hands, held.
+    func unlocked() { lock = VisionLock(); _ = feedL(praying, 0.6); _ = feedL(diamond, 0.6); _ = feedL(letGo, 0.6) }
     let thumbUp = hand([false, false, false, false], thumb: "up")
-    _ = feedL(nil, 0.5, one: thumbUp)
-    expect("a brief thumbs up does not lock", "\(lock.state)", "open")
-    _ = feedL(nil, 0.3, one: fist); _ = feedL(nil, 1, one: thumbUp)
-    expect("a held thumbs up locks again", "\(lock.state)", "locked")
-    expect("locked by thumbs up: a pointing hand drives nothing", "\(feedL(nil, 0.5, one: point1))", "false")
-    lock = VisionLock(); _ = feedL(praying, 0.6); _ = feedL(diamond, 0.6); _ = feedL(letGo, 0.5)
-    thumbLocks = false; _ = feedL(nil, 1, one: thumbUp); thumbLocks = true; _ = feedL(nil, 1.5, one: thumbUp)
-    expect("a thumbs up that filed a scan does not also lock, even held on after", "\(lock.state)", "open")
-    _ = feedL(nil, 0.7, one: fist); _ = feedL(nil, 1, one: thumbUp)
-    expect("a fresh thumbs up after that locks", "\(lock.state)", "locked")
+    unlocked(); _ = feedL(nil, 0.3, one: fist); _ = feedL(nil, 2, one: thumbUp)
+    expect("a held thumbs up does not lock", "\(lock.state)", "open")
+    unlocked(); relocks = 0; _ = feedL(nil, 0.5, one: fist); _ = feedL(praying, 1)
+    expect("praying hands held lock", "\(lock.state) \(relocks)", "locked 1")
+    expect("locked again: a pointing hand drives nothing", "\(feedL(nil, 0.5, one: point1))", "false")
+    unlocked(); _ = feedL(nil, 0.5, one: fist); _ = feedL(praying, 0.5)
+    expect("a brief prayer does not lock", "\(lock.state)", "open")
+    unlocked(); relocks = 0; _ = feedL(nil, 0.5, one: fist); _ = feedL(praying, 0.5); _ = feedL(closing, 0.1); _ = feedL(praying, 0.5)
+    expect("a flicker mid-prayer still locks", "\(lock.state) \(relocks)", "locked 1")
+    unlocked(); _ = feedL(nil, 0.5, one: fist); _ = feedL(praying, 0.5); _ = feedL(nil, 0.5, one: fist); _ = feedL(praying, 0.5)
+    expect("two short prayers with a break do not add up", "\(lock.state)", "open")
+    unlocked(); _ = feedL(letGo, 0.3); _ = feedL(diamond, 0.5); _ = feedL(letGo, 0.5)
+    expect("the send (diamond, then let go) does not lock", "\(lock.state)", "open")
+    // Lowering the hands from the locking prayer runs prayer, diamond, apart: the unlock. It must not.
+    unlocked(); _ = feedL(nil, 0.5, one: fist); _ = feedL(praying, 1)
+    _ = feedL(diamond, 0.4); _ = feedL(letGo, 0.5)
+    expect("dropping the hands from the locking prayer does not unlock again", "\(lock.state)", "locked")
+    _ = feedL(nil, 1.5, one: fist); _ = feedL(praying, 0.6); _ = feedL(diamond, 0.6); _ = feedL(letGo, 0.5)
+    expect("a second later the full unlock works again", "\(lock.state)", "open")
     // Two hands close together drive nothing in pointer mode either (praying reads as four or open).
     let pairc = HandControl()
     pairc.dryRun = { _ in }
@@ -333,15 +346,25 @@ if args.count >= 2, args[1] == "--test-hand" {
         }
     }
     feedQ2(nil, 0.5, one: fist)
-    feedQ2(praying, 0.6); feedQ2(diamond, 0.6)
-    expect("in Quadrants, praying then the diamond does not send yet", "\(sends) \(qsend.status)", "0 SEND · ·")
+    feedQ2(diamond, 0.6)
+    expect("in Quadrants, the diamond held does not send yet", "\(sends) \(qsend.status)", "0 SEND ·")
     feedQ2(letGo, 0.2)
-    expect("letting go sends", "\(sends)", "1")
+    expect("letting go of the diamond sends, no praying first", "\(sends)", "1")
     feedQ2(nil, 1.5, one: fist)
     expect("the gesture's open palms never pick a quadrant, dictate, or switch back",
            "\(picked.sorted()) \(dictations) \(switchedBack)", "[] [] []")
-    feedQ2(diamond, 1); feedQ2(letGo, 0.5)
-    expect("a diamond on its own does not send", "\(sends)", "1")
+    feedQ2(diamond, 1.0 / 30); feedQ2(letGo, 0.5)
+    expect("a single frame of diamond does not send", "\(sends)", "1")
+    feedQ2(nil, 1, one: fist); feedQ2(diamond, 0.5); feedQ2(praying, 0.5); feedQ2(letGo, 0.5)
+    expect("closing the diamond into praying (the lock) does not send", "\(sends)", "1")
+    // Palms closing slowly from the diamond toward prayer, tips still touching: neither shape for a while.
+    expect("the closing hands read as neither diamond nor praying", "\(HandGesture.Pair(closing.0, closing.1)!.diamond) \(HandGesture.Pair(closing.0, closing.1)!.together)", "false false")
+    feedQ2(nil, 1, one: fist); feedQ2(diamond, 0.5); feedQ2(closing, 0.5); feedQ2(praying, 0.5); feedQ2(letGo, 0.5)
+    expect("closing slowly toward praying with the tips touching does not send", "\(sends)", "1")
+    feedQ2(nil, 1, one: fist); feedQ2(diamond, 0.5); feedQ2(nil, 0.5)
+    expect("dropping both hands out of the diamond sends", "\(sends)", "2")
+    feedQ2(nil, 1, one: fist); feedQ2(diamond, 0.5); feedQ2(nil, 0.1, one: diamond.0); feedQ2(nil, 1, one: fist)
+    expect("losing one hand's tracking as the diamond parts still sends", "\(sends)", "3")
     // Pointer (the default style): the same gesture sends, and moves nothing.
     let psend = HandControl()
     var pMoves = 0, pSends = 0
@@ -356,14 +379,14 @@ if args.count >= 2, args[1] == "--test-hand" {
         }
     }
     feedP(nil, 0.5)
-    feedP(praying, 0.6); feedP(diamond, 0.6)
-    expect("in the pointer, praying then the diamond does not send yet", "\(pSends) \(psend.status)", "0 VISION MODE · SEND · ·")
+    feedP(diamond, 0.6)
+    expect("in the pointer, the diamond held does not send yet", "\(pSends) \(psend.status)", "0 VISION MODE · SEND ·")
     feedP(letGo, 0.2)
-    expect("in the pointer, letting go sends", "\(pSends)", "1")
+    expect("in the pointer, letting go of the diamond sends", "\(pSends)", "1")
     expect("the gesture moves no pointer", "\(pMoves)", "0")
     feedP(nil, 3)
-    feedP(diamond, 1); feedP(letGo, 0.5)
-    expect("in the pointer, a diamond on its own does not send", "\(pSends)", "1")
+    feedP(diamond, 0.5); feedP(praying, 0.5); feedP(letGo, 0.5)
+    expect("in the pointer, closing the diamond into praying (the lock) does not send", "\(pSends)", "1")
     // The pinky alone, held 0.8 s, clears. Thumb tucked or loose is fine; thumb out to the side is "call me".
     let pinky = hand([false, false, false, true], thumb: "in"), callMe = hand([false, false, false, true], thumb: "side")
     expect("reads the pinky, not call-me, a fist, or one finger",
@@ -583,11 +606,55 @@ if args.count >= 2, args[1] == "--test-hand" {
     while stT < 3 { st.glide(at: 1500 + stT); stT += 1.0 / 120 }   // no frames at all
     expect("if camera frames stop, a fling stops within half a second", "\(stallPx.filter { $0 >= 1.5 }.count)", "0")
     print(String(format: "  pointer travel for the same hand move: close %.0f px, relaxed %.0f px, wide %.0f px", slow, normal, fast))
+    // Let's work by hand: both hands thumb, index, middle; thumb tips touch, then pull apart.
+    let homeBase = hand([true, true, false, false], thumb: "side")
+    func homeHands(apart: CGFloat) -> (HandGesture.Joints, HandGesture.Joints) {
+        // Left hand shifted so its thumb tip sits at x 0.52, right hand its mirror image; `apart` pulls them sideways.
+        let a = homeBase.mapValues { CGPoint(x: $0.x + 0.3 - apart / 2, y: $0.y) }
+        let b = homeBase.mapValues { CGPoint(x: 1.04 - ($0.x + 0.3) + apart / 2, y: $0.y) }
+        return (a, b)
+    }
+    let hc = HandControl()
+    hc.dryRun = { _ in }
+    var homes = 0, homeScroll = 0
+    hc.onLetsWork = { homes += 1 }
+    hc.dryScroll = { _ in homeScroll += 1 }
+    func feedH(_ pair: (HandGesture.Joints, HandGesture.Joints)?, _ seconds: Double, second: HandGesture.Joints? = nil) {
+        let end = t + seconds
+        while t < end {
+            var f = VisionFrame(); f.time = t
+            if let (a, b) = pair { f.lead = a; f.second = second ?? b }
+            hc.handle(f); t += 1.0 / 30
+        }
+    }
+    func pull(_ seconds: Double) {
+        let steps = Int(seconds * 30)
+        for i in 1...steps { feedH(homeHands(apart: 0.4 * CGFloat(i) / CGFloat(steps)), 1.0 / 30) }
+    }
+    expect("the Let's work shape reads on both synthetic hands",
+           "\(ThumbPull.shape(homeHands(apart: 0).0)) \(ThumbPull.shape(homeHands(apart: 0).1))", "true true")
+    feedH(homeHands(apart: 0), 0.5); pull(0.3); feedH(homeHands(apart: 0.4), 0.3)
+    expect("thumbs touching, then pulled apart, opens Let's work once", "\(homes)", "1")
+    expect("the two-finger hands do not scroll meanwhile", "\(homeScroll)", "0")
+    feedH(homeHands(apart: 0), 0.5); pull(0.3)
+    expect("again without dropping the hands does not fire twice", "\(homes)", "1")
+    feedH(nil, 0.7); feedH(homeHands(apart: 0), 0.5); pull(0.3)
+    expect("after the hands drop, it fires again", "\(homes)", "2")
+    feedH(nil, 0.7); feedH(homeHands(apart: 0), 1.0 / 30); pull(0.3)
+    expect("a one-frame touch does not fire", "\(homes)", "2")
+    feedH(nil, 0.7); feedH(homeHands(apart: 0.4), 1)
+    expect("hands in the shape but never touching do not fire", "\(homes)", "2")
+    feedH(nil, 0.7); feedH(homeHands(apart: 0), 0.5); feedH(nil, 2); feedH(homeHands(apart: 0.4), 0.5)
+    expect("a pull long after the touch does not fire", "\(homes)", "2")
+    feedH(nil, 0.7); feedH(homeHands(apart: 0), 0.5, second: open); feedH(homeHands(apart: 0.4), 0.5, second: open)
+    expect("one hand in the shape with an open hand does not fire", "\(homes)", "2")
+    hc.stop()
     // Lock Up by hand: both hands open for a beat, then both fists.
     let lc = HandControl()
     lc.dryRun = { _ in }
-    var locks = 0, lockMoves = 0
+    var locks = 0, clears = 0, lockMoves = 0
     lc.onLockUp = { locks += 1 }
+    lc.onClearOut = { clears += 1 }
     lc.dryRun = { _ in lockMoves += 1 }
     let openL = open, openR = open.mapValues { CGPoint(x: $0.x + 0.35, y: $0.y) }
     let fistL = fist, fistR = fist.mapValues { CGPoint(x: $0.x + 0.35, y: $0.y) }
@@ -607,10 +674,26 @@ if args.count >= 2, args[1] == "--test-hand" {
     expect("a brief flash of open hands does not lock up", "\(locks)", "2")
     feedL(nil, nil, 0.7); feedL(fistL, fistR, 1)
     expect("two fists that were never open do not lock up", "\(locks)", "2")
+    feedL(nil, nil, 0.7); feedL(openL, openR, 0.5); feedL(fistL, openR, 0.7)
+    expect("two open hands, then one fist, clears out once and does not lock up", "\(locks) \(clears)", "2 1")
+    feedL(fistL, openR, 1)
+    expect("the one fist held on does not clear out again", "\(clears)", "1")
+    feedL(nil, nil, 0.7); feedL(openL, openR, 0.5); feedL(openL, fistR, 0.7)
+    expect("either hand can be the fist", "\(locks) \(clears)", "2 2")
+    feedL(nil, nil, 0.7); feedL(openL, openR, 0.5); feedL(fistL, openR, 0.25); feedL(fistL, fistR, 0.5)
+    expect("hands that close a moment apart lock up, not clear out", "\(locks) \(clears)", "3 2")
+    feedL(nil, nil, 0.7); feedL(openL, openR, 0.5); feedL(fistL, openR, 0.3); feedL(openL, openR, 0.5)
+    expect("a fist opened again before half a second does not clear out", "\(clears)", "2")
+    feedL(nil, nil, 1.2); feedL(fistL, openR, 1)
+    expect("one fist next to an open hand that was never two open hands does not clear out", "\(clears)", "2")
+    feedL(nil, nil, 0.7); feedL(openL, openR, 0.5); feedL(fistL, nil, 1)
+    expect("one fist with the other hand gone does not clear out", "\(clears)", "2")
+    feedL(nil, nil, 0.7); feedL(openL, openR, 0.5); feedL(nil, nil, 1.5); feedL(fistL, openR, 0.7)
+    expect("one fist long after the open hands does not clear out", "\(clears)", "2")
     feedL(nil, nil, 0.7); feedL(openL, openR, 0.5); feedL(nil, nil, 1.5); feedL(fistL, fistR, 0.5)
-    expect("fists long after the open hands do not lock up", "\(locks)", "2")
+    expect("fists long after the open hands do not lock up", "\(locks)", "3")
     feedL(nil, nil, 0.7); feedL(openL, nil, 0.3); feedL(fistL, nil, 1)
-    expect("one hand open then a fist does nothing", "\(locks) \(lc.pose.rawValue)", "2 RESTING")
+    expect("one hand open then a fist does nothing", "\(locks) \(clears) \(lc.pose.rawValue)", "3 2 RESTING")
     feedL(openL, nil, 0.5); lockMoves = 0
     for i in 0..<10 { feedL(pointL.mapValues { CGPoint(x: $0.x + CGFloat(i) * 0.01, y: $0.y) }, nil, 1.0 / 30) }
     expect("pointing with one hand still moves the pointer", "\(lockMoves > 0)", "true")
@@ -656,6 +739,8 @@ if args.count >= 3, args[1] == "--gesture-eval" {
             if let p = f.pair {
                 if p.together { hits["together", default: 0] += 1 }
                 if p.diamond { hits["diamond", default: 0] += 1 }
+                if (p.thumb ?? 9) < 0.45, ThumbPull.shape(f.squared), ThumbPull.shape(f.secondSquared) { hits["thumbTouch", default: 0] += 1 }
+                if ThumbPull.shape(f.squared), ThumbPull.shape(f.secondSquared) { hits["homeShape", default: 0] += 1 }
                 let fa = OpenToFists.fingers(f.squared), fb = OpenToFists.fingers(f.secondSquared)
                 if fa == [true, true, true, true], fb == [true, true, true, true], (p.palms ?? 0) > 1.5 { hits["twoOpen", default: 0] += 1 }
                 if fa == [false, false, false, false], fb == [false, false, false, false] { hits["twoFists", default: 0] += 1 }
@@ -892,16 +977,81 @@ if args.count >= 2, args[1] == "--test-quadrants" {
     exit(failures == 0 ? 0 : 1)
 }
 
+if args.count >= 2, args[1] == "--test-lets-work" {
+    var failures = 0
+    func expect(_ what: String, _ ok: Bool) { print("\(ok ? "PASS" : "FAIL")  \(what)"); if !ok { failures += 1 } }
+    for s in ["Let's work.", "Let\u{2019}s Work!", "lets work", "Let us work", "Hey, let's work", "okay lets work", "GoldWare, let's work",
+              "Hey GoldWare, let's work.", "Let's work, GoldWare."] {
+        expect("opens on \"\(s)\"", LetsWork.matches(s))
+    }
+    for s in ["Remind me to tell Jen let's work on it at six", "Let's work out tonight", "let's", "work", "let's work on the proposal", "finish up"] {
+        expect("stays a request on \"\(s)\"", !LetsWork.matches(s))
+    }
+    let b = LetsWork.bounds()
+    expect("four windows", b.count == 4)
+    expect("1 top left, 2 top right, 3 bottom left, 4 bottom right",
+           b[0][0] < b[1][0] && b[0][1] < b[2][1] && b[3][0] == b[1][0] && b[3][1] == b[2][1])
+    expect("windows meet without overlap", b[0][2] == b[1][0] && b[0][3] == b[2][1])
+    let fixedBounds = [[0, 0, 10, 10], [10, 0, 20, 10], [0, 10, 10, 20], [10, 10, 20, 20]]
+    let plain = LetsWork.script(settings: LetsWork.Settings(), bounds: fixedBounds)
+    expect("the defaults open four default-profile windows with nothing typed in",
+           plain.components(separatedBy: "create window with default profile").count - 1 == 4 && !plain.contains("write text"))
+    let custom = LetsWork.Settings(command: "htop --tree", terminal: "iTerm", profile: "My \"Dev\" Profile")
+    let mine = LetsWork.script(settings: custom, bounds: fixedBounds)
+    expect("a configured profile and command are used in each of the four windows",
+           mine.components(separatedBy: "create window with profile \"My \\\"Dev\\\" Profile\"").count - 1 == 4 &&
+           mine.components(separatedBy: "write text \"htop --tree\"").count - 1 == 4)
+    expect("a missing profile falls back to the default profile in each window",
+           mine.components(separatedBy: "on error\n    set w to (create window with default profile)").count - 1 == 4)
+    let gw = LetsWork.script(settings: LetsWork.Settings(command: "", terminal: "iTerm", profile: "GoldWare"), bounds: fixedBounds)
+    expect("the GoldWare profile is used, with the fallback, and compiles",
+           gw.components(separatedBy: "create window with profile \"GoldWare\"").count - 1 == 4 && gw.contains("on error"))
+    let shippedData = VaultContext.resolveRoot().flatMap { try? Data(contentsOf: $0.appendingPathComponent("goldware.default.json")) }
+    let shipped = shippedData.flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any]
+    expect("the shipped default profile is GoldWare", ((shipped?["letsWork"] as? [String: Any])?["profile"] as? String) == "GoldWare")
+    for (what, raw, want) in [("lets-work", "goldwareos://lets-work", ShortcutRoute.letsWork), ("lock-up", "goldwareos://lock-up", .lockUp),
+                              ("clear-out", "goldwareos://clear-out", .clearOut), ("a trailing slash", "goldwareos://lock-up/", .lockUp),
+                              ("a query string", "goldwareos://clear-out?x=1&y=/etc", .clearOut), ("a fragment", "goldwareos://lets-work#a", .letsWork),
+                              ("an upper-case host", "GoldWareOS://Lets-Work", .letsWork)] {
+        expect("route \(what) parses", URL(string: raw).flatMap { ShortcutRoute(url: $0) } == want)
+    }
+    for raw in ["goldwareos://evil", "goldwareos://", "goldwareos:///lets-work", "goldwareos://lets-work/extra", "goldwareos://x/lets-work",
+                "goldwareos://lets-work.evil.com", "goldwareos://user@lock-up", "goldwareos://lock-up:80", "https://lets-work", "http://127.0.0.1:4188/lets-work",
+                "goldwareos2://lets-work", "file:///lets-work", "goldwareos:lock-up", "goldwareos://lock-up/../clear-out"] {
+        expect("route rejects \(raw)", URL(string: raw).flatMap { ShortcutRoute(url: $0) } == nil)
+    }
+    expect("exactly three routes exist", ShortcutRoute.allCases.count == 3)
+    expect("a cold start closes iTerm's own default window", mine.contains("is running") && mine.contains("close s"))
+    expect("the permission error names the configured assistant", {
+        var s = GWSettings(); s.assistantName = "Nova"; GWConfig.inject(s); defer { GWConfig.inject(nil) }
+        return TerminalCommands.friendly("error -1743").contains("Allow Nova to control iTerm")
+    }())
+    let cfg = try? GWSettings.parse(Data(#"{"letsWork":{"command":"claude","terminal":"iTerm","profile":"Dev"}}"#.utf8))
+    expect("goldware.json letsWork is read", cfg?.letsWork == LetsWork.Settings(command: "claude", terminal: "iTerm", profile: "Dev"))
+    expect("letsWork missing keeps the defaults", (try? GWSettings.parse(Data("{}".utf8)))?.letsWork == LetsWork.Settings())
+    expect("a bad letsWork is rejected", (try? GWSettings.parse(Data(#"{"letsWork":{"command":5}}"#.utf8))) == nil)
+    for (name, script) in [("default", plain), ("configured", mine), ("GoldWare", gw)] {
+        let check = Process()
+        check.executableURL = URL(fileURLWithPath: "/usr/bin/osacompile")
+        check.arguments = ["-o", NSTemporaryDirectory() + "lets-work-check.scpt", "-e", script]
+        try? check.run(); check.waitUntilExit()
+        expect("the \(name) AppleScript compiles", check.terminationStatus == 0)
+    }
+    print(failures == 0 ? "All Let's work checks passed" : "\(failures) Let's work check(s) failed")
+    exit(failures == 0 ? 0 : 1)
+}
+
 if args.count >= 2, args[1] == "--test-terminal-commands" {
     var failures = 0
     func expect(_ what: String, _ ok: Bool) { print("\(ok ? "PASS" : "FAIL")  \(what)"); if !ok { failures += 1 } }
-    for s in ["Finish up.", "finish up", "GoldWare, finish up", "Hey GoldWare, finish up!"] {
+    for s in ["Finish up.", "finish up", "GoldWare, finish up", "Hey GoldWare, finish up!", "Finish up, GoldWare."] {
         expect("finish up on \"\(s)\"", TerminalCommands.matchesFinishUp(s) && !TerminalCommands.matchesLockUp(s))
     }
     for s in ["Lock up.", "lockup", "GoldWare, lock up", "Hey GoldWare lock up!"] {
         expect("lock up on \"\(s)\"", TerminalCommands.matchesLockUp(s) && !TerminalCommands.matchesFinishUp(s))
     }
-    for s in ["Remind me to finish up the report", "finish up the deck", "lock up the house at nine", "finish", "lock", "up"] {
+    for s in ["Remind me to finish up the report", "finish up the deck", "lock up the house at nine", "finish", "lock", "up",
+              "Let's work"] {
         expect("stays a request on \"\(s)\"", !TerminalCommands.matchesFinishUp(s) && !TerminalCommands.matchesLockUp(s))
     }
     let ps = """
@@ -925,16 +1075,68 @@ if args.count >= 2, args[1] == "--test-terminal-commands" {
            fs.contains("write text \"\(TerminalCommands.finishLine)\" newline no") && fs.contains("do script \"\(TerminalCommands.finishLine)\" in t") &&
            fs.contains("write text \"\"") && fs.contains("{\"/dev/ttys001\", \"/dev/ttys002\"}"))
     expect("never launches iTerm or Terminal", fs.contains("application \"iTerm\" is running") && fs.contains("application \"Terminal\" is running") &&
-           TerminalCommands.listScript.contains("is running") && TerminalCommands.quitScript.contains("is running"))
-    for (name, script) in [("finish up", fs), ("the terminal list", TerminalCommands.listScript), ("quit", TerminalCommands.quitScript)] {
+                      TerminalCommands.listScript.contains("is running") &&
+           TerminalCommands.closeScript(ttys: []).contains("is running") && TerminalCommands.screensScript(ttys: []).contains("is running"))
+    for s in ["Clear out", "clear out", "GoldWare, clear out", "Hey GoldWare clear out!", "clearing out"] {
+        expect("clear out on \"\(s)\"", TerminalCommands.matchesClearOut(s) && !TerminalCommands.matchesLockUp(s) && !TerminalCommands.matchesFinishUp(s))
+    }
+    for s in ["clear out the garage", "clear", "Lock up", "Finish up"] {
+        expect("not clear out on \"\(s)\"", !TerminalCommands.matchesClearOut(s))
+    }
+    let yaml = "  t380: \"tip\"\n  # Empty-composer example prompts\n  placeholder:\n    p01: \"Ask anything\"\n    p02: \"Find and fix a failing test\"\n  other:\n    x: \"no\"\n"
+    let ph = TerminalCommands.placeholders(yaml: yaml)
+    expect("reads Hermes's grey example prompts", ph == ["Ask anything", "Find and fix a failing test"])
+    expect("without a Hermes install the built-in example prompts are used", TerminalCommands.placeholders(yaml: "").contains("Find and fix a failing test") && !TerminalCommands.placeholders().isEmpty)
+    let bar = "────────────"
+    func screen(_ prompt: String) -> String { "Welcome to Hermes Agent!\n ☤ claude-opus-5-5 │ ctx --\n\(bar)\n\(prompt)\n\(bar)\n  " }
+    let chats = ["ttys001": ["fresh"], "ttys002": ["talked"], "ttys003": ["fresh2"], "ttys004": ["fresh3"], "ttys005": ["old", "fresh4"]]
+    let users = ["talked": 3, "old": 2]
+    let screens = ["/dev/ttys001": screen("❯ "), "/dev/ttys002": screen("❯ "), "/dev/ttys003": screen("❯ Find and fix a failing test"),
+                   "/dev/ttys004": screen("❯ fix the login bu"), "/dev/ttys005": screen("❯ ")]
+    expect("clear out closes fresh Hermes chats (empty or grey example), keeps one you wrote in, one with typing, and a tty with an older chat",
+           TerminalCommands.emptyTTYs(chats: chats, userMessages: users, screens: screens, placeholders: ph) == ["/dev/ttys001", "/dev/ttys003"])
+    expect("clear out never closes a terminal whose screen it could not read",
+           TerminalCommands.emptyTTYs(chats: ["ttys001": ["fresh"]], userMessages: [:], screens: [:], placeholders: ph).isEmpty)
+    expect("a screen with no Hermes prompt is not empty", !TerminalCommands.promptIsEmpty("Last login: today\n$ ", placeholders: ph))
+    let cs = TerminalCommands.closeScript(ttys: ["/dev/ttys001", "/dev/ttys003"])
+    expect("clear out closes only the listed terminals and quits an app only when it has no windows left",
+           cs.contains("{\"/dev/ttys001\", \"/dev/ttys003\"}") && cs.contains("if targets contains (tty of s) then set end of victims to contents of s") &&
+           cs.contains("if (count of windows) = 0 then quit") && !cs.contains("to quit"))
+    let cliPS = """
+    ttys001   0.0 /bin/zsh
+    ttys003  42.5 /opt/tools/bin/claude
+    ttys004   0.1 claude
+    ttys005  12.0 /opt/homebrew/bin/codex
+    ??       80.0 /usr/local/bin/claude
+    """
+    let cli = TerminalCommands.cliAgents(psOutput: cliPS)
+    expect("reads Claude Code and Codex processes with their CPU", cli.count == 5 && cli[1].name == "claude" && cli[1].cpu == 42.5)
+    let busy = TerminalCommands.busyTTYs(chats: ["ttys001": ["idle"], "ttys002": ["working"], "ttys006": ["old", "helping"]],
+                                         leased: ["working", "helping"], cli: cli)
+    expect("lock up keeps only agents mid-task: a leased Hermes, a busy Claude Code or Codex; idle agents and shells close",
+           busy == ["/dev/ttys002", "/dev/ttys003", "/dev/ttys005", "/dev/ttys006"])
+    for (name, script) in [("finish up", fs), ("the terminal list", TerminalCommands.listScript),
+                           ("close", cs), ("screens", TerminalCommands.screensScript(ttys: ["/dev/ttys001"]))] {
         let check = Process()
         check.executableURL = URL(fileURLWithPath: "/usr/bin/osacompile")
         check.arguments = ["-o", NSTemporaryDirectory() + "terminal-commands-check.scpt", "-e", script]
         try? check.run(); check.waitUntilExit()
         expect("the \(name) AppleScript compiles", check.terminationStatus == 0)
     }
+    expect("Let's work is not taken by the terminal phrases", !LetsWork.matches("finish up") && !LetsWork.matches("lock up") && !LetsWork.matches("clear out"))
+    expect("Hermes not installed: no chats, no leased sessions, nothing to read", TerminalCommands.leasedSessions([]) == [] && TerminalCommands.userMessageCounts([]) == [:])
+    expect("a configured assistant name is accepted around the phrase", TerminalCommands.matchesLockUp("Hey Nova, lock up") == false &&
+           TerminalCommands.matchesPhrase("Hey Nova, lock up", "(lock up)", names: ["nova"]) && TerminalCommands.matchesPhrase("nova lock up", "(lock up)", names: ["nova"]))
     print(failures == 0 ? "All terminal command checks passed" : "\(failures) terminal command check(s) failed")
     exit(failures == 0 ? 0 : 1)
+}
+
+// Let's work from the command line: `--print` shows the AppleScript, otherwise it opens the windows.
+if args.count >= 2, args[1] == "--lets-work" {
+    if args.contains("--print") { print(LetsWork.script()); exit(0) }
+    let error = LetsWork.open(LetsWork.script())
+    print(error ?? "Opened four terminals")
+    exit(error == nil ? 0 : 1)
 }
 
 // Read-only: every on-screen window, which quadrant it fills (if any), and whether Accessibility can
@@ -1529,12 +1731,23 @@ if args.count >= 3, args[1] == "--assistant" || args[1] == "--assistant-text" {
             spoken = try await WhisperEngine().transcribe(URL(fileURLWithPath: args[2]), vocabulary: Vocabulary.load())
             print("HEARD: \(spoken)")
         }
+        if LetsWork.matches(spoken) {
+            let s = LetsWork.settings
+            print("WOULD OPEN LET'S WORK: four iTerm windows (\(s.profile.isEmpty ? "default profile" : "profile " + s.profile)) running \(s.command.isEmpty ? "a plain shell" : s.command)")
+            return
+        }
         if TerminalCommands.matchesFinishUp(spoken) {
             print("WOULD FINISH UP: type \"\(TerminalCommands.finishLine)\" into \(TerminalCommands.hermesTTYs().count) Hermes terminal(s)")
             return
         }
         if TerminalCommands.matchesLockUp(spoken) {
-            print("WOULD LOCK UP: close \(TerminalCommands.lockUp(dryRun: true).0) terminal(s) and quit iTerm and Terminal")
+            let (close, kept, err) = TerminalCommands.lockUp(dryRun: true)
+            print(err.map { "LOCK UP ERROR: \($0)" } ?? "WOULD LOCK UP: close \(close) stagnant terminal(s), keep \(kept) with an agent working")
+            return
+        }
+        if TerminalCommands.matchesClearOut(spoken) {
+            let (close, left, err) = TerminalCommands.clearOut(dryRun: true)
+            print(err.map { "CLEAR OUT ERROR: \($0)" } ?? "WOULD CLEAR OUT: close \(close) unused Hermes terminal(s), leave \(left)")
             return
         }
         let t0 = Date()
