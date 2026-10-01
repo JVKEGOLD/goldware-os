@@ -8,29 +8,84 @@ Your Mac, voice, vision, and a dashboard you reshape with your own AI. Everythin
 - **Vision**: Mac camera hand tracking (Apple Vision framework): hand mirror, pointer control, document scan.
 - **Dashboard**: a local page at http://127.0.0.1:4188 that you customize by asking your AI agent.
 
-## Requirements
+## What you need
 
-- Apple Silicon Mac, macOS 14 or newer
-- 16 GB RAM recommended (8 GB works with the small model)
-- About 15 GB free disk (the language model alone is 7 to 10 GB, plus the speech model and the build)
-- Xcode Command Line Tools and Homebrew (setup tells you if they are missing)
+- An Apple Silicon Mac (M1 or newer) on macOS 14 or newer
+- 16 GB of memory recommended (8 GB works with a smaller model)
+- About 15 GB of free disk space
+- An internet connection for the first install (after that, everything runs offline)
 
-## Quickstart
+Setup installs everything else for you.
+
+## Install (about 20 to 40 minutes, mostly downloads)
+
+Open **Terminal** (press Cmd+Space, type Terminal, press Return) and paste these one at a time.
+
+**1. Get the code**
 
 ```sh
-git clone https://github.com/JVKEGOLD/goldware-os.git && cd goldware-os
+git clone https://github.com/JVKEGOLD/goldware-os.git ~/goldware-os
 ```
 
-While the repository is private, sign in first (`brew install gh`, then `gh auth login`) and clone with `gh repo clone JVKEGOLD/goldware-os`. Keep the cloned folder where it is: the built app reads its config, server, and dashboard from it.
+On a brand-new Mac this opens a box asking to install the "command line developer tools". Click **Install**, wait for it to finish, then paste the command again.
 
-Then either:
+> While the repository is private you need to be signed in to GitHub: install [Homebrew](https://brew.sh), then run `brew install gh`, `gh auth login` (choose GitHub.com, HTTPS, log in with a web browser), and `gh repo clone JVKEGOLD/goldware-os ~/goldware-os` instead of the `git clone` line.
 
-- paste [MASTER_PROMPT.md](MASTER_PROMPT.md) into your AI coding agent (Claude Code, Codex, Hermes, ...) and let it set things up, or
-- run `make setup` yourself. `scripts/setup.sh --dry-run` shows what it would do first.
+**2. Run setup**
 
-Run `make setup` in a normal Terminal window: copying the app to /Applications is a question that is skipped when there is no keyboard attached (for example when an agent runs it). Agents should finish with `scripts/setup.sh --only install --yes` after you approve.
+```sh
+cd ~/goldware-os
+make setup
+```
 
-`make doctor` checks every piece and prints the fix command for anything missing.
+Setup checks your Mac, installs what is missing, downloads the speech and language models, builds the app, and asks before copying it to your Applications folder (type `y` and press Return). It is safe to run again at any time.
+
+If setup stops, it prints exactly what to do next (for example the one-line command to install Homebrew). Do that, then run `make setup` again; it picks up where it left off.
+
+**3. Open the app**
+
+Open **GoldWare OS** from your Applications folder. Because it is not from the App Store, macOS blocks the first launch: right-click the app and choose **Open**, or go to System Settings > Privacy & Security and click **Open Anyway**.
+
+Then allow these when asked (or turn them on in System Settings > Privacy & Security):
+
+| Permission | What it is for |
+|---|---|
+| Microphone | dictation and the assistant |
+| Accessibility | pasting text and global hotkeys |
+| Speech Recognition | the "Hey GoldWare" wake phrase |
+| Camera | Vision (hand tracking, document scan) |
+
+That's it. Say **"Hey GoldWare"**, and open your dashboard at http://127.0.0.1:4188.
+
+**Keep the `~/goldware-os` folder where it is.** The app reads its settings and dashboard from it.
+
+### Prefer to let an AI do it?
+
+If you use an AI coding agent (Claude Code, Codex, Hermes, ...), open it in the `goldware-os` folder after step 1 and paste in [MASTER_PROMPT.md](MASTER_PROMPT.md). It runs setup, explains each step, and asks before installing anything. You still do step 3 yourself.
+
+## Updating
+
+```sh
+cd ~/goldware-os
+git pull
+make setup
+```
+
+Setup skips what is already done and rebuilds the app. After an update macOS may forget the app's permissions (see Troubleshooting).
+
+## Troubleshooting
+
+Run this first. It checks every piece and prints the fix for anything missing:
+
+```sh
+make doctor
+```
+
+- **Voice or camera stopped working after an update.** The app is not signed with an Apple developer certificate, so macOS can forget its permissions after a rebuild. In System Settings > Privacy & Security, open Microphone, Accessibility, Speech Recognition, and Camera, remove GoldWare OS if it is listed (the minus button), and turn it back on.
+- **"GoldWare OS can't be opened".** Right-click the app and choose Open, or System Settings > Privacy & Security > Open Anyway.
+- **You moved or renamed the `goldware-os` folder.** Run `make setup` again from the new location.
+- **A download failed or was interrupted.** Run `make setup` again; downloads resume.
+- **Still stuck?** Copy everything setup printed and paste it into your AI agent, or open an issue.
 
 ## Memory tiers
 
@@ -48,9 +103,9 @@ Nothing leaves your Mac. Speech, language models, camera frames, tasks, and note
 
 GoldWare OS is meant to be reshaped. Rename the assistant, change the wake phrase, add dashboard cards, swap the model, or add voice commands by asking your AI agent. [docs/CUSTOMIZING.md](docs/CUSTOMIZING.md) maps every setting and where it lives.
 
-## First launch (unsigned app)
+## Other permissions
 
-The app is ad-hoc signed, not notarized. On first launch macOS may block it: right-click the app and choose Open, or go to System Settings > Privacy & Security and click Open Anyway. You will also be asked for Microphone, Accessibility, Speech Recognition, and Camera access. Because the app is ad-hoc signed, every rebuild (`make app`, `make install`, rerunning setup) can reset those permissions; re-enable them in the same Privacy & Security lists. The app finds its config through the folder it was built in, so if you move or rename this folder, run `make app && make install` from the new location (`make doctor` flags it). The "Finish up" and "Lock up" voice commands, which talk to your open terminals, ask for Automation access when first used, and the control center's Today tab asks for Calendar access.
+The "Finish up" and "Lock up" voice commands, which talk to your open terminals, ask for Automation access the first time you use them, and the control center's Today tab asks for Calendar access. Allow them only if you want those features.
 
 ## License
 
