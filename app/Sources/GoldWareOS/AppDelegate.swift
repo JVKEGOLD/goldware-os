@@ -519,7 +519,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // whatever he hears gets filed.
         if duration < (mode == .assistant ? 0.8 : 0.4) || recorder.peakPower < -45 {
             try? FileManager.default.removeItem(at: url)
-            hud.show("Didn't hear anything", orb: .breathing, autoHide: 1.2)
+            // A denied microphone records pure silence, which otherwise reads as a quiet clip.
+            if !Recorder.isAllowed {
+                hud.show("Turn on Microphone for \(GWConfig.name): System Settings > Privacy & Security", orb: .shaping, autoHide: 4)
+            } else {
+                hud.show("Didn't hear anything", orb: .breathing, autoHide: 1.2)
+            }
             return
         }
 

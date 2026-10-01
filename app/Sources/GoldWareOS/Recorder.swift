@@ -14,6 +14,8 @@ final class Recorder {
     private var currentLevel: Float = 0
     private(set) var peakPower: Float = -160
 
+    static var isAllowed: Bool { AVCaptureDevice.authorizationStatus(for: .audio) == .authorized }
+
     static func requestPermission(_ done: @escaping (Bool) -> Void) {
         AVCaptureDevice.requestAccess(for: .audio) { granted in
             DispatchQueue.main.async { done(granted) }
