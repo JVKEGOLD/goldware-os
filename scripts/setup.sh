@@ -74,7 +74,7 @@ step_platform() {
 }
 
 step_clt() {
-  step "2/11 Xcode Command Line Tools, swift, python3"
+  step "2/11 Apple Command Line Tools (not Xcode), swift, python3"
   if ! xcode-select -p >/dev/null 2>&1; then
     if (( DRY )); then would "xcode-select --install, then ask you to rerun"; return; fi
     xcode-select --install >/dev/null 2>&1
