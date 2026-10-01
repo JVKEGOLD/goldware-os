@@ -253,6 +253,7 @@ summary { cursor: pointer; font-size: 14px; font-weight: 500; }
 details p { color: var(--text-muted); font-size: 14px; margin-top: 8px; }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
 </style>
+<link rel="stylesheet" href="/dashboard/office.css">
 </head>
 <body>
 
@@ -262,6 +263,7 @@ details p { color: var(--text-muted); font-size: 14px; margin-top: 8px; }
     <button class="topbar-tab" data-tab="dashboard">Dashboard</button>
     <button class="topbar-tab" data-tab="voice">Voice</button>
     <button class="topbar-tab" data-tab="vision">Vision</button>
+    <button class="topbar-tab" data-tab="office" title="The agents on this Mac, at their desks">Office</button>
   </div>
   <div class="topbar-spacer"></div>
 </div>
@@ -447,6 +449,60 @@ details p { color: var(--text-muted); font-size: 14px; margin-top: 8px; }
 </div>
 
 <div id="toasts"></div>
+
+<!-- OFFICE -->
+  <div class="tab-content" id="tab-office">
+    <section class="office-shell roster-folded" id="office-shell" aria-label="Agents at their desks">
+      <div class="office-hud" id="office-hud" aria-label="The office">
+        <div class="oh-brand"><span class="oh-gw" aria-hidden="true">GW</span><b>GoldWare</b><i class="oh-sep" aria-hidden="true"></i><span class="oh-room">Office</span></div>
+        <div class="oh-floor"><span class="oh-status" role="status">Opening the office…</span></div>
+        <button class="oh-usage" type="button" data-tab="usage" title="AI usage"><span class="oh-usage-text">Usage</span></button>
+        <button class="oh-full" type="button" aria-pressed="false" title="Full screen (F)" aria-label="Full screen"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4"/></svg></button>
+      </div>
+      <aside class="office-roster" id="office-roster" aria-label="Office tools">
+        <nav class="or-tabs" aria-label="Office panels">
+          <button type="button" data-tab="floor" aria-expanded="false" aria-controls="office-roster-list office-helper"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 7h12v6M4 13V9m8 4V9M5 3h6v4H5z"/></svg>Floor</button>
+          <button type="button" data-tab="tasks" aria-expanded="false" aria-controls="office-board"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m2 4 1 1 2-2m2 1h7M2 8h3m2 0h7M2 12h3m2 0h7"/></svg>Tasks<i></i></button>
+          <button type="button" data-tab="ideas" aria-expanded="false" aria-controls="office-board"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 11C6 9 3.5 8 3.5 5.5a4.5 4.5 0 0 1 9 0C12.5 8 10 9 10 11zm0 3h4"/></svg>Ideas<i></i></button>
+          <button type="button" data-tab="lab" aria-expanded="false" aria-controls="office-board"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 2h4M7 2v5l-4 6v1h10v-1L9 7V2M5 10h6"/></svg>Lab<i></i></button>
+          <button type="button" data-tab="usage" aria-expanded="false" aria-controls="office-board"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 13V8m5 5V3m5 10V6"/></svg>Usage</button>
+          <span class="or-shortcuts" aria-hidden="true">← → desks · F full screen</span>
+          <button class="or-fold" type="button" title="Close panel (Esc)" aria-label="Close panel">×</button>
+        </nav>
+        <div class="or-view or-board" id="office-board" hidden></div>
+        <div class="or-view" id="office-roster-list">
+          <header class="or-head"><h3>On the floor</h3><p id="office-summary">Opening the office…</p></header>
+          <div class="or-list"></div>
+          <section class="office-log"><h3>Overheard</h3><ul id="office-ticker"><li class="quiet">Changes show up here as they happen.</li></ul></section>
+          <details class="or-key"><summary>Key</summary>
+            <div class="office-legend" aria-label="What they are doing">
+              <span><i class="k-type"></i>Typing: running commands</span>
+              <span><i class="k-write"></i>Paper on screen: writing or reading</span>
+              <span><i class="k-think"></i>Thought bubble: thinking</span>
+              <span><i class="k-you"></i>Standing at your desk with a question mark: done, and waiting on you</span>
+              <span><i class="k-sleep"></i>Zzz: asleep, nothing for 45 minutes</span>
+              <span><i class="k-help"></i>Little ones on a desk: helpers it sent out, each with a light for what it is doing</span>
+              <span><i class="k-boss"></i>Front desk: you, the boss, who they all report to</span>
+              <span><i class="k-type"></i>Left and right arrows step from desk to desk, Esc closes</span>
+              <span><i class="k-you"></i>Wall boards: tasks, ideas, the lab. Click one to open it</span>
+              <span><i class="k-sleep"></i>Bunk beds: a plan ran out of usage; its agents sleep until it resets</span>
+            </div>
+          </details>
+        </div>
+        <div class="or-view or-detail" id="office-helper" hidden aria-live="polite"></div>
+      </aside>
+      <div class="office-room" id="office-room">
+        <div class="office-stage" id="office-stage">
+          <canvas id="office-canvas" width="332" height="186" aria-hidden="true"></canvas>
+          <div class="office-desks" id="office-desks"></div>
+          <div class="office-toast" id="office-toast" hidden></div>
+          <aside class="office-card" id="office-card" hidden></aside>
+          <aside class="office-console" id="office-console" hidden aria-label="Agent terminal"></aside>
+        </div>
+        <section class="office-dock" id="office-dock" aria-label="Task board"></section>
+      </div>
+    </section>
+  </div>
 
 <script>
 (function () {
@@ -954,7 +1010,7 @@ details p { color: var(--text-muted); font-size: 14px; margin-top: 8px; }
   /* routing */
   function route() {
     var t = (location.hash || "#dashboard").replace("#", "");
-    if (["dashboard", "voice", "vision"].indexOf(t) < 0) t = "dashboard";
+    if (["dashboard", "voice", "vision", "office"].indexOf(t) < 0) t = "dashboard";
     state.tab = t;
     document.querySelectorAll(".topbar-tab").forEach(function (b) { b.classList.toggle("active", b.dataset.tab === t); });
     document.querySelectorAll(".tab-content").forEach(function (n) { n.classList.toggle("active", n.id === "tab-" + t); });
@@ -971,5 +1027,6 @@ details p { color: var(--text-muted); font-size: 14px; margin-top: 8px; }
   });
 })();
 </script>
+<script src="/dashboard/office.js"></script>
 </body>
 </html>

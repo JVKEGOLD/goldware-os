@@ -6,6 +6,7 @@ Your Mac, voice, vision, and a dashboard you reshape with your own AI. Everythin
 
 - **Voice**: push-to-talk dictation and a voice assistant (whisper.cpp for speech, a local Ollama model for cleanup and understanding).
 - **Vision**: Mac camera hand tracking (Apple Vision framework): hand mirror, pointer control, document scan.
+- **Office**: every Hermes, Claude Code, Codex and Ollama running on this Mac, each at a pixel-art desk with a short name and its chat title. Click one to read its terminal and type to it, see what it needs from you, keep a task board, and watch your plan usage. Empty if you run none of them.
 - **Dashboard**: a local page at http://127.0.0.1:4188 that you customize by asking your AI agent.
 
 ## What you need
@@ -112,7 +113,7 @@ make doctor
 
 ## Privacy
 
-Nothing leaves your Mac. Speech, language models, camera frames, tasks, and notes are all processed and stored locally. The plan usage card reads local CLI credentials only to show your own limits.
+Nothing leaves your Mac. Speech, language models, camera frames, tasks, and notes are all processed and stored locally. The plan usage card reads local CLI credentials only to show your own limits. The Office tab only types into a terminal when you press Send, Assign or Talk, and only into a terminal that belongs to an agent it found; the server refuses those requests from any other web page.
 
 ## Vision and voice shortcuts
 

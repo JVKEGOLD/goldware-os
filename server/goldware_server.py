@@ -14,7 +14,10 @@ import tempfile
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import office  # noqa: E402  (the Office tab: agents at desks, console, board, usage)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.environ.get("GOLDWARE_ROOT") or os.path.dirname(HERE))
@@ -572,6 +575,60 @@ class Handler(BaseHTTPRequestHandler):
             return False
         return True
 
+    def same_origin_post(self):
+        """Office POSTs can type into the user's terminals, so they must come from this page:
+        an Origin (or, failing that, a Referer) naming our own loopback address, and no
+        cross-site Sec-Fetch-Site. A request with neither header is refused."""
+        port = self.server.server_address[1]
+        own = ("http://127.0.0.1:%d" % port, "http://localhost:%d" % port)
+        site = self.headers.get("Sec-Fetch-Site")
+        if site is not None and site not in ("same-origin", "none"):
+            return False
+        origin = self.headers.get("Origin")
+        if origin is not None:
+            return origin in own
+        ref = self.headers.get("Referer")
+        return bool(ref) and any(ref == o or ref.startswith(o + "/") for o in own)
+
+    def office_get(self, path, query):
+        """Read-only Office endpoints. Nothing here types into a terminal."""
+        q = lambda k: (query.get(k) or [""])[0]
+        try:
+            if path == "/api/office/agents":
+                return self.send_json(200, office.snapshot(data_root=DATA_ROOT))
+            if path == "/api/office/screen":
+                return self.send_json(200, office.screen_of_agent(q("id")))
+            if path == "/api/office/helper":
+                detail = office.helper_detail(q("id"))
+                if detail is None:
+                    return self.err(404, "That helper has finished.")
+                return self.send_json(200, detail)
+            if path == "/api/office/board":
+                return self.send_json(200, office.board_view(DATA_ROOT))
+            if path == "/api/office/usage":
+                return self.send_json(200, office.usage_snapshot())
+            return self.err(404, "Not found.")
+        except office.OfficeError as e:
+            return self.err(e.status, str(e))
+        except office.TerminalError as e:
+            return self.err(503, str(e))
+
+    def office_post(self, path, body):
+        if not self.same_origin_post():
+            return self.err(403, "Office actions only work from the dashboard itself.")
+        try:
+            if path == "/api/office/send":
+                return self.send_json(200, office.send_to_agent(body))
+            if path == "/api/office/focus":
+                return self.send_json(200, office.focus_agent(body))
+            if path == "/api/office/board":
+                return self.send_json(200, office.board_action(DATA_ROOT, body))
+            return self.err(404, "Not found.")
+        except office.OfficeError as e:
+            return self.err(e.status, str(e))
+        except office.TerminalError as e:
+            return self.err(503, str(e))
+
     def do_GET(self):
         if not self.guard():
             return
@@ -600,6 +657,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(200, system_info())
             if path == "/api/agents":
                 return self.send_json(200, agents_info())
+            if path.startswith("/api/office/"):
+                return self.office_get(path, parse_qs(urlparse(self.path).query))
             if path.startswith("/api/"):
                 return self.err(404, "Not found.")
             if path.startswith("/dashboard/"):
@@ -659,6 +718,8 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/notes":
                 code, obj = notes_post(body)
                 return self.send_json(code, obj)
+            if path.startswith("/api/office/"):
+                return self.office_post(path, body)
             return self.err(404, "Not found.")
         except Exception as e:
             log("POST %s failed: %r" % (path, e))

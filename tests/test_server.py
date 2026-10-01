@@ -33,7 +33,8 @@ class ServerCase(unittest.TestCase):
         cls.data = os.path.join(cls.tmp, "data")
         cls.port = free_port()
         cls.base = "http://127.0.0.1:%d" % cls.port
-        env = dict(os.environ, GOLDWARE_ROOT=cls.root, GOLDWARE_DATA_ROOT=cls.data)
+        env = dict(os.environ, GOLDWARE_ROOT=cls.root, GOLDWARE_DATA_ROOT=cls.data,
+                   GOLDWARE_OFFICE_EMPTY="1", GOLDWARE_OFFICE_DRY_RUN="1")
         cls.proc = subprocess.Popen([sys.executable, SERVER, "--port", str(cls.port)], env=env,
                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         for _ in range(100):
@@ -522,6 +523,45 @@ class TestHardening(ServerCase):
         self.assertNotRegex(html, r'(?i)thumbs up[^<]{0,12}lock|Thumbs up: lock')
         # 6 hand cards, the Let's work card, and 4 quadrant hands
         self.assertEqual(len(re.findall(r'<svg class="hand-art"', html)), 11)
+
+    def test_office_tab_and_assets(self):
+        import re
+        with open(os.path.join(REPO, "dashboard", "index.html"), encoding="utf-8") as f:
+            html = f.read()
+        tabs = re.findall(r'<button class="topbar-tab" data-tab="(\w+)"', html)
+        self.assertEqual(tabs, ["dashboard", "voice", "vision", "office"])  # Office is the fourth tab
+        self.assertIn('id="tab-office"', html)
+        self.assertIn('"office"].indexOf(t)', html)             # the router knows it
+        for sel in ('id="office-canvas"', 'id="office-roster"', 'id="office-dock"', 'id="office-stage"'):
+            self.assertIn(sel, html)
+        self.assertIn("/dashboard/office.js", html)
+        self.assertIn("/dashboard/office.css", html)
+        for path, ctype in (("/dashboard/office.js", "javascript"), ("/dashboard/office.css", "text/css")):
+            code, body, h = self.req(path)
+            self.assertEqual(code, 200, path)
+            self.assertIn(ctype, h["Content-Type"])
+        with open(os.path.join(REPO, "dashboard", "office.js"), encoding="utf-8") as f:
+            js = f.read()
+        for ep in ("/api/office/agents", "/api/office/screen", "/api/office/send", "/api/office/focus",
+                   "/api/office/board", "/api/office/usage", "/api/office/helper"):
+            self.assertIn(ep, js)
+        # nothing from the old private world, and no mascot art (words split so this file stays clean)
+        banned = "(?i)" + "|".join(["al" + "len", "masc" + "ot", "bean" + "ie", "kine" + "tic", "mat" + "rix", "vau" + "lt",
+                                    "/api/clients", "/api/document", "\u2014"])
+        for name in ("office.js", "office.css"):
+            with open(os.path.join(REPO, "dashboard", name), encoding="utf-8") as f:
+                text = f.read()
+            self.assertNotRegex(text, banned, name)
+        self.assertNotRegex(html, r"(?i)" + "|".join(["al" + "len", "masc" + "ot", "bean" + "ie"]))
+
+    def test_office_endpoints_return_json(self):
+        for path in ("/api/office/agents", "/api/office/board", "/api/office/usage"):
+            code, j, h = self.req(path)
+            self.assertEqual(code, 200, path)
+            self.assertIsInstance(j, dict, path)
+            self.assertIn("application/json", h["Content-Type"])
+        self.assertIsInstance(self.req("/api/office/agents")[1]["agents"], list)
+        self.assertEqual(self.req("/api/office/screen?id=nope")[0], 404)
 
     def test_shortcut_buttons_and_card(self):
         with open(os.path.join(REPO, "dashboard", "index.html"), encoding="utf-8") as f:

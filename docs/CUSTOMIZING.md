@@ -96,7 +96,17 @@ make app
 scripts/setup.sh --only install --yes
 ```
 
-(`make install` does the same but skips the copy when nobody can answer its question, as when an agent runs it.) Quit and reopen the app; macOS may ask for the permissions again. `make test` runs the Python tests and the hand, quadrants, chord, wake, and shelf self-tests; run others yourself, for example `GOLDWARE_DATA=$TMPDIR/gw app/.build/release/GoldWareOS --test-terminal-commands`.
+(`make install` does the same but skips the copy when nobody can answer its question, as when an agent runs it.) Quit and reopen the app; macOS may ask for the permissions again. `make test` runs the Python tests and the hand, quadrants, chord, wake, shelf, Let's work, and terminal-commands self-tests; run others yourself, for example `GOLDWARE_DATA=$TMPDIR/gw app/.build/release/GoldWareOS --test-terminal-commands`.
+
+## How the Office finds agents
+
+The Office tab shows one desk per agent running in a terminal on this Mac. Every few seconds the server reads `ps` and picks out:
+
+- **Claude Code** and **Codex**: a `claude` or `codex` process attached to a terminal (a tty). The title is "Claude Code in <folder>"; it counts as busy while it uses CPU.
+- **Hermes**: the chats in `~/.hermes/runtime/active_sessions.json` whose process is still alive, with the title, model, and whether a turn is running read from `~/.hermes/state.db` (opened read only). Without Hermes installed this part is simply empty.
+- **Ollama**: loaded models from its local API (`http://127.0.0.1:11434`), shown with the rest of the rack. Ollama runs no terminal, so it has no desk.
+
+Each agent gets a short first name that sticks while it stays. Set `GOLDWARE_HERMES_HOME`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, or `GOLDWARE_OLLAMA_URL` before starting the server if your tools keep their files elsewhere. The board (tasks, ideas, lab) is saved in `data/office-board.json`. Plan usage uses the sign-ins Claude Code and Codex already keep on this Mac and never refreshes them. Talking to a terminal works with iTerm and Terminal and needs the Automation permission the first time.
 
 ## Where data lives
 
