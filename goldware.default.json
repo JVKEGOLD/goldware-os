@@ -3,7 +3,7 @@
   "wakePhrase": "Hey GoldWare",
   "wakeAliases": ["hey gold ware", "hey gold wear", "hey goldwear", "hey goal ware", "okay goldware"],
   "accentColor": "#C9A24A",
-  "letsWork": { "command": "", "terminal": "iTerm", "profile": "GoldWare" },
+  "letsWork": { "command": "hermes -m claude-opus-5-5 --provider anthropic", "terminal": "iTerm", "profile": "GoldWare" },
   "port": 4188,
   "models": {
     "local": "gemma4:e4b",

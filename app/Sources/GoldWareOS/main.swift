@@ -993,8 +993,8 @@ if args.count >= 2, args[1] == "--test-lets-work" {
            b[0][0] < b[1][0] && b[0][1] < b[2][1] && b[3][0] == b[1][0] && b[3][1] == b[2][1])
     expect("windows meet without overlap", b[0][2] == b[1][0] && b[0][3] == b[2][1])
     let fixedBounds = [[0, 0, 10, 10], [10, 0, 20, 10], [0, 10, 10, 20], [10, 10, 20, 20]]
-    let plain = LetsWork.script(settings: LetsWork.Settings(), bounds: fixedBounds)
-    expect("the defaults open four default-profile windows with nothing typed in",
+    let plain = LetsWork.script(settings: LetsWork.Settings(command: "", terminal: "iTerm", profile: ""), bounds: fixedBounds)
+    expect("no profile and no command open four default-profile windows with nothing typed in",
            plain.components(separatedBy: "create window with default profile").count - 1 == 4 && !plain.contains("write text"))
     let custom = LetsWork.Settings(command: "htop --tree", terminal: "iTerm", profile: "My \"Dev\" Profile")
     let mine = LetsWork.script(settings: custom, bounds: fixedBounds)
@@ -1009,6 +1009,16 @@ if args.count >= 2, args[1] == "--test-lets-work" {
     let shippedData = VaultContext.resolveRoot().flatMap { try? Data(contentsOf: $0.appendingPathComponent("goldware.default.json")) }
     let shipped = shippedData.flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any]
     expect("the shipped default profile is GoldWare", ((shipped?["letsWork"] as? [String: Any])?["profile"] as? String) == "GoldWare")
+    expect("the shipped default runs Hermes on Opus 5.5", ((shipped?["letsWork"] as? [String: Any])?["command"] as? String) == LetsWork.defaultCommand)
+    // An install whose goldware.json predates letsWork still gets the GoldWare look and Hermes.
+    let old = try? GWSettings.parse(Data(#"{"assistantName":"GoldWare"}"#.utf8))
+    expect("a goldware.json without letsWork uses the GoldWare profile and Hermes on Opus 5.5",
+           old?.letsWork == LetsWork.Settings(command: "hermes -m claude-opus-5-5 --provider anthropic", terminal: "iTerm", profile: "GoldWare"))
+    let oldScript = LetsWork.script(settings: old?.letsWork, bounds: fixedBounds)
+    expect("that script opens the GoldWare profile and types the Hermes command",
+           oldScript.contains("create window with profile \"GoldWare\"") && oldScript.contains("write text \"hermes -m claude-opus-5-5 --provider anthropic\""))
+    let shell = try? GWSettings.parse(Data(#"{"letsWork":{"command":""}}"#.utf8))
+    expect("command set to empty still opens a plain shell", shell?.letsWork.command == "" && !LetsWork.script(settings: shell?.letsWork, bounds: fixedBounds).contains("write text"))
     for (what, raw, want) in [("lets-work", "goldwareos://lets-work", ShortcutRoute.letsWork), ("lock-up", "goldwareos://lock-up", .lockUp),
                               ("clear-out", "goldwareos://clear-out", .clearOut), ("a trailing slash", "goldwareos://lock-up/", .lockUp),
                               ("a query string", "goldwareos://clear-out?x=1&y=/etc", .clearOut), ("a fragment", "goldwareos://lets-work#a", .letsWork),

@@ -1,14 +1,19 @@
 import AppKit
 
 /// "Let's work": one terminal window per quadrant, each running the command from goldware.json
-/// (`letsWork.command`; empty opens a plain shell). Matched on the spoken words locally (no model
+/// (`letsWork.command`, Hermes on Opus 5.5 by default; set it to "" for a plain shell). Matched on the spoken words locally (no model
 /// call), so it is fast and never fires on a task that merely mentions it.
 enum LetsWork {
     /// What to run, which terminal app, and which iTerm profile (empty means iTerm's default).
+    /// The out-of-the-box command: a Hermes agent on Claude Opus 5.5.
+    static let defaultCommand = "hermes -m claude-opus-5-5 --provider anthropic"
+
+    /// These defaults also apply when goldware.json has no `letsWork` (a config made before it
+    /// existed), so an older install gets the GoldWare profile and Hermes, not a plain default shell.
     struct Settings: Equatable {
-        var command = ""
+        var command = LetsWork.defaultCommand
         var terminal = "iTerm"
-        var profile = ""
+        var profile = "GoldWare"
     }
 
     static var settings: Settings { GWConfig.current.letsWork }
