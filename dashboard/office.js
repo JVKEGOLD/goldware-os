@@ -1104,8 +1104,10 @@
     }).join('');
     desksLayer.innerHTML = bossHTML + boardHits + askers + spots.map((s, i) => {
       const a = agents[i];
+      // The plate is one slim line under the table legs (status dot, name, Talk), so it never covers the
+      // agent or the desk; the title and status open below it on hover or keyboard focus.
       const left = (s.x / W * 100).toFixed(3), top = ((s.y - 36) / H * 100).toFixed(3), plate = ((s.y + 25) / H * 100).toFixed(3);
-      const fit = `max-width:${(s.slot / W * 100 - 1.5).toFixed(3)}%`;
+      const fit = `max-width:${((s.slot - 5) / W * 100).toFixed(3)}%`;
       if (!a) return `<div class="office-plate open" style="left:${left}%;top:${plate}%;${fit}"><b>Open desk</b><span>Waiting for an agent</span></div>`;
       // Each helper drawn on the desk is its own click target (over the agent's).
       const helperHits = (a.helpers || []).slice(0, HELPER_SPOTS.length).map((h, k) => {
@@ -1115,7 +1117,7 @@
       const state = a.bed ? 'asleep' : a.activity === 'your_turn' ? 'you' : BUSY.has(a.activity) ? 'busy' : a.activity;
       return `<button class="office-hit${selected === a.id ? ' on' : ''}" data-id="${esc(a.id)}" style="left:${left}%;top:${top}%;height:${(64 / H * 100).toFixed(3)}%;width:${(Math.min(70, s.slot - 4) / W * 100).toFixed(3)}%" aria-label="${esc(nameOf(a))}, ${esc(a.title)}, ${esc(WORDS[a.activity] || a.activity)}${(a.helpers || []).length ? `, ${a.helpers.length} helper${a.helpers.length === 1 ? '' : 's'} out` : ''}"></button>
         <div class="office-plate ${state}" data-id="${esc(a.id)}" style="left:${left}%;top:${plate}%;${fit}">
-          ${(a.helpers || []).length ? `<em class="office-help" title="${a.helpers.length} helper${a.helpers.length === 1 ? '' : 's'} out">${a.helpers.length}</em>` : ''}<div class="op-top">${nameTag(a)}${goBtn(a.id, a)}</div><p class="op-title" title="${esc(a.title)}">${esc(a.title)}</p>${a.closing && a.activity === 'your_turn' ? `<p class="op-close${a.closing.question ? ' ask' : ''}" title="${esc(a.closing.text)}">${esc(a.closing.text)}</p>` : ''}<span><i></i>${esc(plateWords(a))}${a.tty && dupes.has(a.title) ? `<em class="office-tty">· ${esc(ttyName(a.tty))}</em>` : ''}</span>
+          ${(a.helpers || []).length ? `<em class="office-help" title="${a.helpers.length} helper${a.helpers.length === 1 ? '' : 's'} out">${a.helpers.length}</em>` : ''}<div class="op-top"><i class="op-dot"></i>${nameTag(a)}${goBtn(a.id, a)}</div><div class="op-more"><p class="op-title" title="${esc(a.title)}">${esc(a.title)}</p>${a.closing && a.activity === 'your_turn' ? `<p class="op-close${a.closing.question ? ' ask' : ''}" title="${esc(a.closing.text)}">${esc(a.closing.text)}</p>` : ''}<span><i></i>${esc(plateWords(a))}${a.tty && dupes.has(a.title) ? `<em class="office-tty">· ${esc(ttyName(a.tty))}</em>` : ''}</span></div>
         </div>${helperHits}`;
     }).join('');
   }

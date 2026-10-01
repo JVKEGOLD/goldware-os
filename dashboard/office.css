@@ -498,3 +498,15 @@ button.od-card { cursor: pointer; } button.od-card:hover { border-color: var(--o
 /* Plates on the floor: the status reads as a pill, like a name tag. */
 .office-plate span { padding: 2px 7px 2px 5px; border-radius: 99px; background: rgba(255,255,255,.05); }
 .office-plate.busy span { background: rgba(159,208,127,.12); }
+
+/* Desk plates stay one slim line under the table (dot, name, Talk) so they never hide an agent or a
+   desk. Hovering or focusing the agent opens the title and status below it, over the floor. */
+.office-plate[data-id]:not(.boss) { padding: 2px 4px 2px 7px; gap: 0; }
+.office-plate[data-id]:not(.boss) .op-top { gap: 5px; }
+.office-plate[data-id]:not(.boss) .office-go { padding: 2px 6px 2px 7px; }
+.office-plate .op-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); flex: none; }
+.office-plate.busy .op-dot { background: var(--green); box-shadow: 0 0 8px var(--green); animation: office-pulse 1.4s ease-in-out infinite; }
+.office-plate.you .op-dot { background: var(--gold-hi); box-shadow: 0 0 10px var(--gold-hi); animation: office-pulse 1s ease-in-out infinite; }
+.office-plate .op-more { display: none; flex-direction: column; align-items: center; gap: 2px; max-width: 100%; padding: 2px 3px 3px; }
+.office-hit:hover + .office-plate, .office-hit:focus-visible + .office-plate { z-index: 3; }
+.office-hit:hover + .office-plate .op-more, .office-hit:focus-visible + .office-plate .op-more { display: flex; }
