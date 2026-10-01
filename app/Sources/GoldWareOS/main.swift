@@ -1019,14 +1019,15 @@ if args.count >= 2, args[1] == "--test-lets-work" {
     let shippedData = VaultContext.resolveRoot().flatMap { try? Data(contentsOf: $0.appendingPathComponent("goldware.default.json")) }
     let shipped = shippedData.flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any]
     expect("the shipped default profile is GoldWare", ((shipped?["letsWork"] as? [String: Any])?["profile"] as? String) == "GoldWare")
-    expect("the shipped default runs Hermes on Opus 5.5", ((shipped?["letsWork"] as? [String: Any])?["command"] as? String) == LetsWork.defaultCommand)
+    expect("the shipped default runs Hermes on its default model", ((shipped?["letsWork"] as? [String: Any])?["command"] as? String) == LetsWork.defaultCommand)
     // An install whose goldware.json predates letsWork still gets the GoldWare look and Hermes.
     let old = try? GWSettings.parse(Data(#"{"assistantName":"GoldWare"}"#.utf8))
-    expect("a goldware.json without letsWork uses the GoldWare profile and Hermes on Opus 5.5",
-           old?.letsWork == LetsWork.Settings(command: "hermes -m claude-opus-5-5 --provider anthropic", terminal: "iTerm", profile: "GoldWare"))
+    expect("a goldware.json without letsWork uses the GoldWare profile and Hermes on its default model",
+           old?.letsWork == LetsWork.Settings(command: "hermes", terminal: "iTerm", profile: "GoldWare"))
+    expect("the default command pins no model, so /model can switch", !LetsWork.defaultCommand.contains("-m ") && !LetsWork.defaultCommand.contains("--provider"))
     let oldScript = LetsWork.script(settings: old?.letsWork, bounds: fixedBounds)
     expect("that script opens the GoldWare profile and types the Hermes command",
-           oldScript.contains("create window with profile \"GoldWare\"") && oldScript.contains("write text \"hermes -m claude-opus-5-5 --provider anthropic\""))
+           oldScript.contains("create window with profile \"GoldWare\"") && oldScript.contains("write text \"hermes\""))
     let shell = try? GWSettings.parse(Data(#"{"letsWork":{"command":""}}"#.utf8))
     expect("command set to empty still opens a plain shell", shell?.letsWork.command == "" && !LetsWork.script(settings: shell?.letsWork, bounds: fixedBounds).contains("write text"))
     for (what, raw, want) in [("lets-work", "goldwareos://lets-work", ShortcutRoute.letsWork), ("lock-up", "goldwareos://lock-up", .lockUp),

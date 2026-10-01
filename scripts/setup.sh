@@ -2,7 +2,7 @@
 # GoldWare OS installer. Idempotent: safe to rerun.
 #   scripts/setup.sh [--dry-run] [--yes] [--open] [--agent claude|codex] [--only STEP]
 # Steps (11): platform clt brew packages (whisper-cpp, ollama, iTerm2, JetBrains Mono Nerd Font)
-#   iterm-profile (GoldWare profile for Let's work) memory config agent (Claude or Codex; installs and signs in Hermes) pull whisper build install
+#   iterm-profile (GoldWare profile for Let's work) memory config agent (Hermes default Claude or Codex; installs and signs in Hermes) pull whisper build install
 set -uo pipefail
 
 ROOT="${0:A:h:h}"
@@ -245,50 +245,56 @@ PY
   fi
 }
 
-# What Let's work runs in its four windows. Claude needs a Claude plan that Hermes can use; Codex
-# runs on a ChatGPT plan. Asked once, on a new goldware.json; later: --only agent [--agent X].
-# Then makes sure Hermes itself is installed and signed in, since Let's work opens it.
-CLAUDE_CMD="hermes -m claude-opus-5-5 --provider anthropic"
-CODEX_CMD="hermes -m gpt-5.5 --provider openai-codex"
+# Let's work opens plain `hermes` in its four windows, so every agent starts on the Hermes default
+# model and can still switch with /model. Claude or Codex sets that default (asked once, on a new
+# goldware.json; later: --only agent [--agent X]). Also installs Hermes and signs it in.
+LETSWORK_CMD="hermes"
+CLAUDE_MODEL="claude-opus-5-5" CLAUDE_PROVIDER="anthropic"
+CODEX_MODEL="gpt-5.5" CODEX_PROVIDER="openai-codex"
+# Commands older setups wrote. They pinned every window to one model; an update replaces them
+# with plain `hermes` once Hermes defaults to that same model.
+OLD_CLAUDE_CMD="hermes -m claude-opus-5-5 --provider anthropic"
+OLD_CODEX_CMD="hermes -m gpt-5.5 --provider openai-codex"
 HERMES_INSTALL="curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --skip-setup"
 FRESH=0
-step_agent() {
-  step "7b/11 Hermes agent for Let's work (Claude or Codex)"
-  if [[ -z "$AGENT" ]] && { (( FRESH )) || [[ "$ONLY" == agent ]]; }; then
-    if (( DRY )); then would "ask whether Let's work runs Hermes on Claude or Codex"
-    elif (( ! YES )) && [[ -t 0 ]]; then
-      local a; read -r "a?  Let's work opens Hermes agents. Use 1) Claude or 2) Codex (ChatGPT plan)? [1/2] "
-      case "$a" in 1|[cC]laude) AGENT=claude ;; 2|[cC]odex) AGENT=codex ;; esac
-    fi
-  fi
-  if [[ -n "$AGENT" ]]; then
-    local cmd="$CLAUDE_CMD"; [[ "$AGENT" == codex ]] && cmd="$CODEX_CMD"
-    if (( DRY )); then would "set letsWork.command to '$cmd' in goldware.json"
-    else
-      [[ -f goldware.json ]] || fail "goldware.json is missing." "Run: scripts/setup.sh --only config"
-      (( FRESH )) || cp goldware.json goldware.json.bak
-      GW_CMD="$cmd" python3 - <<'PY' || fail "Could not edit goldware.json." "Backup is goldware.json.bak"
+set_letswork() {
+  if (( DRY )); then would "set letsWork.command to '$1' in goldware.json"; return; fi
+  [[ -f goldware.json ]] || fail "goldware.json is missing." "Run: scripts/setup.sh --only config"
+  (( FRESH )) || cp goldware.json goldware.json.bak
+  GW_CMD="$1" python3 - <<'PY' || fail "Could not edit goldware.json." "Backup is goldware.json.bak"
 import json, os
 p = "goldware.json"
 c = json.load(open(p))
 c.setdefault("letsWork", {})["command"] = os.environ["GW_CMD"]
 open(p, "w").write(json.dumps(c, indent=2) + "\n")
 PY
-      ok "Let's work runs: $cmd"
+  ok "Let's work runs: $1"
+}
+step_agent() {
+  step "7b/11 Hermes agent for Let's work (Claude or Codex)"
+  local cfg=goldware.json; [[ -f $cfg ]] || cfg=goldware.default.json
+  local cur; cur="$(python3 -c "import json;print(json.load(open('$cfg')).get('letsWork',{}).get('command','$LETSWORK_CMD'))" 2>/dev/null)"
+  local pinned=""
+  [[ "$cur" == "$OLD_CLAUDE_CMD" ]] && pinned=claude
+  [[ "$cur" == "$OLD_CODEX_CMD" ]] && pinned=codex
+  if [[ -z "$AGENT" ]] && { (( FRESH )) || [[ "$ONLY" == agent ]]; }; then
+    if (( DRY )); then would "ask whether Hermes defaults to Claude or Codex"
+    elif (( ! YES )) && [[ -t 0 ]]; then
+      local a; read -r "a?  Let's work opens Hermes agents. Default them to 1) Claude or 2) Codex (ChatGPT plan)? Any chat can switch with /model. [1/2] "
+      case "$a" in 1|[cC]laude) AGENT=claude ;; 2|[cC]odex) AGENT=codex ;; esac
     fi
   fi
-  # Which provider the configured command uses (also for a goldware.json set up earlier).
-  local cfg=goldware.json; [[ -f $cfg ]] || cfg=goldware.default.json
-  local cur; cur="$(python3 -c "import json;print(json.load(open('$cfg')).get('letsWork',{}).get('command','$CLAUDE_CMD'))" 2>/dev/null)"
-  [[ "$cur" == hermes* ]] || { skip "Let's work does not run Hermes ('${cur:-plain shell}'), so Hermes is not needed"; return; }
-  local provider=anthropic login="hermes auth add anthropic --type oauth" plan="Claude"
-  [[ "$cur" == *openai-codex* ]] && provider=openai-codex login="hermes auth add openai-codex" plan="ChatGPT (Codex)"
+  [[ -z "$AGENT" ]] && AGENT="$pinned"
+  [[ "$cur" == hermes* || -n "$AGENT" ]] || { skip "Let's work does not run Hermes ('${cur:-plain shell}'), so Hermes is not needed"; return; }
 
   # Hermes installs to ~/.local/bin, which a fresh shell may not have on PATH yet.
   [[ ":$PATH:" == *":$HOME/.local/bin:"* ]] || export PATH="$HOME/.local/bin:$PATH"
   if command -v hermes >/dev/null 2>&1; then
     skip "Hermes already installed at $(command -v hermes)"
-  elif (( DRY )); then would "ask to install Hermes with: $HERMES_INSTALL"; return
+  elif (( DRY )); then
+    would "ask to install Hermes with: $HERMES_INSTALL"
+    [[ -n "$AGENT" ]] && would "set the Hermes default model for $AGENT, then letsWork.command to '$LETSWORK_CMD'"
+    return
   elif ask "Hermes (the AI agent Let's work opens) is not installed. Install it now with its official installer? About 2 minutes, no password needed."; then
     zsh -c "$HERMES_INSTALL" || fail "Hermes install failed." "Rerun it by hand: $HERMES_INSTALL" "Then: scripts/setup.sh --only agent"
     command -v hermes >/dev/null 2>&1 || fail "Hermes installed but 'hermes' is not on PATH." "Open a new terminal window, then rerun: scripts/setup.sh --only agent"
@@ -297,6 +303,41 @@ PY
     skip "Hermes not installed. Install later: $HERMES_INSTALL"; return
   fi
 
+  # The Hermes default model: set when there is none; an existing different one only after asking.
+  local have_model="" have_provider=""
+  have_model="$(hermes config get model.default 2>/dev/null)" || have_model=""
+  have_provider="$(hermes config get model.provider 2>/dev/null)" || have_provider=""
+  # Plain `hermes` with no default model yet: start it on Claude, as GoldWare always has.
+  [[ -z "$AGENT" && -z "$have_model" && "$cur" == "$LETSWORK_CMD" ]] && AGENT=claude
+  if [[ -n "$AGENT" ]]; then
+    local model="$CLAUDE_MODEL" prov="$CLAUDE_PROVIDER" isdefault=0
+    [[ "$AGENT" == codex ]] && model="$CODEX_MODEL" prov="$CODEX_PROVIDER"
+    if [[ "$have_model" == "$model" && "$have_provider" == "$prov" ]]; then
+      skip "Hermes already defaults to $model ($prov)"; isdefault=1
+    elif (( DRY )); then would "set the Hermes default model to $model ($prov)"; isdefault=1
+    elif [[ -z "$have_model" ]] || ask "Hermes defaults to $have_model (${have_provider:-auto}). Make $model ($prov) the default instead? This applies to every Hermes chat, not only Let's work."; then
+      hermes config set model.default "$model" >/dev/null && hermes config set model.provider "$prov" >/dev/null \
+        || fail "Could not set the Hermes default model." "Run: hermes model"
+      ok "Hermes defaults to $model ($prov); any chat can switch with /model"
+      have_provider="$prov" isdefault=1
+    fi
+    if (( isdefault )); then
+      [[ "$cur" == "$LETSWORK_CMD" ]] || set_letswork "$LETSWORK_CMD"
+    elif [[ -n "$pinned" && "$pinned" == "$AGENT" ]]; then
+      skip "Kept Let's work on '$cur' (Hermes defaults to $have_model). To unlock other models: scripts/setup.sh --only agent --agent $AGENT"
+      have_provider="$prov"
+    else
+      # Hermes keeps its default; Let's work pins the chosen model for its windows only.
+      local pin="$OLD_CLAUDE_CMD"; [[ "$AGENT" == codex ]] && pin="$OLD_CODEX_CMD"
+      [[ "$cur" == "$pin" ]] || set_letswork "$pin"
+      have_provider="$prov"
+    fi
+  fi
+
+  [[ -n "$have_provider" && "$have_provider" != anthropic && "$have_provider" != openai-codex ]] \
+    && { skip "Hermes uses provider '$have_provider'; sign it in with: hermes auth"; return; }
+  local provider=anthropic login="hermes auth add anthropic --type oauth" plan="Claude"
+  [[ "$have_provider" == openai-codex ]] && provider=openai-codex login="hermes auth add openai-codex" plan="ChatGPT (Codex)"
   if hermes auth status "$provider" 2>/dev/null | grep -q "logged in"; then
     skip "Hermes is already signed in to $plan"
   elif [[ -t 0 ]] && ask "Sign Hermes in to your $plan plan now? A browser window opens."; then
