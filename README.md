@@ -16,7 +16,7 @@ Your Mac, voice, vision, and a dashboard you reshape with your own AI. Everythin
 - About 15 GB of free disk space
 - An internet connection for the first install (after that, everything runs offline)
 
-Setup installs everything else for you (Homebrew, the speech engine, the local AI model, iTerm2, and the JetBrains Mono Nerd Font). It also adds a **GoldWare** profile to iTerm for the Let's work terminals; this sits alongside iTerm's default profile and does not replace it or change your other profiles. No accounts or sign-ups.
+Setup installs everything else for you (Homebrew, the speech engine, the local AI model, iTerm2, and the JetBrains Mono Nerd Font). It also adds a **GoldWare** profile to iTerm for the Let's work terminals; this sits alongside iTerm's default profile and does not replace it or change your other profiles. It also installs **Hermes**, the AI agent the Let's work terminals open, and asks whether it should run on **Claude** or **Codex** (a ChatGPT plan). Hermes is the only part that needs an account: you sign it in to your Claude or ChatGPT plan once, in the browser window setup opens. Everything else needs no account.
 
 ## Install (about 30 minutes, mostly downloads)
 
@@ -36,7 +36,7 @@ If a box pops up asking to install "command line developer tools", click **Insta
 cd ~/goldware-os && make setup
 ```
 
-Answer the questions it asks: type `y` and press Return. When it asks for your password, type your Mac login password (it stays hidden while you type) and press Return. You can leave it running while it downloads.
+Answer the questions it asks: type `y` and press Return (for Claude or Codex, type `1` or `2`). When it asks for your password, type your Mac login password (it stays hidden while you type) and press Return. You can leave it running while it downloads.
 
 If it stops with an error, it tells you what to do. Do that, then paste the step 2 line again. It picks up where it left off.
 

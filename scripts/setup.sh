@@ -2,7 +2,7 @@
 # GoldWare OS installer. Idempotent: safe to rerun.
 #   scripts/setup.sh [--dry-run] [--yes] [--open] [--agent claude|codex] [--only STEP]
 # Steps (11): platform clt brew packages (whisper-cpp, ollama, iTerm2, JetBrains Mono Nerd Font)
-#   iterm-profile (GoldWare profile for Let's work) memory config (+ agent: Claude or Codex) pull whisper build install
+#   iterm-profile (GoldWare profile for Let's work) memory config agent (Claude or Codex; installs and signs in Hermes) pull whisper build install
 set -uo pipefail
 
 ROOT="${0:A:h:h}"
@@ -245,35 +245,64 @@ PY
 
 # What Let's work runs in its four windows. Claude needs a Claude plan that Hermes can use; Codex
 # runs on a ChatGPT plan. Asked once, on a new goldware.json; later: --only agent [--agent X].
+# Then makes sure Hermes itself is installed and signed in, since Let's work opens it.
 CLAUDE_CMD="hermes -m claude-opus-5-5 --provider anthropic"
 CODEX_CMD="hermes -m gpt-5.5 --provider openai-codex"
+HERMES_INSTALL="curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --skip-setup"
 FRESH=0
 step_agent() {
-  if [[ -z "$AGENT" ]]; then
-    (( FRESH )) || [[ "$ONLY" == agent ]] || return 0
-    if (( DRY )); then would "ask whether Let's work runs Hermes on Claude or Codex"; return; fi
-    if (( ! YES )) && [[ -t 0 ]]; then
+  step "7b/11 Hermes agent for Let's work (Claude or Codex)"
+  if [[ -z "$AGENT" ]] && { (( FRESH )) || [[ "$ONLY" == agent ]]; }; then
+    if (( DRY )); then would "ask whether Let's work runs Hermes on Claude or Codex"
+    elif (( ! YES )) && [[ -t 0 ]]; then
       local a; read -r "a?  Let's work opens Hermes agents. Use 1) Claude or 2) Codex (ChatGPT plan)? [1/2] "
       case "$a" in 1|[cC]laude) AGENT=claude ;; 2|[cC]odex) AGENT=codex ;; esac
     fi
-    if [[ -z "$AGENT" ]]; then
-      skip "Let's work keeps its current agent. To choose: scripts/setup.sh --only agent --agent codex (or claude)"; return
-    fi
   fi
-  local cmd="$CLAUDE_CMD" login="hermes auth add anthropic --type oauth"
-  [[ "$AGENT" == codex ]] && cmd="$CODEX_CMD" login="hermes auth add openai-codex"
-  if (( DRY )); then would "set letsWork.command to '$cmd' in goldware.json"; return; fi
-  [[ -f goldware.json ]] || fail "goldware.json is missing." "Run: scripts/setup.sh --only config"
-  (( FRESH )) || cp goldware.json goldware.json.bak
-  GW_CMD="$cmd" python3 - <<'PY' || fail "Could not edit goldware.json." "Backup is goldware.json.bak"
+  if [[ -n "$AGENT" ]]; then
+    local cmd="$CLAUDE_CMD"; [[ "$AGENT" == codex ]] && cmd="$CODEX_CMD"
+    if (( DRY )); then would "set letsWork.command to '$cmd' in goldware.json"
+    else
+      [[ -f goldware.json ]] || fail "goldware.json is missing." "Run: scripts/setup.sh --only config"
+      (( FRESH )) || cp goldware.json goldware.json.bak
+      GW_CMD="$cmd" python3 - <<'PY' || fail "Could not edit goldware.json." "Backup is goldware.json.bak"
 import json, os
 p = "goldware.json"
 c = json.load(open(p))
 c.setdefault("letsWork", {})["command"] = os.environ["GW_CMD"]
 open(p, "w").write(json.dumps(c, indent=2) + "\n")
 PY
-  ok "Let's work runs: $cmd"
-  print "       Sign Hermes in to it once: $login"
+      ok "Let's work runs: $cmd"
+    fi
+  fi
+  # Which provider the configured command uses (also for a goldware.json set up earlier).
+  local cfg=goldware.json; [[ -f $cfg ]] || cfg=goldware.default.json
+  local cur; cur="$(python3 -c "import json;print(json.load(open('$cfg')).get('letsWork',{}).get('command','$CLAUDE_CMD'))" 2>/dev/null)"
+  [[ "$cur" == hermes* ]] || { skip "Let's work does not run Hermes ('${cur:-plain shell}'), so Hermes is not needed"; return; }
+  local provider=anthropic login="hermes auth add anthropic --type oauth" plan="Claude"
+  [[ "$cur" == *openai-codex* ]] && provider=openai-codex login="hermes auth add openai-codex" plan="ChatGPT (Codex)"
+
+  # Hermes installs to ~/.local/bin, which a fresh shell may not have on PATH yet.
+  [[ ":$PATH:" == *":$HOME/.local/bin:"* ]] || export PATH="$HOME/.local/bin:$PATH"
+  if command -v hermes >/dev/null 2>&1; then
+    skip "Hermes already installed at $(command -v hermes)"
+  elif (( DRY )); then would "ask to install Hermes with: $HERMES_INSTALL"; return
+  elif ask "Hermes (the AI agent Let's work opens) is not installed. Install it now with its official installer? About 2 minutes, no password needed."; then
+    zsh -c "$HERMES_INSTALL" || fail "Hermes install failed." "Rerun it by hand: $HERMES_INSTALL" "Then: scripts/setup.sh --only agent"
+    command -v hermes >/dev/null 2>&1 || fail "Hermes installed but 'hermes' is not on PATH." "Open a new terminal window, then rerun: scripts/setup.sh --only agent"
+    ok "Hermes installed at $(command -v hermes)"
+  else
+    skip "Hermes not installed. Install later: $HERMES_INSTALL"; return
+  fi
+
+  if hermes auth status "$provider" 2>/dev/null | grep -q "logged in"; then
+    skip "Hermes is already signed in to $plan"
+  elif [[ -t 0 ]] && ask "Sign Hermes in to your $plan plan now? A browser window opens."; then
+    $=login || fail "Sign-in did not finish." "Rerun: $login"
+    ok "Hermes signed in to $plan"
+  else
+    skip "Hermes is not signed in yet. Run once: $login"
+  fi
 }
 
 step_pull() {

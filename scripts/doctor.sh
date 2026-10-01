@@ -42,6 +42,8 @@ IT_APP="$(for a in /Applications/iTerm.app "$HOME/Applications/iTerm.app"; do [[
 { ls ~/Library/Fonts /Library/Fonts 2>/dev/null | grep -qi JetBrainsMonoNerd; } && row "terminal font" OK "JetBrains Mono Nerd Font" || row "terminal font" NO "JetBrains Mono Nerd Font" "brew install --cask font-jetbrains-mono-nerd-font   (or: make setup)"
 ITP="$HOME/Library/Application Support/iTerm2/DynamicProfiles/goldware.json"
 [[ -f "$ITP" ]] && row "GoldWare iTerm profile" OK "$ITP" || row "GoldWare iTerm profile" NO "not installed" "scripts/setup.sh --only iterm-profile"
+HERMES="$(PATH="$HOME/.local/bin:$PATH" command -v hermes)"
+[[ -n "$HERMES" ]] && row "Hermes (Let's work agent)" OK "$HERMES" || row "Hermes (Let's work agent)" NO "Let's work opens Hermes agents" "scripts/setup.sh --only agent"
 [[ -d app/build/GoldWareOS.app ]] && row "app built" OK "app/build/GoldWareOS.app" || row "app built" NO "" "make app"
 [[ -d "/Applications/GoldWare OS.app" ]] && row "app installed" OK "/Applications/GoldWare OS.app" || row "app installed" NO "" "make install"
 if [[ -d "/Applications/GoldWare OS.app" ]]; then
