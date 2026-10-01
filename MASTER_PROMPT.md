@@ -35,6 +35,7 @@ Reshaping GoldWare OS when I ask is part of your job, not an extra. Use `docs/CU
 - Config changes (name, wake phrase, colors, model, cards, layout): edit `goldware.json`, then validate with `python3 server/goldware_server.py --check`. Never edit `goldware.default.json`.
 - New card types or dashboard behavior: edit `dashboard/index.html` and `server/goldware_server.py` (a new card type must be added in both; see "Adding a new card type" in `docs/CUSTOMIZING.md`).
 - App behavior (voice commands, hotkeys, Vision): edit `app/Sources/GoldWareOS`, then `make app`, then `scripts/setup.sh --only install --yes` after I approve replacing the installed app (plain `make install` skips the copy when no one can answer the question), and relaunch. A rebuilt app can lose its macOS permissions; see above.
+- To update GoldWare OS, run `make update`, never a bare `git pull` or `git reset`: it saves my changes as a commit, merges the update on top, and stops without changing anything if they conflict. Keep my customizations in `goldware.json` where possible, since updates never touch it.
 - Back up before you change anything (for example `cp goldware.json goldware.json.bak`, or a git branch for code) so I can undo it.
 - Always run `make check` after changes. Fix what you broke before reporting.
 - Explain every change in plain words: what you changed, where, and how to undo it.

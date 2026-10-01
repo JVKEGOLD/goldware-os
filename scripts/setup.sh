@@ -175,6 +175,8 @@ step_iterm_profile() {
   dst="$dstdir/goldware.json"
   [[ -f "$src" ]] || fail "Missing $src." "Run: git pull"
   if [[ -f "$dst" ]] && cmp -s "$src" "$dst"; then skip "profile already installed at $dst"; return; fi
+  # A profile the user changed (font, colors) is theirs: an update never puts the stock one back.
+  if [[ -f "$dst" ]]; then skip "kept your GoldWare iTerm profile (it differs from the stock one). Stock copy: $src"; return; fi
   if (( DRY )); then would "copy app/Resources/iTerm/goldware-profile.json to \"$dst\" (adds a GoldWare profile; your other profiles are not touched)"; return; fi
   mkdir -p "$dstdir" && cp "$src" "$dst" || fail "Could not install the iTerm profile." "Copy $src to $dst by hand."
   ok "GoldWare profile added to iTerm (Dynamic Profile, your default profile is unchanged)"

@@ -1,11 +1,14 @@
 .DEFAULT_GOAL := help
-.PHONY: help setup doctor app install run-server test check
+.PHONY: help setup update doctor app install run-server test check
 
 help: ## Show this help
 	@awk 'BEGIN{FS=":.*## "} /^[a-zA-Z_-]+:.*## /{printf "  %-12s %s\n",$$1,$$2}' $(MAKEFILE_LIST)
 
 setup: ## Install everything (models, build, install app)
 	scripts/setup.sh
+
+update: ## Get the latest GoldWare OS, keeping your settings and your own changes
+	scripts/update.sh
 
 doctor: ## Read-only health check with fix commands
 	scripts/doctor.sh
