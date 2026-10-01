@@ -1,14 +1,14 @@
 #!/bin/zsh
 # GoldWare OS installer. Idempotent: safe to rerun.
-#   scripts/setup.sh [--dry-run] [--yes] [--open] [--only STEP]
+#   scripts/setup.sh [--dry-run] [--yes] [--open] [--agent claude|codex] [--only STEP]
 # Steps (11): platform clt brew packages (whisper-cpp, ollama, iTerm2, JetBrains Mono Nerd Font)
-#   iterm-profile (GoldWare profile for Let's work) memory config pull whisper build install
+#   iterm-profile (GoldWare profile for Let's work) memory config (+ agent: Claude or Codex) pull whisper build install
 set -uo pipefail
 
 ROOT="${0:A:h:h}"
 cd "$ROOT" || exit 1
 
-DRY=0; YES=0; OPEN=0; ONLY=""
+DRY=0; YES=0; OPEN=0; ONLY=""; AGENT=""
 while (( $# )); do
   case "$1" in
     --dry-run) DRY=1 ;;
@@ -16,11 +16,14 @@ while (( $# )); do
     --open) OPEN=1 ;;
     --only) shift; ONLY="${1:-}" ;;
     --only=*) ONLY="${1#--only=}" ;;
+    --agent) shift; AGENT="${1:-}" ;;
+    --agent=*) AGENT="${1#--agent=}" ;;
     -h|--help) sed -n '2,6p' "$0"; exit 0 ;;
     *) echo "Unknown option: $1 (try --help)"; exit 2 ;;
   esac
   shift
 done
+[[ -z "$AGENT" || "$AGENT" == claude || "$AGENT" == codex ]] || { echo "--agent must be claude or codex"; exit 2; }
 
 APP_SRC="$ROOT/app/build/GoldWareOS.app"
 APP_DST="/Applications/GoldWare OS.app"
@@ -216,6 +219,7 @@ c.setdefault("models", {})["local"] = os.environ["GW_MODEL"]
 open(p, "w").write(json.dumps(c, indent=2) + "\n")
 PY
     ok "created goldware.json with models.local = $MODEL"
+    FRESH=1
     return
   fi
   local cur
@@ -237,6 +241,39 @@ PY
     skip "kept your models.local = $cur"
     MODEL="$cur"
   fi
+}
+
+# What Let's work runs in its four windows. Claude needs a Claude plan that Hermes can use; Codex
+# runs on a ChatGPT plan. Asked once, on a new goldware.json; later: --only agent [--agent X].
+CLAUDE_CMD="hermes -m claude-opus-5-5 --provider anthropic"
+CODEX_CMD="hermes -m gpt-5.5 --provider openai-codex"
+FRESH=0
+step_agent() {
+  if [[ -z "$AGENT" ]]; then
+    (( FRESH )) || [[ "$ONLY" == agent ]] || return 0
+    if (( DRY )); then would "ask whether Let's work runs Hermes on Claude or Codex"; return; fi
+    if (( ! YES )) && [[ -t 0 ]]; then
+      local a; read -r "a?  Let's work opens Hermes agents. Use 1) Claude or 2) Codex (ChatGPT plan)? [1/2] "
+      case "$a" in 1|[cC]laude) AGENT=claude ;; 2|[cC]odex) AGENT=codex ;; esac
+    fi
+    if [[ -z "$AGENT" ]]; then
+      skip "Let's work keeps its current agent. To choose: scripts/setup.sh --only agent --agent codex (or claude)"; return
+    fi
+  fi
+  local cmd="$CLAUDE_CMD" login="hermes auth add anthropic --type oauth"
+  [[ "$AGENT" == codex ]] && cmd="$CODEX_CMD" login="hermes auth add openai-codex"
+  if (( DRY )); then would "set letsWork.command to '$cmd' in goldware.json"; return; fi
+  [[ -f goldware.json ]] || fail "goldware.json is missing." "Run: scripts/setup.sh --only config"
+  (( FRESH )) || cp goldware.json goldware.json.bak
+  GW_CMD="$cmd" python3 - <<'PY' || fail "Could not edit goldware.json." "Backup is goldware.json.bak"
+import json, os
+p = "goldware.json"
+c = json.load(open(p))
+c.setdefault("letsWork", {})["command"] = os.environ["GW_CMD"]
+open(p, "w").write(json.dumps(c, indent=2) + "\n")
+PY
+  ok "Let's work runs: $cmd"
+  print "       Sign Hermes in to it once: $login"
 }
 
 step_pull() {
@@ -326,8 +363,8 @@ TXT
 }
 
 if [[ -n "$ONLY" ]]; then
-  case "$ONLY" in platform|clt|brew|packages|iterm-profile|memory|config|pull|whisper|build|install) ;;
-    *) echo "Unknown step '$ONLY'. Steps: platform clt brew packages iterm-profile memory config pull whisper build install"; exit 2 ;;
+  case "$ONLY" in platform|clt|brew|packages|iterm-profile|memory|config|agent|pull|whisper|build|install) ;;
+    *) echo "Unknown step '$ONLY'. Steps: platform clt brew packages iterm-profile memory config agent pull whisper build install"; exit 2 ;;
   esac
   step_platform
   want platform || "step_${ONLY//-/_}"
@@ -336,7 +373,7 @@ if [[ -n "$ONLY" ]]; then
 fi
 
 step_platform; step_clt; step_brew; step_packages; step_iterm_profile; step_memory
-step_config; step_pull; step_whisper; step_build; step_install
+step_config; step_agent; step_pull; step_whisper; step_build; step_install
 if (( DRY )); then print -P "\n%F{green}Dry run complete. Nothing was changed.%f"; exit 0; fi
 print -P "\n%F{green}Setup finished.%f"
 next_steps
