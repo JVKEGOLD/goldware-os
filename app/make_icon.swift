@@ -1,10 +1,9 @@
 // Builds Resources/AppIcon.icns from the GoldWare logo.
 // Run from the app folder:  swift make_icon.swift && iconutil -c icns build/AppIcon.iconset -o Resources/AppIcon.icns
-// The dashboard's warm near-black squircle with a gold hairline, and the logo scaled up without smoothing.
+// The dashboard's warm near-black squircle with a gold hairline, and the GW mark centred inside.
 import AppKit
 
-// The large mascot (the logo source) has the full outline detail but a white
-// background. Flood-fill the white from the edges so the whites of his eyes survive, then crop.
+// The logo source may have a white background: flood-fill white from the edges, then crop to the mark.
 let sourceURL = URL(fileURLWithPath: "Resources/goldware-logo.png")
 guard let source = NSBitmapImageRep(data: try! Data(contentsOf: sourceURL)) else { fatalError("missing \(sourceURL.path)") }
 let mascot: NSImage = {
@@ -87,18 +86,17 @@ func render(_ px: Int) -> Data {
 
     // The logo, cropped to its outline, fills most of the tile.
     let artW = mascot.size.width, artH = mascot.size.height
-    let h = 600 * s
-    let w = h * artW / artH
-    let crisp = false
-    let rect = NSRect(x: ((CGFloat(px) - w) / 2).rounded(), y: (500 * s - h / 2).rounded(), width: w, height: h)
-    // His outline is dark navy, so a soft gold glow separates him from the dark tile.
+    let fit = min(560 * s / artW, 560 * s / artH)   // fit inside the tile with a margin
+    let w = artW * fit, h = artH * fit
+    let rect = NSRect(x: ((CGFloat(px) - w) / 2).rounded(), y: ((CGFloat(px) - h) / 2).rounded(), width: w, height: h)
+    // A soft gold glow lifts the mark off the dark tile.
     let shadow = NSShadow()
-    shadow.shadowColor = color(0xF9D976, 0.45)
+    shadow.shadowColor = color(0xF9D976, 0.25)
     shadow.shadowOffset = .zero
-    shadow.shadowBlurRadius = 34 * s
+    shadow.shadowBlurRadius = 24 * s
     NSGraphicsContext.current?.saveGraphicsState()
     shadow.set()
-    ctx.imageInterpolation = crisp ? .none : .high
+    ctx.imageInterpolation = .high
     mascot.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1)
     NSGraphicsContext.current?.restoreGraphicsState()
 
