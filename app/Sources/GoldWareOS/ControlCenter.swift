@@ -625,7 +625,7 @@ final class ControlCenterView: NSView {
             self?.center?.close(); self?.center?.actions.openVisionGuide()
         }
         y += 22
-        y = toggleRow(y, "Vision Mode", "Point to move · fist dictates · 4 for quadrants", on: visionOn && !quadrantsOn) { [weak self] in
+        y = toggleRow(y, "Vision Mode", "Point · pinch clicks · pinch and move scrolls", on: visionOn && !quadrantsOn) { [weak self] in
             guard let self, let a = self.center?.actions else { return }
             if self.quadrantsOn { a.setQuadrants(false) } else { a.setVisionMode(!self.visionOn) }
             self.refreshState()

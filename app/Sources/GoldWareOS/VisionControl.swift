@@ -6,10 +6,9 @@ import Vision
 /// and turns itself off after 15 minutes without a hand.
 ///   Point (index finger up)   move the pointer like a trackpad. The gap between thumb and index tips
 ///                             sets the speed: wide is fast, close is fine control
-///   Pinch thumb to index      click; pinch twice quickly to double-click; hold and move to drag
-///   Two fingers, tilted       scroll that way; the steeper the tilt the faster (flat, pointing sideways, pauses)
-///   Open hand                 nothing: rest here, the pointer stays put
-///   Fist, held                dictate with GoldWare Voice until the fist opens (like holding Right Option)
+///   Pinch and let go          click; twice quickly to double-click
+///   Pinch, hold, and move     scroll: the page follows the hand (like Apple Vision Pro); let go mid-move to fling
+///   Open hand, fist           nothing: rest here, the pointer stays put
 ///   Four fingers, held        switch to Quadrant Dictation (thumb folded in; with it spread it is an open hand)
 ///   OK sign, held             hide the mirror (Vision stays on); again to show it. Never a click.
 /// Events are posted with the Accessibility grant the app already has for pasting.
@@ -72,49 +71,52 @@ struct TwoHandGesture {
 /// so one hand closing, or fists that were never open, do nothing. Fires once; the hands have to drop
 /// the shapes before it can fire again.
 struct OpenToFists {
+    enum Outcome: Equatable { case lockUp }
     private var openSince: CFTimeInterval?
     private var openAt: CFTimeInterval?
     private var fistSince: CFTimeInterval?
     private var spent = false
-    private var seenAt: CFTimeInterval = -9     // last frame both hands were open or both were fists
+    private var seenAt: CFTimeInterval = -9     // last frame of the gesture: both open, fists, or one of each once armed
 
-    /// Both hands open or both in fists (or were a moment ago): the pointer and fist dictation wait.
+    /// The gesture is underway (or just was): the pointer waits.
     func busy(at t: CFTimeInterval) -> Bool { t - seenAt < 0.5 }
 
     static func fingers(_ j: HandGesture.Joints) -> [Bool]? { j.isEmpty ? nil : HandGesture.extended(j)?.fingers }
 
     mutating func reset() { openSince = nil; openAt = nil; fistSince = nil }
 
-    /// Feeds one frame; true on the frame the fists complete it.
-    mutating func feed(_ f: VisionFrame) -> Bool {
+    /// Feeds one frame; the outcome on the frame that completes it.
+    mutating func feed(_ f: VisionFrame) -> Outcome? {
         let t = f.time
         let a = Self.fingers(f.squared), b = Self.fingers(f.secondSquared)
+        let up = [true, true, true, true], down = [false, false, false, false]
         // Open hands apart: praying hands read as two open hands too.
-        let open = a == [true, true, true, true] && b == [true, true, true, true] && (f.pair?.palms ?? 0) > 1.5
-        let fists = a == [false, false, false, false] && b == [false, false, false, false]
+        let open = a == up && b == up && (f.pair?.palms ?? 0) > 1.5
+        let fists = a == down && b == down
         if spent, t - seenAt > 0.5 { spent = false }
         if open || fists { seenAt = t }
-        if spent { return false }
+        if spent { return nil }
         if open {
             if openSince == nil { openSince = t }
             openAt = t
             fistSince = nil
-            return false
+            return nil
         }
         // The open hands count only if they were held, and only for a moment after they close.
-        guard let since = openSince, let at = openAt, at - since >= 0.3, t - at < 1.0 || fistSince != nil else {
+        guard let since = openSince, let at = openAt, at - since >= 0.3,
+              t - at < 1.0 || fistSince != nil else {
             if let at = openAt, t - at > 0.2 { reset() }   // a brief misread keeps the open hands
-            return false
+            return nil
         }
-        guard fists else {
-            if t - at > 1.0 { reset() }
-            return false
+        if fists {
+            if fistSince == nil { fistSince = t }
+            guard t - (fistSince ?? t) >= 0.15 else { return nil }
+            reset()
+            spent = true
+            return .lockUp
         }
-        if fistSince == nil { fistSince = t }
-        guard t - (fistSince ?? t) >= 0.15 else { return false }
-        reset()
-        spent = true
-        return true
+        if t - at > 1.0 { reset() }
+        return nil
     }
 }
 
@@ -245,18 +247,19 @@ final class HandControl: VisionDriver {
     /// 0 at the slowest speed, 1 at the fastest, for drawing the gap in the mirror.
     static func level(_ g: CGFloat) -> CGFloat { (log(g) - log(0.25)) / (log(2.5) - log(0.25)) }
 
-    enum Pose: String { case none = "NO HAND", track = "POINTING", pinch = "CLICK", drag = "DRAGGING", scroll = "SCROLLING",
-                         open = "OPEN HAND", dictate = "DICTATING", other = "RESTING", switching = "FOUR FINGERS · TO QUADRANTS",
+    enum Pose: String { case none = "NO HAND", track = "POINTING", pinch = "PINCHED", scroll = "SCROLLING",
+                         open = "OPEN HAND", other = "RESTING", switching = "FOUR FINGERS · TO QUADRANTS",
                          lockUp = "TWO HANDS · FISTS TO LOCK UP",
                          clear = "PINKY · CLEAR" }
 
-    private(set) var pose: Pose = .none
+    private(set) var pose: Pose = .none {
+        didSet { if pose != oldValue { PoseLog.shared.write("\(oldValue.rawValue) -> \(pose.rawValue)  \(diag)") } }
+    }
+    /// This frame's raw reading, for the pose log: fingers up (index, middle, ring, little), thumb to
+    /// index tip in hand sizes.
+    private var diag = ""
     var status: String {
         if send.inProgress { return "VISION MODE · SEND" + String(repeating: " ·", count: send.steps) }
-        if pose == .scroll {
-            let name = scrollDir > 0 ? "SCROLLING UP" : scrollDir < 0 ? "SCROLLING DOWN" : "SCROLL PAUSED"
-            return "VISION MODE · " + name + (scrollDir != 0 ? " · \(Int(abs(scrollSpeed) / 10) * 10) PX/S" : "")
-        }
         let speed = pose == .track ? String(format: " · %.1f×", gain) : ""
         return "VISION MODE · " + pose.rawValue + speed
     }
@@ -270,7 +273,7 @@ final class HandControl: VisionDriver {
     /// Both hands open, then both fists: Lock Up (close every terminal).
     var onLockUp: (() -> Void)?
     private var openToFists = OpenToFists()
-    /// The two-hand gesture after a fist dictation pasted: press Return there (as in Quadrants).
+    /// The two-hand gesture after a hand dictation pasted: press Return there (as in Quadrants).
     var onSend: (() -> Void)?
     private var send = TwoHandGesture()
     /// The pinky alone, held: clear what was just pasted.
@@ -282,116 +285,85 @@ final class HandControl: VisionDriver {
     /// For `--test-hand`: when set, pointer moves are reported here instead of posted, and the pointer
     /// position is simulated, so the checks never move the real pointer.
     var dryRun: ((CGPoint) -> Void)?
+    /// For `--test-hand`: clicks (with their click count) are reported here instead of posted.
+    var dryClick: ((Int) -> Void)?
     private var simulated = CGPoint(x: 500, y: 500)
-    /// Fist dictation: true to start (fist held a beat), false to finish (fist opened or hand gone).
-    var onDictate: ((Bool) -> Void)?
-    private(set) var dictating = false
-    var isDictating: Bool { dictating }
-    private var fistSince: CFTimeInterval?
-    private var fistGoneSince: CFTimeInterval?
-    /// Set whenever control pauses: a fist already closed then (say, the one that discarded a scan)
-    /// has to open once before it can start dictating.
-    private var fistLocked = false
+    /// The pointer style never dictates (dictation lives in Quadrants); the protocol asks.
+    var isDictating: Bool { false }
 
     private var pinched = false
-    private var mouseDown = false
-    private var downPoint = CGPoint.zero
+    private var tipsAt: CFTimeInterval = -9          // last frame both tips were seen
+    private var pinchAt: CFTimeInterval = 0          // when this pinch closed
+    private var pinchTravel = CGPoint.zero           // hand travel (pointer px at 1x) since it closed
+    private var caught = false                       // this pinch stopped a fling, so letting go does not click
     private var lastUp: (t: CFTimeInterval, p: CGPoint, clicks: Int) = (0, .zero, 0)
     private var freezeUntil: CFTimeInterval = 0
     private var filter = OneEuro()
     private var lastFiltered: CGPoint?
-    private var scrollCarry: CGFloat = 0
-    /// Where the two fingers point: 1 straight up, -1 straight down (smoothed sine of the tilt), and
-    /// the direction it settled on: 1 up, -1 down, 0 paused (flat, or not held long enough yet).
-    private var scrollAim: CGFloat = 0
-    private var scrollDir = 0
-    /// Signed pixels per second right now, gliding toward `scrollTarget` (what the tilt asks for).
-    private(set) var scrollSpeed: CGFloat = 0
-    private var scrollTarget: CGFloat = 0
-    /// Scrolling is posted from its own 120 Hz timer, not per camera frame (30 fps), so the page moves
-    /// in small even steps and speeds up and stops with an ease instead of 30 lurches a second.
+    /// Pinch and move scrolls like Apple Vision Pro: the page follows the hand while pinched, and a
+    /// quick release flings it on. Camera frames only add to `scrollOwed`; a 120 Hz timer pays it out
+    /// in small steps (and the fling in `coast`), so the page moves evenly instead of 30 lurches a second.
+    private var scrollOwed = CGPoint.zero            // px the hand has moved that are not posted yet
+    private var scrollCarry = CGPoint.zero           // fractions of a pixel left over
+    private var payRate = CGPoint.zero               // px/s that pays `scrollOwed` off by the next frame
+    private var frameGap: CGFloat = 1.0 / 30         // smoothed time between camera frames
+    private(set) var coast = CGPoint.zero            // fling after release, px/s
+    private var handVelocity = CGPoint.zero          // smoothed page speed while scrolling, px/s
     private var glideTimer: DispatchSourceTimer?
     private var lastGlide: CFTimeInterval?
     static let glideHz: Double = 120
-    private var scrollSince: CFTimeInterval = 0     // when the two fingers came up
-    private var dirSince: CFTimeInterval = 0        // when the current direction began (for the ease-in)
-    private var lastScroll: CFTimeInterval = 0
-    /// For `--test-hand`: scroll amounts are reported here instead of posted.
-    var dryScroll: ((Int32) -> Void)?
-    /// Tilt speed curve: flat (within the dead zone) pauses; past it the speed grows exponentially from
-    /// reading pace to fast at straight up or down, so each extra degree feels like the same step.
-    static let scrollDeadZone: CGFloat = 15         // degrees from flat; once going, it holds down to 10
-    static let scrollSlowest: CGFloat = 30          // px/s just past the dead zone
-    static let scrollFastest: CGFloat = 1200        // px/s at full tilt
-    /// Full tilt: straight up is easy, but a wrist only bends the fingers about 60 degrees down, so
-    /// down reaches top speed there (and every speed in between sooner).
-    static let scrollUpFull: CGFloat = 90
-    static let scrollDownFull: CGFloat = 60
+    private var lastFrameAt: CFTimeInterval = 0      // last camera frame; the glide stops if they stop
+    /// For `--test-hand`: scroll amounts (x sideways, y up and down, as posted) reported instead of posted.
+    var dryScroll: ((CGPoint) -> Void)?
+    /// Hand travel, as a share of the camera frame, before a pinch scrolls instead of clicking.
+    static let scrollStart: CGFloat = 0.015
+    /// Page pixels per pointer pixel of hand travel (times Pointer Speed).
+    static let scrollGain: CGFloat = 1.5
+    /// A pinch let go within this long without moving clicks; held longer it does nothing.
+    static let tapMax: CFTimeInterval = 0.6
+    /// Fling: only above this release speed, capped, and slowing with this time constant.
+    static let flingMin: CGFloat = 250
+    static let flingMax: CGFloat = 5000
+    static let coastTau: CGFloat = 0.35
     private var lastHand = CACurrentMediaTime()
     private var missedSince: CFTimeInterval?
 
+    deinit { glideTimer?.cancel() }
+
     func stop() {
-        endDictation()
         switchHold.reset()
         clearHold.reset()
         send.reset()
         lastFingers = nil
-        fistLocked = true
-        release(at: pointer())
+        pinched = false
         pose = .none
         tips = nil
         resetMotion()
-        glideTimer?.cancel(); glideTimer = nil; lastGlide = nil
-        scrollSpeed = 0; scrollCarry = 0
+        stopScroll()
     }
 
-    /// Signed scroll speed (px/s, positive up) for a finger tilt in degrees above flat (negative below).
-    /// Inside the dead zone it is 0; past it, exponential from `scrollSlowest` to `scrollFastest` at
-    /// full tilt (90 up, 60 down).
-    static func scrollRate(tilt deg: CGFloat, deadZone: CGFloat = scrollDeadZone) -> CGFloat {
-        let full = deg < 0 ? scrollDownFull : scrollUpFull
-        let a = min(full, abs(deg))
-        guard a > deadZone else { return 0 }
-        let t = (a - deadZone) / (full - deadZone)
-        return (deg < 0 ? -1 : 1) * scrollSlowest * pow(scrollFastest / scrollSlowest, t)
-    }
-
-    /// Two fingers out: scroll the way they tilt, faster the steeper. Flat (pointing sideways) pauses.
-    /// It waits 0.2 s after the fingers come up (so passing through two fingers on the way to another
-    /// shape scrolls nothing); the 120 Hz glide eases it in and out.
-    /// The thumb gap plays no part here (it is the pointer's speed).
-    private func scroll(_ j: HandGesture.Joints, now: CFTimeInterval) {
-        let dt = min(0.1, max(0, now - lastScroll))
-        lastScroll = now
-        guard let im = j[.indexMCP], let mm = j[.middleMCP], let it = j[.indexTip], let mt = j[.middleTip] else { return }
-        // Knuckles to fingertips, in true proportions (Vision's y is up).
-        let v = CGPoint(x: (it.x + mt.x - im.x - mm.x) / 2, y: (it.y + mt.y - im.y - mm.y) / 2)
-        let len = hypot(v.x, v.y)
-        guard len > 0 else { return }
-        scrollAim += (v.y / len - scrollAim) * 0.3
-        let tilt = asin(min(1, max(-1, scrollAim))) * 180 / .pi
-        // A little stickier once going, so hovering at the edge of the dead zone does not stutter.
-        let target = Self.scrollRate(tilt: tilt, deadZone: scrollDir == 0 ? Self.scrollDeadZone : Self.scrollDeadZone - 5)
-        let dir = target > 0 ? 1 : target < 0 ? -1 : 0
-        if dir != scrollDir { scrollDir = dir; dirSince = now }
-        // The glide eases the speed in and out; here we only say where it should head.
-        scrollTarget = now - scrollSince >= 0.2 ? target : 0
-        _ = dt
-        if scrollTarget != 0 { startGlide() }
-    }
-
-    /// One glide step: ease the speed toward the target (0.15 s to speed up, 0.06 s to stop, so a
-    /// stop is soft but short), and post whatever whole pixels that adds up to.
+    /// One glide step: pay out the hand travel owed (evenly over one camera frame), plus the fling,
+    /// which slows on its own, and post whatever whole pixels that adds up to.
     func glide(at now: CFTimeInterval) {
-        let dt = min(0.05, max(0, now - (lastGlide ?? now)))
+        let dt = CGFloat(min(0.05, max(0, now - (lastGlide ?? now))))
         lastGlide = now
-        let tau: CGFloat = scrollTarget == 0 || scrollTarget.sign != scrollSpeed.sign ? 0.06 : 0.15
-        scrollSpeed += (scrollTarget - scrollSpeed) * (1 - exp(-CGFloat(dt) / tau))
-        if scrollTarget == 0 && abs(scrollSpeed) < 12 { scrollSpeed = 0; scrollCarry = 0 }
-        scrollCarry += scrollSpeed * CGFloat(dt)
-        let px = scrollCarry.rounded(.towardZero)
-        if px != 0 { scrollCarry -= px; postScroll(px) }
-        if scrollSpeed == 0 && scrollTarget == 0 { glideTimer?.cancel(); glideTimer = nil; lastGlide = nil }
+        // No camera frame for half a second (camera taken, sleep, a stall): nothing says keep going.
+        if now - lastFrameAt > 0.5 { coast = .zero; scrollOwed = .zero }
+        // Even steps: what one frame owes is spread across the ticks until the next frame.
+        func pay(_ owed: CGFloat, _ rate: CGFloat) -> CGFloat { owed > 0 ? min(owed, max(0, rate * dt)) : max(owed, min(0, rate * dt)) }
+        var out = CGPoint(x: pay(scrollOwed.x, payRate.x), y: pay(scrollOwed.y, payRate.y))
+        scrollOwed.x -= out.x; scrollOwed.y -= out.y
+        let decay = exp(-dt / Self.coastTau)
+        coast = CGPoint(x: coast.x * decay, y: coast.y * decay)
+        if hypot(coast.x, coast.y) < 20 { coast = .zero }
+        out.x += coast.x * dt; out.y += coast.y * dt
+        scrollCarry.x += out.x; scrollCarry.y += out.y
+        let px = CGPoint(x: scrollCarry.x.rounded(.towardZero), y: scrollCarry.y.rounded(.towardZero))
+        if px != .zero { scrollCarry.x -= px.x; scrollCarry.y -= px.y; postScroll(px) }
+        if coast == .zero && hypot(scrollOwed.x, scrollOwed.y) < 0.5 {
+            scrollOwed = .zero
+            glideTimer?.cancel(); glideTimer = nil; lastGlide = nil
+        }
     }
 
     private func startGlide() {
@@ -403,12 +375,17 @@ final class HandControl: VisionDriver {
         t.resume()
     }
 
-    private func postScroll(_ px: CGFloat) {
-        guard px != 0 else { return }
-        // Positive scrolls toward the top of the page, the same sign the earlier move-to-scroll used.
-        if dryRun != nil { dryScroll?(Int32(px)); return }
+    /// Stop the page dead: nothing owed, no fling.
+    private func stopScroll() {
+        scrollOwed = .zero; scrollCarry = .zero; coast = .zero; handVelocity = .zero; payRate = .zero
+        glideTimer?.cancel(); glideTimer = nil; lastGlide = nil
+    }
+
+    /// `d.y` positive moves the content down (toward the top of the page), `d.x` positive moves it right.
+    private func postScroll(_ d: CGPoint) {
+        if dryRun != nil { dryScroll?(d); return }
         // Marked continuous, like a trackpad, so apps scroll by the exact pixels instead of line steps.
-        let e = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: Int32(px), wheel2: 0, wheel3: 0)
+        let e = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: Int32(d.y), wheel2: Int32(d.x), wheel3: 0)
         e?.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
         e?.post(tap: .cghidEventTap)
     }
@@ -417,18 +394,24 @@ final class HandControl: VisionDriver {
     private func resetMotion() {
         filter.reset()
         lastFiltered = nil
-        scrollDir = 0
-        scrollTarget = 0   // the glide eases to a stop on its own
+    }
+
+    /// Leave any pinch without clicking or flinging (another gesture took over).
+    private func dropPinch() {
+        pinched = false
+        if pose == .scroll { handVelocity = .zero }
     }
 
     func handle(_ frame: VisionFrame) {
         let now = frame.time
-        // The two-hand gesture sends what the fist just dictated. It goes first (it can finish with no
+        let frameDt = CGFloat(max(1.0 / 120, min(0.2, now - lastFrameAt)))
+        lastFrameAt = now
+        frameGap += (min(frameDt, 0.1) - frameGap) * 0.2
+        // The two-hand gesture sends what was just dictated. It goes first (it can finish with no
         // hand in view), and while it is underway nothing else reads the hands.
         let sent = send.feed(frame)
         if sent || send.inProgress {
-            endDictation()
-            release(at: pointer())
+            dropPinch()
             switchHold.reset()
             pose = .other
             resetMotion()
@@ -437,7 +420,7 @@ final class HandControl: VisionDriver {
         }
         let j = frame.lead
         guard let wrist = j[.wrist], let knuckle = j[.indexMCP], let mid = j[.middleMCP] else {
-            // Ride out a few dropped frames (a drag must not end because one frame missed the hand).
+            // Ride out a few dropped frames (a scroll must not end because one frame missed the hand).
             if missedSince == nil { missedSince = now }
             if now - (missedSince ?? now) > 0.3 { lost(now) }
             return
@@ -446,24 +429,20 @@ final class HandControl: VisionDriver {
         lastHand = now
         let size = hypot(wrist.x - mid.x, wrist.y - mid.y)
         guard size > 0.025 else { lost(now); return }
-        // Lock Up: two open hands, then two fists. Meanwhile nothing else reads them, and a fist left
-        // over afterwards has to open before it can dictate.
-        let lockUp = openToFists.feed(frame)
-        if lockUp || openToFists.busy(at: now) {
-            endDictation()
-            fistLocked = true
-            release(at: pointer())
+        // Lock Up: two open hands, then two fists. Meanwhile nothing else reads them.
+        let ending = openToFists.feed(frame)
+        if ending != nil || openToFists.busy(at: now) {
+            dropPinch()
             switchHold.reset()
             pose = .lockUp
             resetMotion()
-            if lockUp { onLockUp?() }
+            if ending == .lockUp { onLockUp?() }
             return
         }
         // Two hands close together (praying, or resting one on the other) read as four fingers or an
         // open hand; they drive nothing here, as in Quadrants.
         if (frame.pair?.palms ?? 9) < 2.5 {
-            endDictation()
-            release(at: pointer())
+            dropPinch()
             switchHold.reset()
             pose = .other
             resetMotion()
@@ -474,12 +453,13 @@ final class HandControl: VisionDriver {
         let tipsDistance = j[.thumbTip].flatMap { t in j[.indexTip].map { hypot(t.x - $0.x, t.y - $0.y) / size } }
         let indexOut = j[.indexTip].map { hypot($0.x - wrist.x, $0.y - wrist.y) > size * 1.1 } ?? false
         if let d = tipsDistance {
-            // Never from a scroll: slowing a scroll brings the thumb in, and that must not click.
-            // Nor from an OK sign: the thumb meets the index there too, with the other three fingers up.
+            tipsAt = now
+            // Never from an OK sign: the thumb meets the index there too, with the other three fingers up.
             if pinched { if d > 0.6 { pinched = false } }
-            else if d < 0.35 && indexOut && pose != .scroll && !HandGesture.isOK(frame.squared) { pinched = true }
+            else if d < 0.35 && indexOut && !HandGesture.isOK(frame.squared) { pinched = true }
             spread = spread.map { $0 + (d - $0) * 0.3 } ?? d
-        } else if !mouseDown {
+        } else if now - tipsAt > 0.3 {
+            // A moving hand can lose a fingertip for a few frames; that must not end the scroll.
             pinched = false
         }
         if let t = j[.thumbTip], let i = j[.indexTip] { tips = (t, i) } else { tips = nil }
@@ -488,48 +468,20 @@ final class HandControl: VisionDriver {
         let reading = HandGesture.extended(j, last: lastFingers)
         let ext = reading?.fingers
         lastFingers = ext
-        let noFingers = ext.map { !$0.contains(true) } == true
-        // A closed fist; a thumbs up is not a fist, but a thumb the pose model invents off to the side
-        // of a fist that hides it (one frame in ten on HaGRID fists) still is.
-        let isFist = !pinched && noFingers && !indexOut && HandGesture.classify(frame.squared) != .thumbsUp
-        let isScroll = !pinched && ext == [true, true, false, false]
         let isPoint = ext.map { $0[0] && !$0[1] } == true
         let isOpen = !pinched && (ext?.filter { $0 }.count ?? 0) >= 3
+        diag = (ext.map { $0.map { $0 ? "1" : "0" }.joined() } ?? "????") + String(format: " tips %.2f", tipsDistance ?? -1)
 
         let m = CGPoint(x: 1 - knuckle.x, y: knuckle.y)   // mirrored, as in the preview
 
-        // Fist: hold a beat to start dictating; opening the hand (for a moment) finishes it. While
-        // dictating the thumb is ignored, so one drifting out of the fist does not cut the recording off.
-        if isFist || (dictating && noFingers && !pinched) {
-            fistGoneSince = nil
-            if fistSince == nil { fistSince = now }
-            release(at: pointer())
-            resetMotion()
-            if !dictating, !fistLocked, now - (fistSince ?? now) >= 0.35 {
-                dictating = true
-                onDictate?(true)
-            }
-            pose = dictating ? .dictate : .other
-            return
-        }
-        fistSince = nil
-        fistLocked = false
-        if dictating {
-            // A fist briefly misread mid-sentence must not cut the recording off.
-            if fistGoneSince == nil { fistGoneSince = now }
-            if now - (fistGoneSince ?? now) < 0.3 { pose = .dictate; return }
-            endDictation()
-        }
         // Four fingers up with the thumb tucked, held: switch to Quadrant Dictation.
         let isFour = !pinched && ext == [true, true, true, true] && HandGesture.thumb(frame.squared) == .tucked
         switch switchHold.update(isFour, now: now) {
         case .fired:
-            release(at: pointer())
             resetMotion()
             onSwitchStyle?(.quadrants)
             return
         case .holding:
-            release(at: pointer())
             resetMotion()
             pose = .switching
             return
@@ -539,13 +491,11 @@ final class HandControl: VisionDriver {
         // The pinky alone, held: clear what was just pasted. It already moves nothing (not a point).
         switch clearHold.update(!pinched && HandGesture.isPinky(frame.squared, last: ext), now: now) {
         case .fired:
-            release(at: pointer())
             resetMotion()
             pose = .clear
             onClear?()
             return
         case .holding:
-            release(at: pointer())
             resetMotion()
             pose = .clear
             return
@@ -553,25 +503,18 @@ final class HandControl: VisionDriver {
             break
         }
         if isOpen {
-            release(at: pointer())
             pose = .open
             resetMotion()
             return
         }
-        if isScroll {
-            release(at: pointer())
-            if pose != .scroll { resetMotion(); scrollSince = now; scrollAim = 0; lastScroll = now }
-            pose = .scroll
-            scroll(frame.squared, now: now)
-            return
-        }
-        // Only a pointing hand (or one mid-pinch or drag) moves the pointer; any other shape rests.
-        guard isPoint || pinched || mouseDown else {
+        // Only a pointing hand (or one mid-pinch) moves anything; any other shape (a fist, two
+        // fingers) rests.
+        guard isPoint || pinched || pose == .pinch || pose == .scroll else {
             pose = .other
             resetMotion()
             return
         }
-        if pose != .track && pose != .pinch && pose != .drag { resetMotion() }
+        if pose != .track && pose != .pinch && pose != .scroll { resetMotion() }
 
         // Relative, like a trackpad: the knuckle's movement (smoothed) times the speed. The knuckle
         // barely moves when the thumb does, so opening or closing the gap does not nudge the pointer.
@@ -581,30 +524,69 @@ final class HandControl: VisionDriver {
         let step = lastFiltered.map { CGPoint(x: f.x - $0.x, y: f.y - $0.y) } ?? .zero
         lastFiltered = f
 
-        if pinched && !mouseDown { press(at: pointer(), now: now) }
-        if !pinched && mouseDown { release(at: pointer(), now: now) }
-        pose = mouseDown ? (hypot(pointer().x - downPoint.x, pointer().y - downPoint.y) > 6 ? .drag : .pinch) : .track
-        // A drag moves at normal speed; the gap is closed then, so it cannot choose one.
-        let speed = mouseDown ? CGFloat(Self.baseSpeed) : gain
-        // Hold still for a moment around a pinch so the click lands where you aimed.
+        if pinched {
+            // Like Apple Vision Pro: pinch, hold, and move, and the page follows the hand. Touching
+            // down catches a page still flinging. The pointer stays where it was.
+            if pose != .pinch && pose != .scroll {
+                pinchAt = now; pinchTravel = .zero; handVelocity = .zero
+                caught = coast != .zero
+                coast = .zero; scrollOwed = .zero
+                pose = .pinch
+            }
+            pinchTravel.x += step.x; pinchTravel.y += step.y
+            let k = Self.scrollGain * CGFloat(Self.baseSpeed)
+            if pose == .pinch, hypot(pinchTravel.x, pinchTravel.y) > Self.scrollStart * unit {
+                pose = .scroll
+                owe(pinchTravel, k)   // catch up with the hand so far, so the page sticks to it
+            } else if pose == .scroll {
+                let d = owe(step, k)
+                handVelocity.x += (d.x / frameDt - handVelocity.x) * 0.5
+                handVelocity.y += (d.y / frameDt - handVelocity.y) * 0.5
+            }
+            return
+        }
+        // Let go: a quick pinch that never moved clicks (unless it only caught a fling); a scroll flings on at the speed it was going.
+        if pose == .pinch, !caught, now - pinchAt <= Self.tapMax { click(at: pointer(), now: now) }
+        if pose == .scroll {
+            let v = hypot(handVelocity.x, handVelocity.y)
+            if v > Self.flingMin {
+                let s = min(1, Self.flingMax / v)
+                coast = CGPoint(x: handVelocity.x * s, y: handVelocity.y * s)
+                startGlide()
+            }
+            handVelocity = .zero
+        }
+        if pose == .pinch || pose == .scroll {
+            pose = isPoint ? .track : .other
+            resetMotion()
+            return
+        }
+        guard isPoint else { pose = .other; resetMotion(); return }
+        pose = .track
+        // Hold still for a moment after a click so a double-click lands in the same place.
         if now >= freezeUntil, step != .zero {
             let p = pointer()
-            move(to: Self.clamp(CGPoint(x: p.x + step.x * speed, y: p.y + step.y * speed)))
+            move(to: Self.clamp(CGPoint(x: p.x + step.x * gain, y: p.y + step.y * gain)))
         }
     }
 
-    private func endDictation() {
-        fistSince = nil
-        fistGoneSince = nil
-        guard dictating else { return }
-        dictating = false
-        onDictate?(false)
+    /// Add hand travel (screen-style: y down) to what the glide owes, kept to the main direction
+    /// (a vertical stroke does not drift the page sideways). Returns the page pixels added.
+    @discardableResult
+    private func owe(_ hand: CGPoint, _ k: CGFloat) -> CGPoint {
+        var d = CGPoint(x: hand.x * k, y: hand.y * k)
+        if abs(d.x) < abs(d.y) * 0.5 { d.x = 0 } else if abs(d.y) < abs(d.x) * 0.5 { d.y = 0 }
+        // The content follows the hand: hand down moves the content down (positive wheel), hand right
+        // moves it right (positive sideways wheel).
+        scrollOwed.x += d.x; scrollOwed.y += d.y
+        payRate = CGPoint(x: scrollOwed.x / frameGap, y: scrollOwed.y / frameGap)
+        if d != .zero { startGlide() }
+        return d
     }
 
     private func lost(_ now: CFTimeInterval) {
-        // Hand out of view ends a fist dictation, after the same short grace as a drag.
-        endDictation()
-        release(at: pointer())
+        // Hand out of view: a pinch ends without a click or a fling.
+        dropPinch()
         pose = .none
         tips = nil
         lastFingers = nil
@@ -619,32 +601,20 @@ final class HandControl: VisionDriver {
 
     private func move(to p: CGPoint) {
         if let dryRun { simulated = p; dryRun(p); return }
-        let type: CGEventType = mouseDown ? .leftMouseDragged : .mouseMoved
-        CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: p, mouseButton: .left)?.post(tap: .cghidEventTap)
+        CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: p, mouseButton: .left)?.post(tap: .cghidEventTap)
     }
 
-    private func press(at p: CGPoint, now: CFTimeInterval = CACurrentMediaTime()) {
-        guard !mouseDown else { return }
-        mouseDown = true
-        downPoint = p
+    /// A whole click (down and up) where the pointer is. Two within 0.6 s in the same spot double-click.
+    private func click(at p: CGPoint, now: CFTimeInterval) {
+        let clicks = now - lastUp.t < 0.6 && hypot(p.x - lastUp.p.x, p.y - lastUp.p.y) < 12 ? lastUp.clicks + 1 : 1
+        lastUp = (now, p, clicks)
         freezeUntil = now + 0.15
-        guard dryRun == nil else { return }   // the self-test never clicks for real
-        let clicks = now - lastUp.t < 0.45 && hypot(p.x - lastUp.p.x, p.y - lastUp.p.y) < 12 ? lastUp.clicks + 1 : 1
-        let e = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: p, mouseButton: .left)
-        e?.setIntegerValueField(.mouseEventClickState, value: Int64(clicks))
-        e?.post(tap: .cghidEventTap)
-        lastUp.clicks = clicks
-    }
-
-    private func release(at p: CGPoint, now: CFTimeInterval = CACurrentMediaTime()) {
-        guard mouseDown else { return }
-        mouseDown = false
-        freezeUntil = now + 0.12
-        guard dryRun == nil else { return }
-        let e = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: p, mouseButton: .left)
-        e?.setIntegerValueField(.mouseEventClickState, value: Int64(lastUp.clicks))
-        e?.post(tap: .cghidEventTap)
-        lastUp = (now, p, lastUp.clicks)
+        if dryRun != nil { dryClick?(clicks); return }   // the self-test never clicks for real
+        for type in [CGEventType.leftMouseDown, .leftMouseUp] {
+            let e = CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: p, mouseButton: .left)
+            e?.setIntegerValueField(.mouseEventClickState, value: Int64(clicks))
+            e?.post(tap: .cghidEventTap)
+        }
     }
 
     /// Every display together, in CG global coordinates (top-left origin).
@@ -680,5 +650,26 @@ struct OneEuro {
         let out = CGPoint(x: l.p.x + a * (p.x - l.p.x), y: l.p.y + a * (p.y - l.p.y))
         last = (out, dp, t)
         return out
+    }
+}
+
+/// Pose changes while Vision Mode drives the pointer, one line each with the raw reading, so a live
+/// misread ("it thought my pinch was a fist") can be read back afterwards. Capped at about 200 KB.
+final class PoseLog {
+    static let shared = PoseLog()
+    var enabled = true
+    let url = Paths.dataDir.appendingPathComponent("vision-poses.log")
+    private let queue = DispatchQueue(label: "goldware.poselog")
+    func write(_ line: String) {
+        guard enabled else { return }
+        let stamp = ISO8601DateFormatter.string(from: Date(), timeZone: .current, formatOptions: [.withTime, .withColonSeparatorInTime, .withFractionalSeconds])
+        queue.async { [url] in
+            let data = Data((stamp + "  " + line + "\n").utf8)
+            if let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? nil, size > 200_000 {
+                try? FileManager.default.removeItem(at: url)
+            }
+            if let h = try? FileHandle(forWritingTo: url) { h.seekToEndOfFile(); h.write(data); try? h.close() }
+            else { try? data.write(to: url) }
+        }
     }
 }

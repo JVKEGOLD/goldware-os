@@ -17,6 +17,9 @@ cp Resources/goldware-logo.png "$APP/Contents/Resources/"
 # The checkout this app belongs to (config, server, dashboard). Read by VaultContext.resolveRoot().
 (cd .. && pwd) > "$APP/Contents/Resources/goldware-root.txt"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/"   # regenerate with make_icon.swift (see its header)
+# Face ID's fingerprint model (SFace, Apache 2.0, see ThirdParty/sface-LICENSE), compiled for Core ML.
+mkdir -p "$APP/Contents/Resources/FaceID"
+xcrun coremlcompiler compile Resources/FaceID/SFace.mlpackage "$APP/Contents/Resources/FaceID" > /dev/null
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

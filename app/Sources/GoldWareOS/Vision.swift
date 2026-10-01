@@ -8,6 +8,15 @@ import Vision
 ///   Vision Mode   the mirror stays pinned open and your hand drives the pointer
 /// The camera runs only while the mirror is open or Vision Mode is on, so the green light
 /// always matches something visible on screen.
+/// Face ID setup rules, kept pure for the self-test.
+enum FaceSetup {
+    static let seconds = 8.0
+    /// About 5 checks a second, so 8 seconds gives up to 40 looks; ask for a solid handful.
+    static let minimumSamples = 8
+    enum Outcome: Equatable { case saved, tooFew }
+    static func outcome(samples: Int) -> Outcome { samples >= minimumSamples ? .saved : .tooFew }
+}
+
 final class VisionController {
     static var mirrorEnabled: Bool {
         get { UserDefaults.standard.object(forKey: "visionMirrorEnabled") as? Bool ?? true }
@@ -21,7 +30,7 @@ final class VisionController {
     let scanner = VisionScanner()
     /// Short status lines for the GoldWare HUD.
     var onNotice: ((String) -> Void)?
-    /// Vision Mode fist dictation: start (true) or finish (false) an GoldWare Voice dictation.
+    /// Quadrant hand dictation: start (true) or finish (false) a \(GWConfig.name) Voice dictation.
     /// Quadrants: the two-hand gesture after a paste, to press Return.
     var onSend: (() -> Void)? {
         get { quadrants.onSend }
@@ -38,8 +47,8 @@ final class VisionController {
         set { control.onLockUp = newValue }
     }
     var onDictate: ((Bool) -> Void)? {
-        get { control.onDictate }
-        set { control.onDictate = newValue; quadrants.onDictate = newValue }
+        get { quadrants.onDictate }
+        set { quadrants.onDictate = newValue }   // only Quadrants dictates; the pointer never does
     }
     private var monitors: [Any] = []
     private var dwell: DispatchWorkItem?
@@ -62,6 +71,8 @@ final class VisionController {
             let open = self.lock.admit(f, unlocked: &unlocked, relocked: &relocked,
                                        thumbLocks: !self.mirror.scan.isActive && !self.driver.isDictating)
             if open, self.mirrorToggle.feed(f) { self.setMirrorHidden(!self.mirrorHidden) }
+            self.faceState = f.face
+            self.refreshBadges()
             if open {
                 self.driverActive = true
                 if self.mirror.isShown { self.mirror.handle(f, driver: self.driver) } else { self.driver.handle(f) }
@@ -116,6 +127,74 @@ final class VisionController {
 
     var modeOn: Bool { HandControl.enabled }
     private var lock = VisionLock()
+    /// Face ID's last reading, for the badge.
+    private var faceState = FaceMatcher.State.off
+    private let styleBadge = NotchBadge(side: .left)
+    private let lockBadge = NotchBadge(side: .right)
+
+    /// The gold glyphs beside the notch while Vision Mode is on: the style on the left (pointer arrow or
+    /// Quadrants grid), the lock on the right (closed or open).
+    private func refreshBadges() {
+        let show = NotchBadge.visible(modeOn: modeOn), notch = notchScreen.map(NotchMirror.zone(of:))
+        let quadrants = HandControl.style == .quadrants
+        styleBadge.set(show, symbol: NotchBadge.styleSymbol(HandControl.style),
+                       label: quadrants ? "Quadrants" : "Vision pointer", notch: notch)
+        let locked = lock.state == .locked
+        let stranger = faceState == .notYou
+        lockBadge.set(show, symbol: stranger ? NotchBadge.notYouSymbol : NotchBadge.lockSymbol(locked: locked),
+                      label: stranger ? "Face not recognised" : locked ? "Vision locked" : "Vision unlocked", notch: notch)
+    }
+
+    // MARK: Face ID setup
+
+    private(set) var settingUpFace = false
+
+    /// Opens the mirror, collects your face for 8 seconds, saves it, and turns Face ID on.
+    func setUpFaceID() {
+        guard !settingUpFace else { return }
+        guard AVCaptureDevice.authorizationStatus(for: .video) != .denied else {
+            onNotice?("Face ID needs the camera. System Settings › Privacy › Camera › \(GWConfig.name)"); return
+        }
+        settingUpFace = true
+        let wasShown = mirror.isShown
+        if !wasShown { mirror.pin(on: notchScreen) }
+        camera.claim("faceid")
+        onNotice?("Face ID setup: look at the camera, alone, and slowly turn your head a little each way")
+        // A beat for the camera to wake before collecting.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            self?.camera.setUpFace(seconds: FaceSetup.seconds) { samples in self?.finishFaceSetup(samples, wasShown: wasShown) }
+        }
+        // If no frames come (camera never started), give up rather than hang in setup.
+        DispatchQueue.main.asyncAfter(deadline: .now() + FaceSetup.seconds + 6) { [weak self] in
+            self?.finishFaceSetup([], wasShown: wasShown)
+        }
+    }
+
+    private func finishFaceSetup(_ samples: [[Float]], wasShown: Bool) {
+        guard settingUpFace else { return }   // already finished (the timeout or the real result came second)
+        settingUpFace = false
+        camera.release("faceid")
+        if !wasShown && !modeOn { mirror.unpin() }
+        switch FaceSetup.outcome(samples: samples.count) {
+        case .saved:
+            _ = FaceID.save(samples: samples)
+            FaceID.enabled = true
+            camera.reloadFace()
+            Sounds.play(.done)
+            onNotice?("Face ID is on. Only your hands drive Vision now.")
+        case .tooFew:
+            Sounds.play(.error)
+            onNotice?("Face ID could not see your face clearly (\(samples.count) good looks). Try again in better light, alone in view.")
+        }
+    }
+
+    /// Deletes the saved face and turns Face ID off.
+    func forgetFace() {
+        FaceID.forget()
+        FaceID.enabled = false
+        camera.reloadFace()
+        onNotice?("Face ID is off and your face is forgotten")
+    }
     /// The OK sign hid the mirror; Vision Mode keeps running without it until the OK sign again.
     private(set) var mirrorHidden = false
     private var mirrorToggle = MirrorToggle()
@@ -160,6 +239,7 @@ final class VisionController {
             mirror.unpin()
         }
         mirror.modeChanged(on, style: HandControl.style)
+        refreshBadges()
     }
 
     /// Vision always starts as the pointer (shortcut, voice, the switch, or a relaunch); Quadrants only
@@ -339,13 +419,13 @@ final class NotchMirror {
         CATransaction.begin(); CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
         guard imageSize != .zero, !scan.isActive, let tips = control.tips,
-              [.track, .pinch, .drag].contains(control.pose) else {
+              [.track, .pinch, .scroll].contains(control.pose) else {
             spreadLine.path = nil; spreadLabel.isHidden = true
             return
         }
         let a = wellPoint(tips.thumb, in: well.bounds, imageSize: imageSize)
         let b = wellPoint(tips.index, in: well.bounds, imageSize: imageSize)
-        let pressed = control.pose == .pinch || control.pose == .drag
+        let pressed = control.pose == .pinch || control.pose == .scroll
         if pressed {
             let c = CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2)
             spreadLine.path = CGPath(ellipseIn: CGRect(x: c.x - 6, y: c.y - 6, width: 12, height: 12), transform: nil)

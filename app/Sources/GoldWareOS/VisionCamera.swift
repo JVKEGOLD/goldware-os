@@ -138,6 +138,11 @@ struct VisionFrame {
     var leadLoose: HandGesture.Joints = [:]
     var secondLoose: HandGesture.Joints = [:]
     var gesture: HandGesture?
+    /// Face ID: off, or whether your face is in view. With it on, `hands`, `lead`, and `second` hold
+    /// only your hands.
+    var face = FaceMatcher.State.off
+    /// Hands seen but dropped because they are not your.
+    var ignoredHands = 0
     /// A card, receipt, or page held up to the camera.
     var document: VNRectangleObservation?
     var imageSize = CGSize.zero
@@ -181,6 +186,10 @@ final class VisionCamera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
     private let latestLock = NSLock()
     private var frameCount = 0
     private var lastDocument: VNRectangleObservation?
+    /// Face checks run on `frameQueue`; touch only from there.
+    private let faces = FaceMatcher()
+    /// During setup a face check every sixth frame (about 5 a second); otherwise `FaceMatcher.isDue`.
+    static let faceEvery = 6
     private static let tips: [VNHumanHandPoseObservation.JointName] = [.thumbTip, .indexTip, .middleTip, .ringTip, .littleTip]
 
     var isRunning: Bool { session.isRunning }
@@ -255,11 +264,31 @@ final class VisionCamera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
         return ciContext.createCGImage(image, from: image.extent)
     }
 
+    /// Face ID setup: collects fingerprints for `seconds`, then calls `done` on main with them.
+    func setUpFace(seconds: Double, done: @escaping ([[Float]]) -> Void) {
+        frameQueue.async {
+            self.faces.enroll(seconds: seconds, now: CACurrentMediaTime()) { s in DispatchQueue.main.async { done(s) } }
+        }
+    }
+
+    /// Re-reads the saved face after setup or forget.
+    func reloadFace() { frameQueue.async { self.faces.reload() } }
+
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         guard let pixels = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         latestLock.lock(); latest = pixels; latestLock.unlock()
         deliveringLock.lock(); let busy = delivering; deliveringLock.unlock()
         if busy { return }
+        let frame = read(pixels)
+        deliveringLock.lock(); delivering = true; deliveringLock.unlock()
+        DispatchQueue.main.async {
+            self.onFrame?(frame)
+            self.deliveringLock.lock(); self.delivering = false; self.deliveringLock.unlock()
+        }
+    }
+
+    /// Reads one frame. Runs on `frameQueue` (or a self-test). `faceNow` forces a face check.
+    func read(_ pixels: CVPixelBuffer, faceNow: Bool = false) -> VisionFrame {
         frameCount += 1
         var frame = VisionFrame()
         frame.imageSize = CGSize(width: CVPixelBufferGetWidth(pixels), height: CVPixelBufferGetHeight(pixels))
@@ -270,7 +299,25 @@ final class VisionCamera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
         let handler = VNImageRequestHandler(cvPixelBuffer: pixels, orientation: .up)
         try? handler.perform(docsNow ? [handRequest, docRequest] : [handRequest])
 
-        let results = handRequest.results ?? []
+        var results = handRequest.results ?? []
+        // Face ID: drop every hand that is not your before anything reads it.
+        if FaceID.enabled || faces.isEnrolling {
+            if faceNow || (faces.isEnrolling ? frameCount % Self.faceEvery == 0 : faces.isDue(frame.time)) {
+                faces.check(handler, imageSize: frame.imageSize, cgImage: { Self.ciContext.createCGImage(CIImage(cvPixelBuffer: pixels), from: CGRect(origin: .zero, size: frame.imageSize)) },
+                            now: frame.time)
+            }
+            frame.face = faces.state
+            if frame.face == .you || frame.face == .notYou {
+                let aspect = frame.imageSize.height > 0 ? frame.imageSize.width / frame.imageSize.height : 1
+                let all = results.count
+                results = results.filter { hand in
+                    guard let w = try? hand.recognizedPoint(.wrist), w.confidence > 0.3 else { return false }
+                    return FaceID.isOwners(wrist: w.location, handSize: Self.span(hand, aspect: aspect), faces: faces.faces,
+                                          aspect: aspect, strict: faces.isStrict(at: frame.time))
+                }
+                frame.ignoredHands = all - results.count
+            }
+        }
         frame.hands = results.map { hand in
             guard let all = try? hand.recognizedPoints(.all) else { return [] }
             return ([.wrist] + Self.tips).map { name in
@@ -299,17 +346,18 @@ final class VisionCamera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
             lastDocument = (docRequest.results ?? []).first.flatMap { $0.confidence > 0.7 && Self.area($0) > 0.08 ? $0 : nil }
         }
         frame.document = lastDocument
-        deliveringLock.lock(); delivering = true; deliveringLock.unlock()
-        DispatchQueue.main.async {
-            self.onFrame?(frame)
-            self.deliveringLock.lock(); self.delivering = false; self.deliveringLock.unlock()
-        }
+        return frame
     }
 
-    private static func span(_ hand: VNHumanHandPoseObservation) -> CGFloat {
+    private static func span(_ hand: VNHumanHandPoseObservation, aspect: CGFloat = 1) -> CGFloat {
         guard let w = try? hand.recognizedPoint(.wrist), let m = try? hand.recognizedPoint(.middleMCP) else { return 0 }
-        return hypot(w.location.x - m.location.x, w.location.y - m.location.y)
+        return hypot((w.location.x - m.location.x) * aspect, w.location.y - m.location.y)
     }
+
+    /// Self-test hook: the face reference without touching the saved file.
+    func debugSetFace(reference: [Float]?) { faces.debugSet(reference: reference) }
+    var debugFaces: [FaceID.Face] { faces.faces }
+    func debugSetOtherSeen(_ t: CFTimeInterval) { faces.debugSet(otherSeenAt: t) }
 
     static func area(_ r: VNRectangleObservation) -> CGFloat {
         // Shoelace over the four corners.

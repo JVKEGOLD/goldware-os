@@ -82,24 +82,20 @@ if args.count >= 2, args[1] == "--test-hand" {
                             ("two fingers", hand([true, true, false, false], thumb: "in"), .count(2)), ("open hand", open, .count(5))] {
         expect("reads \(name)", String(describing: HandGesture.classify(j)), String(describing: Optional(want)))
     }
+    PoseLog.shared.enabled = false   // the checks must not fill the live pose log
+    // The pointer never dictates (dictation lives in Quadrants): a held fist only rests.
     let c = HandControl()
-    var events: [String] = []
-    c.onDictate = { events.append($0 ? "start" : "finish") }
+    var cMoves = 0, cPoses = Set<String>()
+    c.dryRun = { _ in cMoves += 1 }
     var t = 100.0
     func feed(_ j: HandGesture.Joints?, _ seconds: Double) {
         let end = t + seconds
-        while t < end { var f = VisionFrame(); f.lead = j ?? [:]; f.time = t; c.handle(f); t += 1.0 / 30 }
+        while t < end { var f = VisionFrame(); f.lead = j ?? [:]; f.time = t; c.handle(f); cPoses.insert(c.pose.rawValue); t += 1.0 / 30 }
     }
-    feed(open, 1); expect("open hand does nothing", events.joined(separator: ","), "")
-    feed(fist, 0.2); expect("a brief fist does not dictate", events.joined(separator: ","), "")
-    feed(open, 0.5); feed(fist, 1); expect("a held fist starts dictation", events.joined(separator: ","), "start")
-    feed(open, 0.1); feed(fist, 0.5); expect("a one-frame slip keeps dictating", events.joined(separator: ","), "start")
-    feed(open, 0.5); expect("opening the hand finishes", events.joined(separator: ","), "start,finish")
-    feed(hand([false, false, false, false], thumb: "up"), 1); expect("thumbs up is not a fist", events.joined(separator: ","), "start,finish")
-    events = []; feed(fist, 1); feed(nil, 0.6); expect("hand leaving view finishes", events.joined(separator: ","), "start,finish")
-    events = []; c.stop(); feed(fist, 1); expect("a fist held through a pause waits to reopen", events.joined(separator: ","), "")
-    feed(open, 0.5); feed(fist, 1); expect("then the next fist dictates", events.joined(separator: ","), "start")
-    c.stop()
+    feed(open, 1); feed(fist, 3)
+    expect("in the pointer a held fist only rests (no dictation), and moves nothing", "\(c.isDictating) \(cMoves) \(c.pose.rawValue)", "false 0 RESTING")
+    expect("the pointer has no dictating pose at all", "\(cPoses.contains("DICTATING"))", "false")
+    c.stop(); c.dryRun = nil
     // Quadrant Dictation: counting fingers picks the quarter; four fingers with the thumb tucked is 4.
     for n in 1...4 {
         let up = (0..<4).map { $0 < n }
@@ -307,9 +303,8 @@ if args.count >= 2, args[1] == "--test-hand" {
     // Two hands close together drive nothing in pointer mode either (praying reads as four or open).
     let pairc = HandControl()
     pairc.dryRun = { _ in }
-    var pairSwitched: [HandControl.Style] = [], pairDictated = 0
+    var pairSwitched: [HandControl.Style] = []
     pairc.onSwitchStyle = { pairSwitched.append($0) }
-    pairc.onDictate = { if $0 { pairDictated += 1 } }
     for (secs, second) in [(1.5, praying.1)] {
         let end = t + secs
         while t < end { var f = VisionFrame(); f.lead = four; f.second = second; f.time = t; pairc.handle(f); t += 1.0 / 30 }
@@ -347,12 +342,11 @@ if args.count >= 2, args[1] == "--test-hand" {
            "\(picked.sorted()) \(dictations) \(switchedBack)", "[] [] []")
     feedQ2(diamond, 1); feedQ2(letGo, 0.5)
     expect("a diamond on its own does not send", "\(sends)", "1")
-    // Pointer (the default style): the same gesture sends after a fist dictation, and moves nothing.
+    // Pointer (the default style): the same gesture sends, and moves nothing.
     let psend = HandControl()
-    var pMoves = 0, pSends = 0, pDictated = 0
+    var pMoves = 0, pSends = 0
     psend.dryRun = { _ in pMoves += 1 }
     psend.onSend = { pSends += 1 }
-    psend.onDictate = { if $0 { pDictated += 1 } }
     func feedP(_ hands: (HandGesture.Joints, HandGesture.Joints)?, _ seconds: Double, one: HandGesture.Joints? = nil) {
         let end = t + seconds
         while t < end {
@@ -366,7 +360,7 @@ if args.count >= 2, args[1] == "--test-hand" {
     expect("in the pointer, praying then the diamond does not send yet", "\(pSends) \(psend.status)", "0 VISION MODE · SEND · ·")
     feedP(letGo, 0.2)
     expect("in the pointer, letting go sends", "\(pSends)", "1")
-    expect("the gesture moves no pointer and starts no dictation", "\(pMoves) \(pDictated)", "0 0")
+    expect("the gesture moves no pointer", "\(pMoves)", "0")
     feedP(nil, 3)
     feedP(diamond, 1); feedP(letGo, 0.5)
     expect("in the pointer, a diamond on its own does not send", "\(pSends)", "1")
@@ -378,10 +372,9 @@ if args.count >= 2, args[1] == "--test-hand" {
     expect("the pinky is never quadrant 1; the index still is",
            "\(QuadrantDictation.quadrant(pinky).map { "\($0)" } ?? "none") \(QuadrantDictation.quadrant(hand([true, false, false, false], thumb: "in")).map { "\($0)" } ?? "none")", "none 1")
     let pclear = HandControl()
-    var pcMoves = 0, pcClears = 0, pcDict = 0
+    var pcMoves = 0, pcClears = 0
     pclear.dryRun = { _ in pcMoves += 1 }
     pclear.onClear = { pcClears += 1 }
-    pclear.onDictate = { if $0 { pcDict += 1 } }
     func feedC(_ j: HandGesture.Joints?, _ seconds: Double) {
         let end = t + seconds
         while t < end { var f = VisionFrame(); f.time = t; if let j { f.lead = j }; pclear.handle(f); t += 1.0 / 30 }
@@ -389,7 +382,7 @@ if args.count >= 2, args[1] == "--test-hand" {
     feedC(open, 0.3); feedC(pinky, 0.4); feedC(open, 0.5)
     expect("in the pointer, a brief pinky does not clear", "\(pcClears)", "0")
     feedC(pinky, 2.0)
-    expect("in the pointer, a held pinky clears once, moving nothing", "\(pcClears) \(pcMoves) \(pcDict)", "1 0 0")
+    expect("in the pointer, a held pinky clears once, moving nothing", "\(pcClears) \(pcMoves)", "1 0")
     feedC(open, 0.6); feedC(pinky, 1.0)
     expect("a fresh pinky clears again", "\(pcClears)", "2")
     feedC(callMe, 1.5)
@@ -495,89 +488,106 @@ if args.count >= 2, args[1] == "--test-hand" {
         still.handle(f)
     }
     expect("changing the thumb gap alone does not move the pointer", "\(moved)", "0.0")
-    // Scrolling: slowing it by bringing the thumb in must never turn into a click.
-    let sc = HandControl()
-    sc.dryRun = { _ in }
-    for i in 0...45 {
-        var f = VisionFrame(); f.time = 400 + Double(i) / 30
-        var j = hand([true, true, false, false], thumb: "in")
-        let k = CGFloat(i) / 45
-        j[.thumbTip] = CGPoint(x: wideL.x + (0.44 - wideL.x) * k, y: wideL.y + (0.46 - wideL.y) * k)   // ends touching the index tip
-        f.lead = j; f.gesture = HandGesture.classify(j)
-        sc.handle(f)
-    }
-    expect("closing the thumb while scrolling does not click", sc.pose.rawValue, "SCROLLING")
-
-    // Directional scrolling: two fingers pointing up scroll up, pointing down scroll down, sideways
-    // pauses, and it keeps going while the hand holds still. Dry run: nothing is posted.
-    func rotated(_ j: HandGesture.Joints, _ deg: CGFloat) -> HandGesture.Joints {
-        let c = CGPoint(x: 0.5, y: 0.3), a = deg * .pi / 180
-        return j.mapValues { p in CGPoint(x: c.x + (p.x - c.x) * cos(a) - (p.y - c.y) * sin(a),
-                                          y: c.y + (p.x - c.x) * sin(a) + (p.y - c.y) * cos(a)) }
-    }
-    func scrollRun(_ steps: [(HandGesture.Joints?, Double)]) -> [(t: Double, px: Int)] {
+    // Pinch and move scrolls (like Apple Vision Pro); a quick still pinch clicks. Dry run: nothing posted.
+    // `pinchRun` moves the hand at a set speed (frame widths per second, Vision y up) and steps the
+    // 120 Hz glide four times per 30 fps frame, stamping each post with its tick time.
+    var pinchFix = hand([true, false, false, false], thumb: "in"); pinchFix[.thumbTip] = CGPoint(x: 0.45, y: 0.49); pinchFix[.thumbIP] = CGPoint(x: 0.42, y: 0.4)
+    let pointFix = hand([true, false, false, false], thumb: "in")
+    struct PinchOut { var posts: [(t: Double, d: CGPoint)] = []; var clicks: [Int] = []; var moves = 0; var poses: [(t: Double, pose: String)] = [] }
+    func pinchRun(_ steps: [(HandGesture.Joints?, CGPoint, Double)], dropThumbAt: ClosedRange<Double>? = nil) -> PinchOut {
         let h = HandControl()
-        h.dryRun = { _ in }
-        var out: [(t: Double, px: Int)] = []
-        var now = 0.0, tick = 0.0
-        h.dryScroll = { out.append((tick, Int($0))) }
-        for (j, secs) in steps {
+        var out = PinchOut()
+        var now = 0.0, tick = 0.0, off = CGPoint.zero
+        h.dryRun = { _ in out.moves += 1 }
+        h.dryClick = { out.clicks.append($0) }
+        h.dryScroll = { out.posts.append((tick, $0)) }
+        for (j, v, secs) in steps {
             let end = now + secs
             while now < end - 1e-9 {
-                var f = VisionFrame(); f.time = 900 + now; f.lead = j ?? [:]; f.gesture = j.flatMap(HandGesture.classify)
+                var f = VisionFrame(); f.time = 900 + now
+                if var j {
+                    j = j.mapValues { CGPoint(x: $0.x + off.x, y: $0.y + off.y) }
+                    if dropThumbAt?.contains(now) == true { j[.thumbTip] = nil }
+                    f.lead = j; f.gesture = HandGesture.classify(j)
+                }
                 h.handle(f)
-                for k in 0..<4 { tick = now + Double(k) / 120; h.glide(at: 900 + tick) }   // the 120 Hz glide
+                out.poses.append((now, h.pose.rawValue))
+                for k in 0..<4 { tick = now + Double(k) / 120; h.glide(at: 900 + tick) }
+                off.x += v.x / 30; off.y += v.y / 30
                 now += 1.0 / 30
             }
         }
+        while now < 6 { tick = now; h.glide(at: 900 + now); now += 1.0 / 120 }   // let any fling run out
         return out
     }
-    func sum(_ r: [(t: Double, px: Int)], _ from: Double, _ to: Double) -> Int { r.filter { $0.t >= from && $0.t < to }.map(\.px).reduce(0, +) }
-    let twoUp = hand([true, true, false, false], thumb: "in"), twoDown = rotated(twoUp, 180)
-    // Tilt sets the speed: the fixture points straight up; rotating it by 90 - a tilts it a degrees above flat.
-    func tilted(_ a: CGFloat) -> HandGesture.Joints { rotated(twoUp, 90 - a) }
-    let up = scrollRun([(twoUp, 3)])
-    expect("two fingers up scroll up", "\(sum(up, 0, 3) > 0) \(up.allSatisfy { $0.px > 0 })", "true true")
-    let s1 = sum(up, 1, 2), s2 = sum(up, 2, 3)
-    expect("it keeps scrolling while the hand holds still, at a steady rate", "\(s1 > 500 && abs(s1 - s2) <= s1 / 10)", "true")
-    let down = scrollRun([(twoDown, 3)])
-    expect("two fingers down scroll down, just as fast", "\(down.allSatisfy { $0.px < 0 }) \(abs(sum(down, 1, 2) + s1) <= s1 / 10)", "true true")
-    expect("two fingers flat (sideways) pause the scroll", "\(scrollRun([(tilted(0), 2), (rotated(twoUp, -90), 2), (tilted(10), 2)]).count)", "0")
-    expect("passing through two fingers on the way to another shape scrolls nothing",
-           "\(scrollRun([(twoUp, 0.15), (fist, 1)]).count)", "0")
-    let flip = scrollRun([(twoUp, 1.5), (twoDown, 1.5)])
-    expect("turning the fingers over reverses it", "\(sum(flip, 0, 1.5) > 0) \(sum(flip, 2, 3) < 0)", "true true")
-    // The steeper the tilt, the faster; a slight tilt is reading pace.
-    let rates = [25, 45, 65, 90].map { a in sum(scrollRun([(tilted(CGFloat(a)), 3)]), 1, 2) }
-    expect("steeper tilt scrolls faster (25 < 45 < 65 < 90 degrees)", "\(zip(rates, rates.dropFirst()).allSatisfy { $0 < $1 })", "true")
-    expect("a slight tilt is slow, reading pace (under 100 px/s)", "\(rates[0] > 0 && rates[0] < 100)", "true")
-    expect("straight up is fast (over 1000 px/s)", "\(rates[3] > 1000)", "true")
-    // Down is harder to reach (the wrist bends about 60 degrees down), so it gets there sooner.
-    let downRates = [25, 45, 60].map { a in -sum(scrollRun([(tilted(-CGFloat(a)), 3)]), 1, 2) }
-    expect("tilting down is faster than the same tilt up (25, 45 degrees)", "\(downRates[0] > rates[0] && downRates[1] > rates[1])", "true")
-    expect("60 degrees down is as fast as straight up", "\(abs(downRates[2] - rates[3]) <= rates[3] / 10)", "true")
-    print("  scroll down px/s at 25, 45, 60 degrees: \(downRates)")
-    expect("speed curve: 0 in the dead zone, slowest just past it, fastest at 90",
-           String(format: "%.0f %.0f %.0f %.0f", HandControl.scrollRate(tilt: 14), HandControl.scrollRate(tilt: 15.01),
-                  HandControl.scrollRate(tilt: 90), HandControl.scrollRate(tilt: -60)), "0 30 1200 -1200")
-    // Smooth: a steady tilt posts a small step on (nearly) every 120 Hz tick, not a lurch per camera frame.
-    let steady = scrollRun([(tilted(45), 3)]).filter { $0.t >= 1 && $0.t < 2 }
-    expect("a steady tilt scrolls in small even steps (100+ posts a second, none over 3 px)",
-           "\(steady.count >= 100) \(steady.allSatisfy { abs($0.px) <= 3 })", "true true")
-    // Soft stop: dropping the fingers glides to a stop within about a quarter second, not a dead halt.
-    let stopRun = scrollRun([(twoUp, 2), (fist, 1)])
-    expect("dropping the fingers eases to a stop (a little more, then nothing after 0.3 s)",
-           "\(sum(stopRun, 2, 2.1) > 0) \(stopRun.filter { $0.t >= 2.3 }.count) \(sum(stopRun, 2, 3) < 200)", "true 0 true")
-    let thumbOut = scrollRun([(hand([true, true, false, false], thumb: "side"), 3)])
-    expect("the thumb gap no longer changes the scroll speed", "\(abs(sum(thumbOut, 1, 2) - s1) <= s1 / 10)", "true")
-    print("  scroll px/s at 25, 45, 65, 90 degrees: \(rates)")
+    func ysum(_ o: PinchOut, _ from: Double = 0, _ to: Double = 99) -> CGFloat { o.posts.filter { $0.t >= from && $0.t < to }.map(\.d.y).reduce(0, +) }
+    func xsum(_ o: PinchOut, _ from: Double = 0, _ to: Double = 99) -> CGFloat { o.posts.filter { $0.t >= from && $0.t < to }.map(\.d.x).reduce(0, +) }
+    let still0 = CGPoint.zero
+    let tap = pinchRun([(pointFix, still0, 0.5), (pinchFix, still0, 0.2), (pointFix, still0, 0.5)])
+    expect("a quick still pinch clicks once and scrolls nothing", "\(tap.clicks) \(tap.posts.count)", "[1] 0")
+    let dbl = pinchRun([(pointFix, still0, 0.5), (pinchFix, still0, 0.15), (pointFix, still0, 0.15), (pinchFix, still0, 0.15), (pointFix, still0, 0.5)])
+    expect("two quick pinches double-click", "\(dbl.clicks)", "[1, 2]")
+    let hold = pinchRun([(pointFix, still0, 0.5), (pinchFix, still0, 1.5), (pointFix, still0, 0.5)])
+    expect("a long still pinch neither clicks nor scrolls", "\(hold.clicks) \(hold.posts.count)", "[] 0")
+    // Hand down in the camera (Vision y falls) pulls the content down, like dragging a page on glass.
+    let pullDown = pinchRun([(pointFix, still0, 0.5), (pinchFix, still0, 0.1), (pinchFix, CGPoint(x: 0, y: -0.25), 0.8), (pinchFix, still0, 0.5), (pointFix, still0, 0.3)])
+    expect("pinch and move down scrolls the content down (positive), never sideways, no click, pointer still",
+           "\(ysum(pullDown) > 200) \(pullDown.posts.allSatisfy { $0.d.y >= 0 && $0.d.x == 0 }) \(pullDown.clicks) \(pullDown.moves)", "true true [] 0")
+    let pullUp = pinchRun([(pointFix, still0, 0.5), (pinchFix, still0, 0.1), (pinchFix, CGPoint(x: 0, y: 0.25), 0.8), (pinchFix, still0, 0.5), (pointFix, still0, 0.3)])
+    expect("pinch and move up scrolls the other way, as far", "\(pullUp.posts.allSatisfy { $0.d.y <= 0 }) \(abs(ysum(pullUp) + ysum(pullDown)) < ysum(pullDown) * 0.1)", "true true")
+    let side = pinchRun([(pointFix, still0, 0.5), (pinchFix, still0, 0.1), (pinchFix, CGPoint(x: 0.25, y: 0), 0.8), (pinchFix, still0, 0.5), (pointFix, still0, 0.3)])
+    expect("pinch and move sideways scrolls sideways only", "\(abs(xsum(side)) > 200) \(side.posts.allSatisfy { $0.d.y == 0 })", "true true")
+    let drift = pinchRun([(pointFix, still0, 0.5), (pinchFix, still0, 0.1), (pinchFix, CGPoint(x: 0.06, y: -0.25), 0.8), (pinchFix, still0, 0.5), (pointFix, still0, 0.3)])
+    expect("a mostly vertical stroke with some drift scrolls only vertically", "\(ysum(drift) > 200) \(drift.posts.allSatisfy { $0.d.x == 0 })", "true true")
+    // The page sticks to the hand: the distance scrolled is the hand travel times the gain, not a rate.
+    let unit = (NSScreen.main?.frame.width ?? 1440) / 0.6
+    let want = 0.25 * 0.8 * unit * HandControl.scrollGain * CGFloat(HandControl.baseSpeed)
+    expect("the page follows the hand 1:1 with the gain (within 15%)", "\(abs(ysum(pullDown) - want) < want * 0.15)", "true")
+    print(String(format: "  pinch-scroll: %.0f px for %.0f px wanted", ysum(pullDown), want))
+    // Smooth: posts on (nearly) every 120 Hz tick while the hand moves, in small steps.
+    let steadyPosts = pullDown.posts.filter { $0.t >= 0.9 && $0.t < 1.3 }
+    expect("a steady pull scrolls in small even steps (100+ posts a second, none over 12 px)",
+           "\(steadyPosts.count >= 40) \(steadyPosts.allSatisfy { abs($0.d.y) <= 12 })", "true true")
+    expect("held still after moving, it stops (no fling while pinched)", "\(abs(ysum(pullDown, 1.6)) < 30)", "true")
+    // Let go while moving: it flings on and eases to a stop; let go after stopping: it stays put.
+    let fling = pinchRun([(pointFix, still0, 0.5), (pinchFix, still0, 0.1), (pinchFix, CGPoint(x: 0, y: -0.4), 0.4), (pointFix, still0, 3)])
+    let flingEnd = fling.posts.last?.t ?? 0
+    expect("letting go mid-move flings on, then eases to a stop within 2 s, no click",
+           "\(ysum(fling, 1.05, 1.5) > 50) \(flingEnd < 3) \(fling.clicks)", "true true []")
+    print(String(format: "  fling: %.0f px after release, last post at %.2f s", ysum(fling, 1.0), flingEnd))
+    expect("letting go after holding still does not fling", "\(abs(ysum(pullDown, 1.6)) < 30)", "true")
+    // Pinching a flinging page catches it: it stops, and that pinch does not click.
+    let caught = pinchRun([(pointFix, still0, 0.5), (pinchFix, still0, 0.1), (pinchFix, CGPoint(x: 0, y: -0.4), 0.4), (pointFix, still0, 0.15),
+                           (pinchFix, still0, 0.2), (pointFix, still0, 1)])
+    expect("a pinch catches a fling (nothing after it) without clicking", "\(abs(ysum(caught, 1.25)) < 10) \(caught.clicks)", "true []")
+    // A moving hand can lose its thumb tip for a few frames; the scroll carries on and never clicks.
+    let blink = pinchRun([(pointFix, still0, 0.5), (pinchFix, still0, 0.1), (pinchFix, CGPoint(x: 0, y: -0.25), 1.0), (pinchFix, still0, 0.5), (pointFix, still0, 0.3)],
+                         dropThumbAt: 0.9...1.1)
+    expect("a fingertip lost for 0.2 s mid-scroll keeps scrolling", "\(blink.poses.filter { $0.t > 0.9 && $0.t < 1.1 }.allSatisfy { $0.pose == "SCROLLING" }) \(blink.clicks)", "true []")
+    // The hand leaving view mid-scroll ends it: no fling, no click.
+    let gone = pinchRun([(pointFix, still0, 0.5), (pinchFix, still0, 0.1), (pinchFix, CGPoint(x: 0, y: -0.4), 0.4), (nil, still0, 2)])
+    expect("a hand leaving view mid-scroll stops without a fling or click", "\(abs(ysum(gone, 1.4)) < 10) \(gone.clicks)", "true []")
+    // The old two-finger scroll is gone: two fingers, tilted or not, rest.
+    let twoUp = hand([true, true, false, false], thumb: "in")
+    let two = pinchRun([(twoUp, still0, 2)])
+    expect("two fingers no longer scroll (they rest)", "\(two.posts.count) \(two.poses.last?.pose ?? "")", "0 RESTING")
+    // Camera stall mid-fling: the glide must not run on alone.
+    let st = HandControl(); st.dryRun = { _ in }
+    var stallPx: [Double] = []; var stT = 0.0, stOff: CGFloat = 0
+    st.dryScroll = { _ in stallPx.append(stT) }
+    for (j, v, secs) in [(pointFix, CGFloat(0), 0.5), (pinchFix, 0, 0.1), (pinchFix, -0.6, 0.3), (pointFix, 0, 1.0 / 30)] {
+        let end = stT + secs
+        while stT < end - 1e-9 { var f = VisionFrame(); f.time = 1500 + stT; f.lead = j.mapValues { CGPoint(x: $0.x, y: $0.y + stOff) }; st.handle(f)
+            for k in 0..<4 { st.glide(at: 1500 + stT + Double(k) / 120) }; stOff += v / 30; stT += 1.0 / 30 }
+    }
+    while stT < 3 { st.glide(at: 1500 + stT); stT += 1.0 / 120 }   // no frames at all
+    expect("if camera frames stop, a fling stops within half a second", "\(stallPx.filter { $0 >= 1.5 }.count)", "0")
     print(String(format: "  pointer travel for the same hand move: close %.0f px, relaxed %.0f px, wide %.0f px", slow, normal, fast))
     // Lock Up by hand: both hands open for a beat, then both fists.
     let lc = HandControl()
     lc.dryRun = { _ in }
-    var locks = 0, lockDictation: [String] = [], lockMoves = 0
+    var locks = 0, lockMoves = 0
     lc.onLockUp = { locks += 1 }
-    lc.onDictate = { lockDictation.append($0 ? "start" : "finish") }
     lc.dryRun = { _ in lockMoves += 1 }
     let openL = open, openR = open.mapValues { CGPoint(x: $0.x + 0.35, y: $0.y) }
     let fistL = fist, fistR = fist.mapValues { CGPoint(x: $0.x + 0.35, y: $0.y) }
@@ -589,21 +599,18 @@ if args.count >= 2, args[1] == "--test-hand" {
     feedL(openL, openR, 0.5); feedL(fistL, fistR, 0.5)
     expect("two open hands, then two fists, locks up once", "\(locks)", "1")
     feedL(fistL, fistR, 1)
-    expect("the fists held on do not also dictate or lock again", "\(locks) \(lockDictation)", "1 []")
+    expect("the fists held on do not lock again", "\(locks)", "1")
     feedL(fistL, nil, 1)
-    expect("a fist left over after locking up does not dictate", "\(lockDictation)", "[]")
     feedL(nil, nil, 0.7); feedL(openL, openR, 0.5); feedL(fistL, fistR, 0.5)
     expect("after the hands drop, it locks up again", "\(locks)", "2")
     feedL(nil, nil, 0.7); feedL(openL, openR, 0.1); feedL(fistL, fistR, 0.5)
     expect("a brief flash of open hands does not lock up", "\(locks)", "2")
     feedL(nil, nil, 0.7); feedL(fistL, fistR, 1)
     expect("two fists that were never open do not lock up", "\(locks)", "2")
-    feedL(nil, nil, 0.7); feedL(openL, openR, 0.5); feedL(fistL, openR, 0.5)
-    expect("only one hand closing does not lock up", "\(locks)", "2")
     feedL(nil, nil, 0.7); feedL(openL, openR, 0.5); feedL(nil, nil, 1.5); feedL(fistL, fistR, 0.5)
     expect("fists long after the open hands do not lock up", "\(locks)", "2")
-    feedL(nil, nil, 0.7); lockDictation = []; feedL(openL, nil, 0.3); feedL(fistL, nil, 1)
-    expect("one hand open then a fist still dictates", "\(locks) \(lockDictation)", "2 [\"start\"]")
+    feedL(nil, nil, 0.7); feedL(openL, nil, 0.3); feedL(fistL, nil, 1)
+    expect("one hand open then a fist does nothing", "\(locks) \(lc.pose.rawValue)", "2 RESTING")
     feedL(openL, nil, 0.5); lockMoves = 0
     for i in 0..<10 { feedL(pointL.mapValues { CGPoint(x: $0.x + CGFloat(i) * 0.01, y: $0.y) }, nil, 1.0 / 30) }
     expect("pointing with one hand still moves the pointer", "\(lockMoves > 0)", "true")
@@ -652,6 +659,8 @@ if args.count >= 3, args[1] == "--gesture-eval" {
                 let fa = OpenToFists.fingers(f.squared), fb = OpenToFists.fingers(f.secondSquared)
                 if fa == [true, true, true, true], fb == [true, true, true, true], (p.palms ?? 0) > 1.5 { hits["twoOpen", default: 0] += 1 }
                 if fa == [false, false, false, false], fb == [false, false, false, false] { hits["twoFists", default: 0] += 1 }
+                if (fa == [false, false, false, false] && fb == [true, true, true, true]) ||
+                   (fa == [true, true, true, true] && fb == [false, false, false, false]) { hits["openAndFist", default: 0] += 1 }
             }
             if MirrorToggle.sees(f) { hits["ok", default: 0] += 1 }
             let j = f.squared
@@ -859,6 +868,10 @@ if args.count >= 2, args[1] == "--menu-check" {
     expect("Vision Settings holds the style, mirror, and speed",
            menu.items.first { $0.title == "\(GWConfig.name) Vision Settings" }?.submenu.map { m in
                ["Pointer:", "Quadrants:", "Hand Mirror", "Pointer Speed"].allSatisfy { k in m.items.contains { $0.title.contains(k) } } } ?? false)
+    let face = menu.items.first { $0.title == "\(GWConfig.name) Vision Settings" }?.submenu?.items.first { $0.title.hasPrefix("Face ID") }
+    expect("Vision Settings has a Face ID switch, matching the setting, off by default",
+           face != nil && face?.action != nil && face?.state == (FaceID.enabled ? .on : .off) &&
+           (UserDefaults.standard.object(forKey: FaceID.key) != nil || !FaceID.enabled))
     print(failures == 0 ? "All menu checks passed" : "\(failures) menu check(s) failed")
     exit(failures == 0 ? 0 : 1)
 }
@@ -1254,6 +1267,206 @@ if args.count >= 2, args[1] == "--test-control-center" {
     expect("CPU split adds up (user + system = busy)", abs(x.user + x.system - x.cpu) < 0.001)
     expect("memory split adds up to Memory Used", abs(x.app + x.wired + x.compressed - x.memUsed) < 1 && x.load.count == 3)
     print(failures == 0 ? "All control center checks passed" : "\(failures) control center check(s) failed")
+    exit(failures == 0 ? 0 : 1)
+}
+
+// Face ID: the hand-to-face rule, setup rules, and (given photo folders) the real model end to end.
+//   --test-faceid [lfw dir] [hagrid dir]
+// LFW: same person matches, different people do not. HaGRID: two gesture photos side by side, Face ID
+// on with the left person enrolled, read through VisionCamera.read: no right-hand hand may survive.
+if args.count >= 2, args[1] == "--test-faceid" {
+    var failures = 0
+    func expect(_ name: String, _ ok: Bool) { print((ok ? "PASS " : "FAIL ") + name); if !ok { failures += 1 } }
+    let face = CGRect(x: 0.45, y: 0.55, width: 0.12, height: 0.2)
+    let aspect: CGFloat = 16.0 / 9.0
+    let fw = face.width * aspect
+    let below = CGPoint(x: face.midX, y: face.midY - 1.8 * fw)
+    func hand(_ ratio: CGFloat) -> CGFloat { ratio * fw }
+    let owner = FaceID.Face(box: face, isOwner: true)
+    let farSide = CGPoint(x: face.midX + 2.0 * face.width, y: face.midY - 0.6 * fw)
+    expect("strict (someone else seen lately): a hand far out to the side is not counted", FaceID.owner(wrist: farSide, handSize: hand(0.6), faces: [owner], aspect: aspect, strict: true) == nil)
+    expect("relaxed (alone): the same hand out to the side still counts", FaceID.owner(wrist: farSide, handSize: hand(0.6), faces: [owner], aspect: aspect) == 0)
+    let strictClock = FaceMatcher()
+    _ = strictClock.remembered(100, current: [owner, FaceID.Face(box: face.offsetBy(dx: 0.42, dy: 0), isOwner: false)])
+    expect("strict for 10 s after someone else is seen, then relaxed", strictClock.isStrict(at: 109) && !strictClock.isStrict(at: 111))
+    let memory = FaceMatcher()
+    _ = memory.remembered(10, current: [FaceID.Face(box: face.offsetBy(dx: 0.42, dy: 0), isOwner: false)])
+    let later = memory.remembered(11, current: [owner])
+    expect("a stranger's face missed for a moment still claims their hands", later.count == 2 && later.contains { !$0.isOwner })
+    expect("a stranger's face is forgotten after 1.5 s", memory.remembered(12, current: [owner]).count == 1)
+    expect("a hand below one face belongs to it", FaceID.owner(wrist: below, handSize: hand(0.6), faces: [owner], aspect: aspect) == 0)
+    for corner in [CGPoint(x: 0.02, y: 0.02), CGPoint(x: 0.98, y: 0.02), CGPoint(x: 0.02, y: 0.98), CGPoint(x: 0.98, y: 0.98)] {
+        expect("alone: a hand at the frame corner \(corner) still counts (the whole frame is the zone)", FaceID.owner(wrist: corner, handSize: hand(0.6), faces: [owner], aspect: aspect) == 0)
+    }
+    expect("strict (someone else seen lately): a hand in the far corner is not counted", FaceID.owner(wrist: CGPoint(x: 0.02, y: 0.02), handSize: hand(0.6), faces: [owner], aspect: aspect, strict: true) == nil)
+    expect("two faces: a hand far from both belongs to nobody", FaceID.owner(wrist: CGPoint(x: 0.02, y: 0.02), handSize: hand(0.6), faces: [owner, FaceID.Face(box: face.offsetBy(dx: 0.42, dy: 0), isOwner: false)], aspect: aspect) == nil)
+    expect("a hand much bigger than the face (nearer the camera) is not that face's", FaceID.owner(wrist: below, handSize: hand(1.6), faces: [owner], aspect: aspect) == nil)
+    expect("a hand much smaller than the face (far behind) is not that face's", FaceID.owner(wrist: below, handSize: hand(0.15), faces: [owner], aspect: aspect) == nil)
+    let other = FaceID.Face(box: face.offsetBy(dx: 0.42, dy: 0), isOwner: false)   // 3.5 face widths apart, like two people side by side
+    let byOther = CGPoint(x: other.box.midX, y: other.box.midY - 1.8 * fw)
+    expect("with two faces, a hand under the other face is theirs", FaceID.owner(wrist: byOther, handSize: hand(0.6), faces: [owner, other], aspect: aspect) == 1)
+    expect("the other person's hand is not your", !FaceID.isOwners(wrist: byOther, handSize: hand(0.6), faces: [owner, other], aspect: aspect))
+    expect("your hand next to a stranger is still your", FaceID.isOwners(wrist: below, handSize: hand(0.6), faces: [owner, other], aspect: aspect))
+    let between = CGPoint(x: (face.midX + other.box.midX) / 2, y: below.y)
+    expect("a hand halfway between two faces belongs to nobody", FaceID.owner(wrist: between, handSize: hand(0.6), faces: [owner, other], aspect: aspect) == nil)
+    expect("no faces: no hand counts", !FaceID.isOwners(wrist: below, handSize: hand(0.6), faces: [], aspect: aspect))
+    expect("recognised: next face check only after 5 s", !FaceMatcher.isDue(now: 104.9, lastCheck: 100, recognised: true) && FaceMatcher.isDue(now: 105, lastCheck: 100, recognised: true))
+    expect("not recognised: checks again within 0.2 s", FaceMatcher.isDue(now: 100.2, lastCheck: 100, recognised: false))
+    expect("a match holds longer than one recheck", FaceID.hold > FaceID.recheckEvery)
+    expect("setup needs a solid handful of looks", FaceSetup.outcome(samples: FaceSetup.minimumSamples - 1) == .tooFew && FaceSetup.outcome(samples: FaceSetup.minimumSamples) == .saved)
+    expect("only one face may be you (overlap math)", abs(FaceMatcher.overlap(face, face) - 1) < 1e-6 && FaceMatcher.overlap(face, other.box) == 0)
+    guard let model = FaceAligner.loadModel() else {
+        expect("the fingerprint model loads", false); exit(1)
+    }
+    expect("the fingerprint model loads", true)
+    func load(_ p: String) -> CGImage? {
+        guard let s = CGImageSourceCreateWithURL(URL(fileURLWithPath: p) as CFURL, nil) else { return nil }
+        return CGImageSourceCreateImageAtIndex(s, 0, nil)
+    }
+    let fm = FileManager.default
+    if args.count >= 3, let names = try? fm.contentsOfDirectory(atPath: args[2]) {
+        // Ten people with 12+ photos: enroll 5, check the rest against themselves and everyone else.
+        let people = names.sorted().compactMap { n -> [String]? in
+            let f = ((try? fm.contentsOfDirectory(atPath: "\(args[2])/\(n)")) ?? []).filter { $0.hasSuffix(".jpg") }.sorted()
+            return f.count >= 12 ? f.prefix(12).map { "\(args[2])/\(n)/\($0)" } : nil
+        }.prefix(10)
+        var refs: [[Float]] = [], tests: [[[Float]]] = []
+        for files in people {
+            let prints = files.compactMap { load($0).flatMap { FaceAligner.prints(in: $0, model: model).max { $0.box.width < $1.box.width }?.print } }
+            refs.append(FaceID.mean(Array(prints.prefix(5))) ?? []); tests.append(Array(prints.dropFirst(5)))
+        }
+        var same = 0, sameOK = 0, diff = 0, diffBad = 0
+        for i in refs.indices { for j in tests.indices { for t in tests[j] {
+            let ok = FaceID.cosine(refs[i], t) >= FaceID.threshold
+            if i == j { same += 1; if ok { sameOK += 1 } } else { diff += 1; if ok { diffBad += 1 } }
+        } } }
+        print("  LFW: \(sameOK)/\(same) own photos matched, \(diffBad)/\(diff) other people matched")
+        expect("LFW: at least 97% of a person's own photos match", same > 0 && Double(sameOK) / Double(same) >= 0.97)
+        expect("LFW: no other person matches", diff > 0 && diffBad == 0)
+    } else { print("  (no LFW folder given: skipping the face-match check)") }
+    if args.count >= 4 {
+        // Side by side, enroll the left person from their own photo, run the real frame reader.
+        FaceID.testOverride = true
+        let cam = VisionCamera()
+        var paths: [String] = []
+        for d in ["palm", "one", "peace", "stop", "three", "four", "ok"] {
+            let dir = "\(args[3])/\(d)"
+            paths += ((try? fm.contentsOfDirectory(atPath: dir)) ?? []).filter { $0.hasSuffix(".jpg") }.sorted().prefix(30).map { "\(dir)/\($0)" }
+        }
+        // Relaxed (nobody else seen lately) and strict (someone else seen in the last 10 s).
+        for strict in [false, true] {
+        var pairs = 0, kept = 0, dropped = 0, leaked = 0
+        for i in stride(from: 0, to: paths.count - 1, by: 2) {
+            guard let a = load(paths[i]), let b = load(paths[i + 1]),
+                  let leftPrint = FaceAligner.prints(in: a, model: model).max(by: { $0.box.width < $1.box.width })?.print else { continue }
+            var pb: CVPixelBuffer?
+            CVPixelBufferCreate(nil, 1024, 512, kCVPixelFormatType_32BGRA, [kCVPixelBufferCGImageCompatibilityKey: true, kCVPixelBufferCGBitmapContextCompatibilityKey: true] as CFDictionary, &pb)
+            guard let pb else { continue }
+            CVPixelBufferLockBaseAddress(pb, [])
+            let ctx = CGContext(data: CVPixelBufferGetBaseAddress(pb), width: 1024, height: 512, bitsPerComponent: 8, bytesPerRow: CVPixelBufferGetBytesPerRow(pb),
+                                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)!
+            ctx.draw(a, in: CGRect(x: 0, y: 0, width: 512, height: 512)); ctx.draw(b, in: CGRect(x: 512, y: 0, width: 512, height: 512))
+            CVPixelBufferUnlockBaseAddress(pb, [])
+            let cam = VisionCamera()   // fresh per pair: no face memory carried between photos
+            cam.debugSetFace(reference: leftPrint)
+            cam.debugSetOtherSeen(strict ? CACurrentMediaTime() : -.infinity)
+            let f = cam.read(pb, faceNow: true)
+            guard f.face == .you else { continue }   // the left face was not found or did not match itself
+            pairs += 1
+            let wrists = f.hands.compactMap { $0.first ?? nil }
+            kept += wrists.filter { $0.x < 0.5 }.count
+            leaked += wrists.filter { $0.x >= 0.5 }.count
+            dropped += f.ignoredHands
+        }
+        let mode = strict ? "strict (someone else seen lately)" : "relaxed"
+        _ = mode
+        print("  HaGRID side by side, \(mode): \(pairs) pairs with the left face recognised; left hands kept \(kept), hands dropped \(dropped), right-person hands that got through \(leaked)")
+        if strict {
+            // A person whose face never shows (cut off at the seam) can still reach in beside the enrolled
+            // face; strict mode narrows that to at most 1 in 20 of what was dropped.
+            expect("strict: the other person's hands almost never get through (at most 1 in 20)", pairs >= 10 && leaked * 20 <= max(1, dropped))
+        } else {
+            // Alone, the whole frame is the zone: a second person whose face is never found (HaGRID cuts
+            // it at the seam) gets through until their face is seen once, which turns strict mode on.
+            // So here only the enrolled person's hands are checked; strict mode carries the leak check.
+            expect("relaxed: the enrolled person's hands still drive", pairs >= 10 && kept >= pairs * 3 / 4)
+        }
+        expect("\(strict ? "strict" : "relaxed"): the other person's hands are dropped", dropped >= pairs / 2)
+        }
+        // Cost: one 1280x720 frame through the real reader, hands only vs hands plus a face check.
+        if let a = load(paths[0]) {
+            var pb: CVPixelBuffer?
+            CVPixelBufferCreate(nil, 1280, 720, kCVPixelFormatType_32BGRA, [kCVPixelBufferCGImageCompatibilityKey: true, kCVPixelBufferCGBitmapContextCompatibilityKey: true] as CFDictionary, &pb)
+            if let pb {
+                CVPixelBufferLockBaseAddress(pb, [])
+                let ctx = CGContext(data: CVPixelBufferGetBaseAddress(pb), width: 1280, height: 720, bitsPerComponent: 8, bytesPerRow: CVPixelBufferGetBytesPerRow(pb),
+                                    space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)!
+                ctx.draw(a, in: CGRect(x: 280, y: 0, width: 720, height: 720))
+                CVPixelBufferUnlockBaseAddress(pb, [])
+                let cam = VisionCamera()
+                cam.debugSetFace(reference: FaceAligner.prints(in: a, model: model).first?.print)
+                func cpu(_ n: Int, _ body: () -> Void) -> Double {
+                    body(); let c0 = clock(); for _ in 0..<n { body() }
+                    return Double(clock() - c0) / Double(CLOCKS_PER_SEC) / Double(n) * 1000
+                }
+                FaceID.testOverride = false
+                let plain = cpu(30) { _ = cam.read(pb) }
+                FaceID.testOverride = true
+                let check = cpu(30) { _ = cam.read(pb, faceNow: true) }
+                let frames = Int(FaceID.recheckEvery * 30)
+                let extra = (check - plain) / Double(frames)
+                print(String(format: "  cost per frame: hands %.1f ms CPU; a face check adds %.1f ms; at one check every %.0f s (%d frames) that is %.2f ms a frame (about %.1f%% of a core at 30 fps)",
+                             plain, check - plain, FaceID.recheckEvery, frames, extra, extra * 30 / 10))
+                expect("a face check every 5 s costs under 1% of a core at 30 fps", extra * 30 / 1000 < 0.01)
+            }
+        }
+        FaceID.testOverride = nil
+    } else { print("  (no HaGRID folder given: skipping the side-by-side check)") }
+    print(failures == 0 ? "All Face ID checks passed" : "\(failures) Face ID check(s) failed")
+    exit(failures == 0 ? 0 : 1)
+}
+
+// Draws the notch badges (style on the left, lock on the right) on a menu-bar strip to a PNG, and
+// checks when and where they show.
+if args.count >= 3, args[1] == "--render-notch-badges" {
+    var failures = 0
+    func expect(_ name: String, _ ok: Bool) { print((ok ? "PASS " : "FAIL ") + name); if !ok { failures += 1 } }
+    expect("shows while Vision is on", NotchBadge.visible(modeOn: true))
+    expect("hidden while Vision is off", !NotchBadge.visible(modeOn: false))
+    expect("closed lock while locked", NotchBadge.lockSymbol(locked: true) == "lock.fill")
+    expect("open lock once unlocked", NotchBadge.lockSymbol(locked: false) == "lock.open.fill")
+    expect("pointer arrow in the pointer style", NotchBadge.styleSymbol(.pointer) == "cursorarrow")
+    expect("grid in Quadrants", NotchBadge.styleSymbol(.quadrants) == "square.grid.2x2.fill")
+    let badge = NotchBadge(side: .left)
+    badge.set(false, symbol: NotchBadge.styleSymbol(.quadrants), label: "", notch: nil)
+    expect("badge tracks a switch to Quadrants", badge.symbol == "square.grid.2x2.fill")
+    badge.set(false, symbol: NotchBadge.styleSymbol(.pointer), label: "", notch: nil)
+    expect("badge tracks a switch back to the pointer", badge.symbol == "cursorarrow")
+    let notch = NSRect(x: 660, y: 1050, width: 190, height: 32)
+    let r = NotchBadge.frame(notch: notch, menuBar: 24, side: .right)
+    let l = NotchBadge.frame(notch: notch, menuBar: 24, side: .left)
+    expect("lock sits just right of the notch", r.minX > notch.maxX && r.minX - notch.maxX < 12)
+    expect("style sits just left of the notch", l.maxX < notch.minX && notch.minX - l.maxX < 12)
+    expect("both centred in the menu bar", abs(r.midY - notch.midY) <= 1 && r.maxY <= notch.maxY && l.midY == r.midY)
+    let symbols = ["cursorarrow", "square.grid.2x2.fill", "lock.fill", "lock.open.fill", NotchBadge.notYouSymbol]
+    expect("every glyph loads", symbols.allSatisfy { NotchBadge.image($0) != nil })
+    // Two strips: pointer and locked, then Quadrants and unlocked.
+    let size = NSSize(width: 360, height: 72)
+    let img = NSImage(size: size)
+    img.lockFocus()
+    NSColor(white: 0.12, alpha: 1).setFill(); NSRect(origin: .zero, size: size).fill()
+    for (row, pair) in [(1, ("cursorarrow", "lock.fill")), (0, ("square.grid.2x2.fill", "lock.open.fill"))] {
+        let n = NSRect(x: 85, y: CGFloat(row) * 40, width: 190, height: 32)
+        NSColor.black.setFill(); NSBezierPath(roundedRect: NSRect(x: n.minX, y: n.minY, width: n.width, height: n.height + 8), xRadius: 8, yRadius: 8).fill()
+        for (sym, side) in [(pair.0, NotchBadge.Side.left), (pair.1, .right)] {
+            if let g = NotchBadge.image(sym) { g.draw(in: NotchBadge.glyphRect(g.size, in: NotchBadge.frame(notch: n, menuBar: 24, side: side))) }
+        }
+    }
+    img.unlockFocus()
+    if let tiff = img.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff) {
+        try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: args[2]))
+    }
+    print(failures == 0 ? "All notch badge checks passed" : "\(failures) notch badge check(s) failed")
     exit(failures == 0 ? 0 : 1)
 }
 

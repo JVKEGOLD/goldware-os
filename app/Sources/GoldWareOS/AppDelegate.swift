@@ -626,7 +626,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: Assistant (Right Command)
 
-    /// Lock Up, from the spoken phrase or the Vision hand gesture: close every terminal.
+    /// Lock Up, from the spoken phrase or the Vision hand gesture: close every Hermes terminal.
     private func lockUp() async {
         await MainActor.run { self.hud.show("Locking up…", orb: .connecting, tint: .assistant) }
         let (closed, error) = await Task.detached { TerminalCommands.lockUp() }.value
@@ -893,7 +893,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         mode.state = vision.modeOn ? .on : .off
         menu.addItem(mode)
         let visionMenu = NSMenu()
-        for (title, style) in [("   Pointer: point, pinch, fist to dictate", HandControl.Style.pointer),
+        for (title, style) in [("   Pointer: point, pinch to click, pinch and move to scroll", HandControl.Style.pointer),
                                ("   Quadrants: 1 to 4 fingers dictate into that quarter", .quadrants)] {
             let mi = item(title, #selector(chooseVisionStyle(_:)))
             mi.representedObject = style.rawValue
@@ -903,6 +903,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let mirror = item("Hand Mirror (point behind the camera notch)", #selector(toggleMirror))
         mirror.state = VisionController.mirrorEnabled ? .on : .off
         visionMenu.addItem(mirror)
+        let face = item(FaceID.menuTitle, #selector(toggleFaceID))
+        face.state = FaceID.enabled ? .on : .off
+        visionMenu.addItem(face)
+        if FaceID.isEnrolled {
+            visionMenu.addItem(item("   Set Up Face ID Again…", #selector(setUpFaceID)))
+            visionMenu.addItem(item("   Forget My Face", #selector(forgetFace)))
+        }
         let speed = NSMenu()
         for (label, base) in [("Relaxed", 0.7), ("Normal", 1.0), ("Fast", 1.4)] {
             let mi = item(label, #selector(chooseHandSpeed(_:)))
@@ -912,18 +919,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         visionMenu.addItem(submenu("Pointer Speed", speed))
         for (title, lines) in [
-            ("VISION MODE", ["Press ⌘⌥ together and let go: Vision on or off", "Starts locked until your unlock gesture", "Thumbs up, held: lock again", "OK sign, held: hide or show the mirror",
+            ("VISION MODE", ["Press ⌘⌥ together and let go: Vision on or off", "Starts locked until your unlock gesture (gold lock right of the notch opens when unlocked; left: arrow pointer, grid Quadrants)", "Thumbs up, held: lock again", "OK sign, held: hide or show the mirror", "Face ID on: only your hands drive (the lock shows a crossed-out person when you are not seen)",
                              "Say \"turn on Vision Mode\" with Right Command",
                              "Say \"Finish up\": every Hermes wraps up and commits",
-                             "Say \"Lock up\": close every terminal",
+                             "Say \"Lock up\": close idle terminals, keep working agents",
+                             "Say \"Clear out\": close Hermes terminals you haven't written in",
                              "Point with your index finger: move the pointer like a trackpad",
-                             "Thumb far from index: fast. Thumb close: slow and precise", "Pinch thumb to index: click",
-                             "Pinch twice quickly: double-click", "Pinch and move: drag",
-                             "Two fingers tilted up or down: scroll, steeper is faster (flat pauses)", "Open hand: nothing, rest here",
-                             "Fist, held: dictate with \(GWConfig.name) Voice. Open your hand to paste",
+                             "Thumb far from index: fast. Thumb close: slow and precise", "Pinch and let go: click",
+                             "Pinch twice quickly: double-click", "Pinch, hold, and move: scroll (the page follows your hand; let go mid-move to fling)",
+                             "Open hand or fist: nothing, rest here",
                              "Your unlock gesture after a paste: press Return to send it",
                              "Pinky alone, held: clear what was just pasted",
                              "Both hands open, then both fists: Lock Up (close every terminal)",
+                             "Both hands open, then one fist: Clear Out (close unused Hermes terminals)",
                              "Four fingers (thumb folded in), held: switch to Quadrants"]),
             ("QUADRANTS", ["Hold up 1 to 4 fingers: pick that quarter of the screen",
                            "1 top left, 2 top right, 3 bottom left, 4 bottom right",
@@ -1015,7 +1023,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func announceVisionMode() {
         let text = !vision.modeOn ? "Vision Mode off. Camera is off."
             : HandControl.style == .quadrants ? "Quadrants on. Hold up 1 to 4 fingers to dictate into that quarter of the screen."
-            : "Vision Mode on. Point to move, pinch to click, make a fist to dictate."
+            : "Vision Mode on. Point to move, pinch to click, pinch and move to scroll."
         hud.show(text, orb: .breathing, tint: .assistant, autoHide: 2.5)
     }
 
@@ -1026,6 +1034,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func toggleMirror() {
         VisionController.mirrorEnabled.toggle()
     }
+
+    /// Turning Face ID on with no face saved runs setup first; it switches on only once setup succeeds.
+    @objc private func toggleFaceID() {
+        if FaceID.enabled { FaceID.enabled = false; vision.camera.reloadFace(); hud.show("Face ID is off. Any hand drives Vision.", orb: .breathing, tint: .assistant, autoHide: 3); return }
+        if FaceID.isEnrolled { FaceID.enabled = true; vision.camera.reloadFace(); hud.show("Face ID is on. Only your hands drive Vision.", orb: .breathing, tint: .assistant, autoHide: 3) }
+        else { vision.setUpFaceID() }
+    }
+
+    @objc private func setUpFaceID() { vision.setUpFaceID() }
+    @objc private func forgetFace() { vision.forgetFace() }
 
     @objc private func toggleCleanup() {
         cleanupEnabled.toggle()
@@ -1161,9 +1179,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         wake.setActive(WakeWord.enabled && !isRecording && !isBusy)
     }
 
-    /// A held fist in Vision Mode works like holding Right Option: dictate into the app in front.
-    /// Only a recording the fist started is finished by the fist, so the keys are never cut off.
-    private var fistRecording = false
+    /// A Quadrant dictation works like holding Right Option: dictate into the window it picked.
+    /// Only a recording the hand started is finished by the hand, so the keys are never cut off.
+    private var handRecording = false
     /// The last hand-started dictation that pasted: which app, when, and how long. Only that paste can be
     /// sent or cleared, and only while it is still the last thing typed there.
     struct LastPaste { var pid: pid_t; var at: Date; var length: Int }
@@ -1187,10 +1205,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if start {
             guard !isRecording, !isBusy, wake.state != .capturing else { return }
             startRecording(.dictate)   // records the app in front; Quadrant Dictation brings its window forward first
-            fistRecording = isRecording
+            handRecording = isRecording
             handDictating = isRecording
-        } else if fistRecording {
-            fistRecording = false
+        } else if handRecording {
+            handRecording = false
             if isRecording && recordingMode == .dictate && !handsFree { finishRecording() }
         }
     }

@@ -508,7 +508,7 @@ class TestHardening(ServerCase):
         with open(os.path.join(REPO, "dashboard", "index.html"), encoding="utf-8") as f:
             html = f.read()
         import re
-        for g in ("scan", "file", "point", "pinch", "fist", "open", "lock"):
+        for g in ("scan", "file", "point", "pinch", "scroll", "open", "lock"):
             self.assertRegex(html, r'data-gesture="%s"><div class="gicon"><svg class="hand-art"' % g, g)
         # 7 cards plus one hand per quadrant
         self.assertEqual(len(re.findall(r'<svg class="hand-art"', html)), 11)
