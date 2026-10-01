@@ -968,6 +968,11 @@ if args.count >= 2, args[1] == "--test-quadrants" {
     expect("quadrants tile the screen without overlap", r[0].maxX == r[1].minX && r[2].maxY == r[0].minY &&
            !r[0].intersects(r[3]) && r[0].width == r[3].width)
     expect("1 is top left and 4 is bottom right", r[0].minX < r[1].minX && r[0].minY > r[2].minY && r[3].minX > r[2].minX)
+    expect("without Accessibility the message says to turn it on, not that there is no text box",
+           QuadrantDictation.noTargetMessage(trusted: false, app: nil).contains("Accessibility"))
+    expect("an empty quadrant and a window without a text box read differently",
+           QuadrantDictation.noTargetMessage(trusted: true, app: nil) == "No window here" &&
+           QuadrantDictation.noTargetMessage(trusted: true, app: "Notes") == "No text box found in Notes")
     print("Accessibility: \(AXIsProcessTrusted() ? "granted" : "not granted (window lookup needs it)")")
     for q in 1...4 {
         let t = QuadrantTarget.find(q)

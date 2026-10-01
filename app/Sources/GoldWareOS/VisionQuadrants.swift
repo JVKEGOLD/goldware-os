@@ -166,7 +166,7 @@ final class QuadrantDictation: VisionDriver {
         guard progress >= 1, !dryRun else { return }
         guard let target, target.focus() else {
             Sounds.play(.error)
-            overlay.flash(quadrant: n, frame: QuadrantTarget.rect(n), text: "No window with a text box here")
+            overlay.flash(quadrant: n, frame: QuadrantTarget.rect(n), text: Self.noTargetMessage(trusted: AXIsProcessTrusted(), app: target?.appName))
             blocked = n
             candidate = nil
             phase = .idle
@@ -246,6 +246,16 @@ final class QuadrantDictation: VisionDriver {
 /// tell apart windows of one app that share a frame (two Terminals stacked in a quadrant).
 @_silgen_name("_AXUIElementGetWindow")
 private func _AXUIElementGetWindow(_ element: AXUIElement, _ id: UnsafeMutablePointer<CGWindowID>) -> AXError
+
+extension QuadrantDictation {
+    /// Why a quadrant could not be dictated into. Without Accessibility no window can be read at all,
+    /// which after a rebuild (an ad-hoc signed app loses its permissions) looks like an empty screen.
+    static func noTargetMessage(trusted: Bool, app: String?) -> String {
+        guard trusted else { return "Turn on Accessibility for \(GWConfig.name): System Settings > Privacy & Security" }
+        guard let app else { return "No window here" }
+        return "No text box found in \(app)"
+    }
+}
 
 /// The window in a quadrant and the text box inside it, found through Accessibility.
 struct QuadrantTarget {
