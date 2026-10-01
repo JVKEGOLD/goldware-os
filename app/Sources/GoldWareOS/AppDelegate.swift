@@ -453,7 +453,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         recordingURL = url
         recordingMode = mode
         isRecording = true
-        sendable = nil   // a new recording replaces what the two-hand gesture could send
+        sendable = nil   // a new recording replaces what the swipe could send
         handDictating = false; sendPending = false; clearPending = false
         syncWake()
         setIcon(recording: true)
@@ -985,7 +985,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                              "Thumb far from index: fast. Thumb close: slow and precise", "Pinch and let go: click",
                              "Pinch twice quickly: double-click", "Pinch, hold, and move: scroll (the page follows your hand; let go mid-move to fling)",
                              "Open hand or fist: nothing, rest here",
-                             "After a paste, shaka (thumb and pinky out), held half a second: press Return to send it. The two-hand diamond, then let go, still works",
+                             "After a paste, swipe an open hand to your left: press Return to send it",
                              "Pinky alone, held: clear what was just pasted",
                              "Both hands thumb, index, middle; thumbs touch, pull apart: Let's work",
                              "Both hands open, then both fists: Lock Up (close every terminal)",
@@ -995,7 +995,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                            "1 top left, 2 top right, 3 bottom left, 4 bottom right",
                            "Keep them up: \(GWConfig.name) opens that window's text box and listens",
                            "Lower your hand: \(GWConfig.name) pastes into that text box",
-                           "After a paste, shaka (thumb and pinky out), held half a second: press Return to send it",
+                           "After a paste, swipe an open hand to your left: press Return to send it",
                            "Pinky alone, held: clear what was just pasted",
                            "Switching in snaps every window into the corners",
                            "Holding a count brings that corner's window to the front",
@@ -1271,7 +1271,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    /// The two-hand gesture in Quadrants: press Return in the window the last hand dictation pasted into,
+    /// The swipe to the left (pointer and Quadrants): press Return in the window the last hand dictation pasted into,
     /// so the message sends. Only within two minutes of that paste, only once, and only if that app is
     /// still in front, so the gesture never presses Return somewhere it was not meant for.
     private func visionSend() {

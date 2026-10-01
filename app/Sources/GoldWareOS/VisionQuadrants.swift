@@ -15,8 +15,8 @@ final class QuadrantDictation: VisionDriver {
     var onSwitchStyle: ((HandControl.Style) -> Void)?
     /// A quadrant's window was brought to the front (reported in dry runs too, for the self-test).
     var onRaise: ((Int) -> Void)?
-    /// The two-hand gesture after a dictation pasted: press Return in that window. The app decides
-    /// whether there is something to send.
+    /// An open hand swept to your left after a dictation pasted: press Return in that window. The app
+    /// decides whether there is something to send.
     var onSend: (() -> Void)?
     /// The pinky alone, held: clear what the last hand dictation pasted.
     var onClear: (() -> Void)?
@@ -38,10 +38,7 @@ final class QuadrantDictation: VisionDriver {
     private var unblockSince: CFTimeInterval?
     private var switchHold = HeldGesture()
     private var clearHold = HeldGesture()
-    private var send = SendGesture()
-    /// The shaka held half a second sends, like the diamond (see HandControl).
-    private var shakaHold = HeldGesture(seconds: 0.5)
-    private var shakaSent = false
+    private var swipe = SwipeSend()
     private var resting = false
     /// Last frame's fingers, so a finger at the line does not flicker (see `HandGesture.extended`).
     private var lastFingers: [Bool]?
@@ -54,9 +51,7 @@ final class QuadrantDictation: VisionDriver {
 
     var status: String {
         if switchHold.isHolding { return "OPEN HAND · BACK TO POINTER" }
-        if shakaHold.isHolding { return "SHAKA · SEND" }
         if clearHold.isHolding { return "PINKY · CLEAR" }
-        if send.inProgress { return "SEND" + String(repeating: " ·", count: send.steps) }
         switch phase {
         case .idle: return resting ? "QUADRANTS · RESTING" : "QUADRANTS"
         case .choosing(let q): return "QUADRANT \(q)"
@@ -72,9 +67,7 @@ final class QuadrantDictation: VisionDriver {
         unblockSince = nil
         switchHold.reset()
         clearHold.reset()
-        shakaHold.reset()
-        shakaSent = false
-        send.reset()
+        swipe.reset()
         lastFingers = nil
     }
 
@@ -91,23 +84,25 @@ final class QuadrantDictation: VisionDriver {
         if case .dictating(let q) = phase {
             // While talking the thumb is ignored, so a thumb drifting out neither ends it nor switches modes.
             // A one-frame misread keeps going; the fingers have to be really down to finish.
-            // A shaka (one finger up, like quadrant 1) is the send, so it ends the dictation too.
-            if e.map({ $0.fingers.filter { $0 }.count }) == q, !HandGesture.isShaka(f.squared, last: e?.fingers) { goneSince = nil; return }
+            if e.map({ $0.fingers.filter { $0 }.count }) == q { goneSince = nil; return }
             if goneSince == nil { goneSince = now }
             if now - (goneSince ?? now) >= 0.3 { finish() }
             return
         }
 
-        // The two-hand send (the diamond, then let go) presses Return on what was just pasted. While it
-        // is underway nothing else reads the hands, and two hands close together never count as fingers
-        // or an open hand.
-        if send.feed(f) {
+        // An open hand swept to your left presses Return on what was just pasted. While the hand is
+        // moving sideways fast it picks nothing, and two hands close together never count as fingers or
+        // an open hand.
+        let openNow = (e?.fingers.filter { $0 }.count ?? 0) >= 3
+        if swipe.feed(f.lead[.wrist], open: openNow, at: now) {
             cancelChoice()
+            switchHold.reset()
             onSend?()
             return
         }
-        if send.inProgress || (f.pair?.palms ?? 9) < 2.5 {
+        if swipe.moving(at: now) || (f.pair?.palms ?? 9) < 2.5 {
             cancelChoice()
+            switchHold.reset()
             return
         }
 
@@ -124,24 +119,8 @@ final class QuadrantDictation: VisionDriver {
             break
         }
 
-        // The shaka, held: send what was just dictated (it is never a quadrant: the pinky alone picks none).
-        if e?.fingers != [false, false, false, true] { shakaSent = false }
-        switch shakaHold.update(HandGesture.isShaka(f.squared, last: e?.fingers), now: now) {
-        case .fired:
-            shakaSent = true
-            clearHold.reset()
-            cancelChoice()
-            onSend?()
-            return
-        case .holding:
-            clearHold.reset()
-            cancelChoice()
-            return
-        case .idle:
-            break
-        }
         // The pinky alone, held: clear what was just pasted (never quadrant 1, see `quadrant`).
-        switch clearHold.update(!shakaSent && HandGesture.isPinky(f.squared, last: e?.fingers), now: now) {
+        switch clearHold.update(HandGesture.isPinky(f.squared, last: e?.fingers), now: now) {
         case .fired:
             cancelChoice()
             onClear?()

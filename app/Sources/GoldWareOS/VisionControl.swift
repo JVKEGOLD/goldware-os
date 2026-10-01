@@ -66,39 +66,48 @@ struct TwoHandGesture {
     }
 }
 
-/// Send (pointer and Quadrants): the diamond (index tips touching, thumb tips touching, palms apart),
-/// held 0.2 s, then the tips let go. It never goes through praying hands: closing the diamond into
-/// prayer is the lock instead, so prayer calls a send off. The release counts once the tips read apart,
-/// or once they have not read close for 0.25 s (a fingertip lost as the hands part). Hands still
-/// touching at the tips while the palms close toward prayer are not a release.
-struct SendGesture {
-    private var diamondSince: CFTimeInterval?
-    private var diamondAt: CFTimeInterval?       // last frame of the diamond
-    private var closeAt: CFTimeInterval?         // last frame both tip pairs were still close
+/// Send (pointer and Quadrants): an open hand swept to your left, as you see it in the mirror (the
+/// camera image is not mirrored, so that is toward larger x in Vision's points). It counts when the
+/// wrist travels `distance` of the frame width leftward within `within` seconds, mostly sideways, with
+/// three or more fingers up for most of the way: a pointing hand or a pinch never sends, so moving the
+/// pointer left or flinging a scroll cannot. After a send it rests `quiet` seconds, so bringing the
+/// hand back cannot count as another.
+struct SwipeSend {
+    static let distance: CGFloat = 0.18
+    static let within: CFTimeInterval = 0.5
+    static let quiet: CFTimeInterval = 1.0
+    private var trail: [(t: CFTimeInterval, x: CGFloat, y: CGFloat, open: Bool)] = []
+    private var quietUntil: CFTimeInterval = 0
 
-    /// 0 or 1 step done, for the footer's dot.
-    private(set) var steps = 0
-    var inProgress: Bool { steps > 0 }
+    mutating func reset() { trail = [] }
 
-    mutating func reset() { diamondSince = nil; diamondAt = nil; closeAt = nil; steps = 0 }
-
-    /// Feeds one frame; true on the frame the tips let go.
-    mutating func feed(_ f: VisionFrame) -> Bool {
-        let t = f.time
-        let pair = f.pair
-        if pair?.together == true { reset(); return false }
-        if let p = pair, p.diamond {
-            if diamondSince == nil { diamondSince = t }
-            diamondAt = t
-        } else if let at = diamondAt, t - at > 1.0 {
-            reset()
+    /// Feeds the lead hand's wrist (nil when no hand) and whether it is open; true on the frame it sends.
+    mutating func feed(_ wrist: CGPoint?, open: Bool, at t: CFTimeInterval) -> Bool {
+        trail.removeAll { t - $0.t > Self.within }
+        guard let w = wrist else { return false }
+        // Mirrored, as in the preview: smaller is further to your left.
+        let x = 1 - w.x
+        trail.append((t, x, w.y, open))
+        guard t >= quietUntil else { return false }
+        for (k, p) in trail.enumerated() {
+            let dx = p.x - x, dy = abs(w.y - p.y)
+            guard dx >= Self.distance, dy <= dx * 0.6 else { continue }
+            let span = trail[k...]
+            guard span.filter(\.open).count * 3 >= span.count * 2 else { continue }
+            trail = []
+            quietUntil = t + Self.quiet
+            return true
         }
-        if let p = pair, (p.index ?? 9) < 0.6, (p.thumb ?? 9) < 0.6 { closeAt = t }
-        let held = diamondSince.map { since in diamondAt.map { $0 - since >= 0.2 } ?? false } ?? false
-        steps = held ? 1 : 0
-        guard held, let at = closeAt ?? diamondAt, pair?.apart == true || t - at >= 0.25 else { return false }
-        reset()
-        return true
+        return false
+    }
+
+    /// The hand is travelling sideways quickly (part of a swipe, or settling after one), so other
+    /// gestures should not read it as a held shape.
+    func moving(at t: CFTimeInterval) -> Bool {
+        if t < quietUntil { return true }
+        let recent = trail.filter { t - $0.t <= 0.2 }
+        guard let a = recent.first, let b = recent.last else { return false }
+        return abs(b.x - a.x) >= 0.08
     }
 }
 
@@ -300,8 +309,7 @@ struct MirrorToggle {
 /// A pose that has to be held to count, riding out brief misreads (a thumb flickering in or out).
 struct HeldGesture {
     enum Result { case idle, holding, fired }
-    init(seconds: Double = 0.8) { self.seconds = seconds }
-    var seconds = 0.8
+    static let seconds = 0.8
     private var since: CFTimeInterval?
     private var lastSeen: CFTimeInterval = 0
     var isHolding: Bool { since != nil }
@@ -313,7 +321,7 @@ struct HeldGesture {
         if seen {
             lastSeen = now
             if since == nil { since = now }
-            if let s = since, s > 0, now - s >= seconds { since = -1; return .fired }
+            if let s = since, s > 0, now - s >= Self.seconds { since = -1; return .fired }
             return since == -1 ? .idle : .holding
         }
         guard since != nil else { return .idle }
@@ -359,7 +367,7 @@ final class HandControl: VisionDriver {
     enum Pose: String { case none = "NO HAND", track = "POINTING", pinch = "PINCHED", scroll = "SCROLLING",
                          open = "OPEN HAND", other = "RESTING", switching = "FOUR FINGERS · TO QUADRANTS",
                          letsWork = "LET'S WORK · PULL APART", lockUp = "TWO HANDS · FISTS LOCK UP · ONE FIST CLEARS OUT",
-                         clear = "PINKY · CLEAR", shaka = "SHAKA · SEND" }
+                         clear = "PINKY · CLEAR", swipe = "SWIPE LEFT · SEND" }
 
     private(set) var pose: Pose = .none {
         didSet { if pose != oldValue { PoseLog.shared.write("\(oldValue.rawValue) -> \(pose.rawValue)  \(diag)") } }
@@ -368,7 +376,6 @@ final class HandControl: VisionDriver {
     /// index tip in hand sizes.
     private var diag = ""
     var status: String {
-        if send.inProgress { return "VISION MODE · SEND" + String(repeating: " ·", count: send.steps) }
         let speed = pose == .track ? String(format: " · %.1f×", gain) : ""
         return "VISION MODE · " + pose.rawValue + speed
     }
@@ -387,18 +394,13 @@ final class HandControl: VisionDriver {
     /// Both hands open, then one fist: Clear Out (close the Hermes terminals nobody wrote in).
     var onClearOut: (() -> Void)?
     private var openToFists = OpenToFists()
-    /// The two-hand gesture after a hand dictation pasted: press Return there (as in Quadrants).
+    /// An open hand swept to your left after a hand dictation pasted: press Return there (as in Quadrants).
     var onSend: (() -> Void)?
-    private var send = SendGesture()
+    private var swipe = SwipeSend()
     /// The pinky alone, held: clear what was just pasted.
     var onClear: (() -> Void)?
     private var clearHold = HeldGesture()
     private var switchHold = HeldGesture()
-    /// The shaka held half a second sends, like the diamond.
-    private var shakaHold = HeldGesture(seconds: 0.5)
-    /// Set once the shaka sends, until the hand leaves the little-finger shape: tucking the thumb to
-    /// lower it reads as the pinky clear, which must not undo the send.
-    private var shakaSent = false
     /// Last frame's fingers, so a finger at the line does not flicker (see `HandGesture.extended`).
     private var lastFingers: [Bool]?
     /// For `--test-hand`: when set, pointer moves are reported here instead of posted, and the pointer
@@ -452,9 +454,7 @@ final class HandControl: VisionDriver {
     func stop() {
         switchHold.reset()
         clearHold.reset()
-        shakaHold.reset()
-        shakaSent = false
-        send.reset()
+        swipe.reset()
         lastFingers = nil
         pinched = false
         pose = .none
@@ -528,15 +528,16 @@ final class HandControl: VisionDriver {
         let frameDt = CGFloat(max(1.0 / 120, min(0.2, now - lastFrameAt)))
         lastFrameAt = now
         frameGap += (min(frameDt, 0.1) - frameGap) * 0.2
-        // The two-hand gesture sends what was just dictated. It goes first (it can finish with no
-        // hand in view), and while it is underway nothing else reads the hands.
-        let sent = send.feed(frame)
-        if sent || send.inProgress {
+        // An open hand swept to your left sends what was just dictated. A pointing hand or a pinch
+        // never counts, so moving the pointer or flinging a scroll leftward cannot send.
+        let openNow = !pinched && (HandGesture.extended(frame.lead, last: lastFingers)?.fingers.filter { $0 }.count ?? 0) >= 3
+        if swipe.feed(frame.lead[.wrist], open: openNow, at: now) {
             dropPinch()
             switchHold.reset()
-            pose = .other
+            clearHold.reset()
             resetMotion()
-            if sent { onSend?() }
+            pose = .swipe
+            onSend?()
             return
         }
         let j = frame.lead
@@ -621,27 +622,8 @@ final class HandControl: VisionDriver {
         case .idle:
             break
         }
-        // The shaka, held: send what was just dictated. While it is up the pinky clear cannot run, so a
-        // thumb flickering in mid-shaka never clears what was just sent.
-        if ext != [false, false, false, true] { shakaSent = false }
-        switch shakaHold.update(!pinched && HandGesture.isShaka(frame.squared, last: ext), now: now) {
-        case .fired:
-            shakaSent = true
-            clearHold.reset()
-            resetMotion()
-            pose = .shaka
-            onSend?()
-            return
-        case .holding:
-            clearHold.reset()
-            resetMotion()
-            pose = .shaka
-            return
-        case .idle:
-            break
-        }
         // The pinky alone, held: clear what was just pasted. It already moves nothing (not a point).
-        switch clearHold.update(!pinched && !shakaSent && HandGesture.isPinky(frame.squared, last: ext), now: now) {
+        switch clearHold.update(!pinched && HandGesture.isPinky(frame.squared, last: ext), now: now) {
         case .fired:
             resetMotion()
             pose = .clear

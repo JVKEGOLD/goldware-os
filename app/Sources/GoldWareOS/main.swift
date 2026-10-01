@@ -327,66 +327,64 @@ if args.count >= 2, args[1] == "--test-hand" {
     var soloOK = VisionFrame(); soloOK.lead = ok
     expect("an OK with the other hand close by (praying) does not toggle the mirror",
            "\(MirrorToggle.sees(soloOK)) \(MirrorToggle.sees(prayingOK))", "true false")
-    // Quadrants: the same two-hand gesture sends (presses Return). Its open palms never pick a quadrant,
-    // count as an open hand, or start a dictation.
-    let qsend = QuadrantDictation()
-    qsend.dryRun = true
-    var sends = 0, dictations: [Bool] = [], picked = Set<String>(), switchedBack: [HandControl.Style] = []
-    qsend.onSend = { sends += 1 }
-    qsend.onDictate = { dictations.append($0) }
-    qsend.onSwitchStyle = { switchedBack.append($0) }
-    func feedQ2(_ hands: (HandGesture.Joints, HandGesture.Joints)?, _ seconds: Double, one: HandGesture.Joints? = nil) {
-        let end = t + seconds
-        while t < end {
-            var f = VisionFrame(); f.time = t
-            if let h = hands { f.lead = h.0; f.second = h.1 } else if let one { f.lead = one }
-            qsend.handle(f)
-            if case .choosing(let n) = qsend.phase { picked.insert("\(n)") }
+    // Send: an open hand swept to the user's left (toward larger x in the unmirrored camera image),
+    // in both styles. Pointing, fists, slow drifts, rightward or vertical sweeps never send.
+    func shifted(_ j: HandGesture.Joints, _ dx: CGFloat, _ dy: CGFloat = 0) -> HandGesture.Joints {
+        j.mapValues { CGPoint(x: $0.x + dx, y: $0.y + dy) }
+    }
+    let pointing = hand([true, false, false, false], thumb: "in")
+    for style in ["pointer", "quadrants"] {
+        let pc = HandControl(), qc = QuadrantDictation()
+        qc.dryRun = true
+        var sent = 0, moved = 0, picked = Set<Int>(), dictated: [Bool] = [], switched: [HandControl.Style] = []
+        pc.onSend = { sent += 1 }; qc.onSend = { sent += 1 }
+        pc.dryRun = { _ in moved += 1 }
+        qc.onDictate = { dictated.append($0) }; qc.onSwitchStyle = { switched.append($0) }; pc.onSwitchStyle = { switched.append($0) }
+        func run(_ j: HandGesture.Joints?) {
+            var f = VisionFrame(); f.time = t; if let j { f.lead = j }
+            if style == "pointer" { pc.handle(f) } else { qc.handle(f); if case .choosing(let n) = qc.phase { picked.insert(n) } }
             t += 1.0 / 30
         }
-    }
-    feedQ2(nil, 0.5, one: fist)
-    feedQ2(diamond, 0.6)
-    expect("in Quadrants, the diamond held does not send yet", "\(sends) \(qsend.status)", "0 SEND ·")
-    feedQ2(letGo, 0.2)
-    expect("letting go of the diamond sends, no praying first", "\(sends)", "1")
-    feedQ2(nil, 1.5, one: fist)
-    expect("the gesture's open palms never pick a quadrant, dictate, or switch back",
-           "\(picked.sorted()) \(dictations) \(switchedBack)", "[] [] []")
-    feedQ2(diamond, 1.0 / 30); feedQ2(letGo, 0.5)
-    expect("a single frame of diamond does not send", "\(sends)", "1")
-    feedQ2(nil, 1, one: fist); feedQ2(diamond, 0.5); feedQ2(praying, 0.5); feedQ2(letGo, 0.5)
-    expect("closing the diamond into praying (the lock) does not send", "\(sends)", "1")
-    // Palms closing slowly from the diamond toward prayer, tips still touching: neither shape for a while.
-    expect("the closing hands read as neither diamond nor praying", "\(HandGesture.Pair(closing.0, closing.1)!.diamond) \(HandGesture.Pair(closing.0, closing.1)!.together)", "false false")
-    feedQ2(nil, 1, one: fist); feedQ2(diamond, 0.5); feedQ2(closing, 0.5); feedQ2(praying, 0.5); feedQ2(letGo, 0.5)
-    expect("closing slowly toward praying with the tips touching does not send", "\(sends)", "1")
-    feedQ2(nil, 1, one: fist); feedQ2(diamond, 0.5); feedQ2(nil, 0.5)
-    expect("dropping both hands out of the diamond sends", "\(sends)", "2")
-    feedQ2(nil, 1, one: fist); feedQ2(diamond, 0.5); feedQ2(nil, 0.1, one: diamond.0); feedQ2(nil, 1, one: fist)
-    expect("losing one hand's tracking as the diamond parts still sends", "\(sends)", "3")
-    // Pointer (the default style): the same gesture sends, and moves nothing.
-    let psend = HandControl()
-    var pMoves = 0, pSends = 0
-    psend.dryRun = { _ in pMoves += 1 }
-    psend.onSend = { pSends += 1 }
-    func feedP(_ hands: (HandGesture.Joints, HandGesture.Joints)?, _ seconds: Double, one: HandGesture.Joints? = nil) {
-        let end = t + seconds
-        while t < end {
-            var f = VisionFrame(); f.time = t
-            if let h = hands { f.lead = h.0; f.second = h.1 } else if let one { f.lead = one }
-            psend.handle(f); t += 1.0 / 30
+        func hold(_ j: HandGesture.Joints?, _ seconds: Double) { let end = t + seconds; while t < end { run(j) } }
+        /// Moves `j` from dx `from` to `to` (camera x) over `seconds`.
+        func sweep(_ j: HandGesture.Joints, from: CGFloat, to: CGFloat, _ seconds: Double, dy: CGFloat = 0) {
+            let n = max(1, Int(seconds * 30))
+            for k in 0...n { let a = CGFloat(k) / CGFloat(n); run(shifted(j, from + (to - from) * a, dy * a)) }
+        }
+        hold(fist, 0.5)
+        sweep(open, from: -0.15, to: 0.15, 0.3)
+        expect("\(style): an open hand swept to your left sends once", "\(sent)", "1")
+        hold(shifted(open, 0.15), 0.2); sweep(open, from: 0.15, to: -0.15, 0.3)
+        expect("\(style): bringing the hand straight back does not send again", "\(sent)", "1")
+        hold(fist, 1.2)
+        sweep(open, from: 0.15, to: -0.15, 0.3)
+        expect("\(style): a sweep to your right does not send", "\(sent)", "1")
+        hold(fist, 1.2)
+        sweep(open, from: -0.06, to: 0.06, 0.7)
+        expect("\(style): a slow drift to your left does not send", "\(sent)", "1")
+        hold(fist, 1.2)
+        // A pointing hand moves the pointer or picks quadrant 1 as usual; only the send is checked here.
+        let (p0, m0) = (picked, moved)
+        sweep(pointing, from: -0.15, to: 0.15, 0.3)
+        expect("\(style): a pointing hand swept left does not send", "\(sent)", "1")
+        hold(fist, 1.2)
+        (picked, moved) = (p0, m0)
+        sweep(fist, from: -0.15, to: 0.15, 0.3)
+        expect("\(style): a fist swept left does not send", "\(sent)", "1")
+        hold(fist, 1.2)
+        sweep(open, from: 0, to: 0.12, 0.3, dy: 0.3)
+        expect("\(style): a mostly vertical sweep does not send", "\(sent)", "1")
+        hold(fist, 1.2)
+        sweep(open, from: -0.15, to: 0.15, 0.25)
+        expect("\(style): a second swipe after a pause sends again", "\(sent)", "2")
+        hold(nil, 1.2)
+        if style == "quadrants" {
+            expect("quadrants: swipes and the hand passing through pick no quadrant, dictate, or switch back",
+                   "\(picked.sorted()) \(dictated) \(switched)", "[] [] []")
+        } else {
+            expect("pointer: an open-hand swipe moves no pointer and switches nothing", "\(moved) \(switched)", "0 []")
         }
     }
-    feedP(nil, 0.5)
-    feedP(diamond, 0.6)
-    expect("in the pointer, the diamond held does not send yet", "\(pSends) \(psend.status)", "0 VISION MODE · SEND ·")
-    feedP(letGo, 0.2)
-    expect("in the pointer, letting go of the diamond sends", "\(pSends)", "1")
-    expect("the gesture moves no pointer", "\(pMoves)", "0")
-    feedP(nil, 3)
-    feedP(diamond, 0.5); feedP(praying, 0.5); feedP(letGo, 0.5)
-    expect("in the pointer, closing the diamond into praying (the lock) does not send", "\(pSends)", "1")
     // The pinky alone, held 0.8 s, clears. Thumb tucked or loose is fine; thumb out to the side is "call me".
     let pinky = hand([false, false, false, true], thumb: "in"), callMe = hand([false, false, false, true], thumb: "side")
     expect("reads the pinky, not call-me, a fist, or one finger",
@@ -394,41 +392,6 @@ if args.count >= 2, args[1] == "--test-hand" {
            "true false false false")
     expect("the pinky is never quadrant 1; the index still is",
            "\(QuadrantDictation.quadrant(pinky).map { "\($0)" } ?? "none") \(QuadrantDictation.quadrant(hand([true, false, false, false], thumb: "in")).map { "\($0)" } ?? "none")", "none 1")
-    // The shaka (thumb and pinky out), held 0.5 s, sends in both styles; it is never the pinky clear.
-    let shaka = callMe
-    expect("reads the shaka, not the pinky, a fist, an open hand, or one finger",
-           "\(HandGesture.isShaka(shaka)) \(HandGesture.isShaka(pinky)) \(HandGesture.isShaka(fist)) \(HandGesture.isShaka(open)) \(HandGesture.isShaka(hand([true, false, false, false], thumb: "side")))",
-           "true false false false false")
-    expect("the shaka is never a quadrant", "\(QuadrantDictation.quadrant(shaka).map { "\($0)" } ?? "none")", "none")
-    for style in ["pointer", "quadrants"] {
-        let pc = HandControl(), qc = QuadrantDictation()
-        pc.dryRun = { _ in }; qc.dryRun = true
-        var sent = 0, cleared = 0, moved = 0, dictated: [Bool] = []
-        pc.onSend = { sent += 1 }; qc.onSend = { sent += 1 }
-        pc.onClear = { cleared += 1 }; qc.onClear = { cleared += 1 }
-        pc.dryRun = { _ in moved += 1 }; qc.onDictate = { dictated.append($0) }
-        func feedS(_ j: HandGesture.Joints?, _ seconds: Double) {
-            let end = t + seconds
-            while t < end {
-                var f = VisionFrame(); f.time = t; if let j { f.lead = j }
-                if style == "pointer" { pc.handle(f) } else { qc.handle(f) }
-                t += 1.0 / 30
-            }
-        }
-        feedS(fist, 0.5); feedS(shaka, 0.3)
-        expect("\(style): a shaka held 0.3 s does not send yet", "\(sent)", "0")
-        feedS(shaka, 0.4)
-        expect("\(style): a shaka held 0.5 s sends once", "\(sent)", "1")
-        feedS(shaka, 1.5)
-        expect("\(style): holding it longer does not send again", "\(sent)", "1")
-        feedS(pinky, 1.2)
-        expect("\(style): tucking the thumb to lower it does not clear what was sent", "\(cleared)", "0")
-        feedS(fist, 0.5); feedS(shaka, 0.6)
-        expect("\(style): a second shaka sends again", "\(sent)", "2")
-        feedS(fist, 0.5); feedS(pinky, 1.0)
-        expect("\(style): the pinky alone still clears", "\(cleared)", "1")
-        expect("\(style): the shaka moved no pointer and dictated nothing", "\(moved) \(dictated)", "0 []")
-    }
     let pclear = HandControl()
     var pcMoves = 0, pcClears = 0
     pclear.dryRun = { _ in pcMoves += 1 }
@@ -459,8 +422,8 @@ if args.count >= 2, args[1] == "--test-hand" {
     }
     feedQC(fist, 0.5); feedQC(pinky, 1.5)
     expect("in Quadrants, a held pinky clears and picks no quadrant", "\(qcClears) \(qcPicked.sorted())", "1 []")
-    feedQ2(nil, 0.5, one: fist); feedQ2(nil, 0.6, one: hand([true, true, false, false], thumb: "in"))
-    expect("a quadrant can still be picked after sending", "\(picked.sorted())", "[\"2\"]")
+    feedQC(fist, 0.5); feedQC(hand([true, true, false, false], thumb: "in"), 0.6)
+    expect("a quadrant can still be picked after clearing", "\(qcPicked.sorted())", "[2]")
 
     // When Return may be pressed: only the last hand dictation's paste, within two minutes, in that app.
     let now = Date()
@@ -796,7 +759,6 @@ if args.count >= 3, args[1] == "--gesture-eval" {
             if e.fingers == [true, true, true, true] && HandGesture.thumb(j) == .tucked { fired.append("four") }
             if let q = QuadrantDictation.quadrant(j) { fired.append("q\(q)") }
             if HandGesture.isPinky(j) { fired.append("pinky") }
-            if HandGesture.isShaka(j) { fired.append("shaka") }
             if e.fingers == [false, false, false, true] { fired.append("pinkyAnyThumb") }
             for k in fired { hits[k, default: 0] += 1 }
         }
