@@ -85,6 +85,14 @@ After step 1, open your AI coding agent (Claude Code, Codex, Hermes, ...) in the
 cd ~/goldware-os && make update
 ```
 
+**First update from an older copy?** If `make update` says there is no rule to make target `update`, your copy is from before it existed. Run this once, then use `make update` from then on:
+
+```sh
+cd ~/goldware-os && git pull && make setup
+```
+
+**`make update` and `git pull` are not the same.** `git pull` only downloads the new code: it does not rebuild the app (you still need `make setup`), and it can stop partway if you or your AI changed the same files. `make update` does all of it: it saves your own code changes first, downloads the update and merges it on top, stops without changing anything if the two clash, then runs setup to rebuild.
+
 Your setup survives every update. Your settings (`goldware.json`: name, wake phrase, colors, model, dashboard cards, which agent Let's work opens) and your data (`data/`) are not part of the download, so an update never touches them. Changes you or your AI made to the code are saved as your own commit first, and the update is merged in on top. If an update edits the same lines you changed, nothing is changed and it tells you what to ask your AI. Then setup skips what is already done and rebuilds the app. After an update macOS may forget the app's permissions (see Troubleshooting).
 
 ## Uninstalling
