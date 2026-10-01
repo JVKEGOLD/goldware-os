@@ -337,7 +337,8 @@ final class HUD {
         let shelved = PillView(), dropping = PillView()
         for (p, drop) in [(shelved, PillView.Drop.none), (dropping, .over)] { p.shelf = shelf; p.mode = .shelf(drop: drop) }
         let cards: [(NSView, NSSize)] = [(history, history.preferredSize), (empty, empty.preferredSize)]
-        let pills: [(NSView, NSSize)] = [mini, active, assistant, shelved, dropping].map { ($0, $0.preferredSize) }
+        let pillViews: [PillView] = [mini, active, assistant, shelved, dropping]
+        let pills: [(NSView, NSSize)] = pillViews.map { ($0, $0.preferredSize) }
 
         let pad: CGFloat = 28
         let width = max(cards.reduce(pad) { $0 + $1.1.width + pad }, pills.reduce(pad) { $0 + $1.1.width + pad })
