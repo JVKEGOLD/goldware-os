@@ -165,7 +165,7 @@ Vision Mode starts locked. Your unlock gesture opens it; praying hands held for 
 | What | Gesture (pointer style) | Voice |
 |---|---|---|
 | Lock | Praying hands, held | |
-| Send what you just dictated | Shaka (thumb and pinky out, other fingers curled), held half a second. One hand, palm need not face the camera. Also works in Quadrants. The older two-hand diamond (index and thumb tips touching, then let go) still works | |
+| Send what you just dictated | Open hand, swipe quickly to your left (your left as you face the screen). Also works in Quadrants | |
 | Let's work | Both hands thumb, index, and middle out, thumbs touching, then pull apart | "Let's work" |
 | Lock up | Both hands open, then both fists | "Lock up" |
 | Clear out | Both hands open, then one fist | "Clear out" |

@@ -31,7 +31,7 @@ final class VisionController {
     /// Short status lines for the GoldWare HUD.
     var onNotice: ((String) -> Void)?
     /// Quadrant hand dictation: start (true) or finish (false) a \(GWConfig.name) Voice dictation.
-    /// Quadrants: the two-hand gesture after a paste, to press Return.
+    /// An open hand swept to your left after a paste (either style), to press Return.
     var onSend: (() -> Void)? {
         get { quadrants.onSend }
         set { quadrants.onSend = newValue; control.onSend = newValue }
