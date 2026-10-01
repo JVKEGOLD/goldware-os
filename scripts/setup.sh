@@ -26,6 +26,7 @@ APP_DST="/Applications/GoldWare OS.app"
 DATA_DIR="$HOME/Library/Application Support/GoldWare OS"
 MODEL_DIR="$DATA_DIR/models"
 WHISPER_FILE="ggml-small.en-q5_1.bin"
+WHISPER_MIN=190000000   # real file is 190098681 bytes; anything smaller is a partial download
 WHISPER_URL="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/$WHISPER_FILE"
 BREW_INSTALL='/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
 
@@ -55,11 +56,20 @@ want() { [[ -z "$ONLY" || "$ONLY" == "$1" ]]; }
 
 step_platform() {
   step "1/10 Check Mac (Apple Silicon, macOS 14+)"
-  [[ "$(uname -m)" == "arm64" ]] || fail "This Mac is not Apple Silicon ($(uname -m))." \
+  # hw.optional.arm64 is 1 on Apple Silicon even in a Rosetta terminal, where uname -m says x86_64.
+  [[ "$(sysctl -n hw.optional.arm64 2>/dev/null)" == "1" ]] || fail "This Mac is not Apple Silicon ($(uname -m))." \
     "GoldWare OS needs an Apple Silicon Mac (M1 or newer)."
   local v major; v="$(sw_vers -productVersion)"; major="${v%%.*}"
   (( major >= 14 )) || fail "macOS $v is too old." "Update to macOS 14 or newer in System Settings > General > Software Update."
   ok "Apple Silicon, macOS $v"
+  # Models and builds need roughly 10 GB. Warn, do not block: the user may know better.
+  local free_kb; free_kb="$(df -k "$HOME" 2>/dev/null | awk 'NR==2{print $4}')"
+  if [[ -n "$free_kb" ]] && (( free_kb < 10485760 )); then
+    print -P "  %F{yellow}WARN%f only $(( free_kb / 1048576 )) GB free. The language model, speech model and build need about 10 GB." >&2
+    print "       Free some space first (Apple menu > System Settings > General > Storage), or the downloads may fail." >&2
+  else
+    ok "$(( ${free_kb:-0} / 1048576 )) GB free disk"
+  fi
 }
 
 step_clt() {
@@ -71,7 +81,9 @@ step_clt() {
       "A system dialog just opened. Click Install, wait for it to finish, then rerun: scripts/setup.sh"
   fi
   ok "Command Line Tools at $(xcode-select -p)"
-  command -v swift >/dev/null 2>&1 || fail "swift not found." "Run: xcode-select --install"
+  # After a macOS update the tools can be present but stale; swift then errors out.
+  swift --version >/dev/null 2>&1 || fail "swift is missing or broken." \
+    "Run: xcode-select --install   (if it says already installed, update 'Command Line Tools' in System Settings > General > Software Update)"
   command -v python3 >/dev/null 2>&1 || fail "python3 not found." "Run: xcode-select --install"
   ok "swift and python3 present"
 }
@@ -105,6 +117,9 @@ step_packages() {
     else
       if (( DRY )); then would "brew install $f"; else
         brew install "$f" || fail "brew install $f failed." "Run: brew doctor, fix what it reports, then rerun."
+        hash -r
+        [[ "$bin" == whisper-server ]] && ! command -v whisper-server >/dev/null 2>&1 \
+          && fail "whisper-cpp installed but whisper-server is not on PATH." "Run: brew link whisper-cpp   or   brew reinstall whisper-cpp"
         ok "$f installed"
       fi
     fi
@@ -209,13 +224,17 @@ step_whisper() {
   step "8/10 Whisper speech model ($WHISPER_FILE)"
   local f="$MODEL_DIR/$WHISPER_FILE" size=0
   [[ -f "$f" ]] && size="$(stat -f%z "$f")"
-  if (( size > 104857600 )); then skip "already present ($(( size / 1048576 )) MB)"; return; fi
+  if (( size > WHISPER_MIN )); then skip "already present ($(( size / 1048576 )) MB)"; return; fi
   if (( DRY )); then would "download $WHISPER_URL to $MODEL_DIR (about 180 MB)"; return; fi
   mkdir -p "$MODEL_DIR"
-  curl -L --fail -C - --progress-bar -o "$f" "$WHISPER_URL" \
-    || fail "Whisper model download failed." "Rerun to resume, or download it by hand: curl -L --fail -C - -o \"$f\" $WHISPER_URL"
-  size="$(stat -f%z "$f")"
-  (( size > 104857600 )) || fail "Downloaded file is too small ($size bytes)." "Delete \"$f\" and rerun."
+  # Download to a .part file and rename only when complete, so an interrupted
+  # download (Ctrl-C, Wi-Fi drop) is never mistaken for a finished model. Rerun resumes.
+  local part="$f.part"
+  curl -L --fail -C - --progress-bar -o "$part" "$WHISPER_URL" \
+    || fail "Whisper model download failed." "Rerun to resume, or download it by hand: curl -L --fail -C - -o \"$part\" $WHISPER_URL"
+  size="$(stat -f%z "$part")"
+  (( size > WHISPER_MIN )) || fail "Downloaded file is too small ($size bytes)." "Delete \"$part\" and rerun."
+  mv -f "$part" "$f" || fail "Could not move the model into place."
   ok "downloaded ($(( size / 1048576 )) MB)"
 }
 
@@ -238,8 +257,18 @@ step_install() {
     [[ "$bid" == "io.goldware.os" ]] || fail "\"$APP_DST\" exists and is not GoldWare OS (id: ${bid:-unknown})." "Not touching it. Move or rename it, then rerun."
   fi
   if ! ask "Copy GoldWare OS to /Applications?"; then skip "not installed. Run later: make install"; return; fi
-  pgrep -x GoldWareOS >/dev/null 2>&1 && fail "GoldWare OS is running." "Quit it, then rerun: make install"
-  rm -rf "$APP_DST" && cp -R "$APP_SRC" "$APP_DST" || fail "Copy to /Applications failed." "Check permissions on /Applications."
+  if pgrep -x GoldWareOS >/dev/null 2>&1; then
+    print "  GoldWare OS is running; asking it to quit..."
+    osascript -e 'tell application id "io.goldware.os" to quit' >/dev/null 2>&1 || true
+    local i; for i in {1..10}; do pgrep -x GoldWareOS >/dev/null 2>&1 || break; sleep 1; done
+    pgrep -x GoldWareOS >/dev/null 2>&1 && pkill -x GoldWareOS 2>/dev/null; sleep 1
+    pgrep -x GoldWareOS >/dev/null 2>&1 && fail "GoldWare OS would not quit." "Quit it from the menu bar, then rerun: make install"
+  fi
+  # Copy next to the target first, then swap, so a failed copy never leaves /Applications without the app.
+  local tmp="$APP_DST.installing"
+  rm -rf "$tmp"
+  cp -R "$APP_SRC" "$tmp" || { rm -rf "$tmp"; fail "Copy to /Applications failed." "Check permissions on /Applications and free disk space."; }
+  rm -rf "$APP_DST" && mv "$tmp" "$APP_DST" || fail "Could not replace $APP_DST." "Check permissions on /Applications."
   ok "installed to $APP_DST"
   if (( OPEN )); then open "$APP_DST"; ok "opened"; fi
 }
@@ -272,5 +301,6 @@ fi
 
 step_platform; step_clt; step_brew; step_packages; step_memory
 step_config; step_pull; step_whisper; step_build; step_install
+if (( DRY )); then print -P "\n%F{green}Dry run complete. Nothing was changed.%f"; exit 0; fi
 print -P "\n%F{green}Setup finished.%f"
 next_steps

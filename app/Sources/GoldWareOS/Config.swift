@@ -9,6 +9,8 @@ struct GWSettings {
     var port = 4188
     var localModel = "gemma4:e4b"
     var whisperModel = "ggml-small.en-q5_1.bin"
+    /// How long Ollama keeps the model in RAM after a request ("5m", "0", "-1" for forever).
+    var keepAlive = "5m"
     /// Why the live file was not used, for the UI. nil when everything is fine.
     var error: String?
     var source = "defaults"
@@ -48,6 +50,7 @@ struct GWSettings {
         if let m = obj["models"] as? [String: Any] {
             if let l = m["local"] as? String, !l.isEmpty { s.localModel = l }
             if let w = m["whisper"] as? String, !w.isEmpty { s.whisperModel = w }
+            if let k = m["keepAlive"] as? String, k.range(of: "^-?[0-9]+[smh]?$", options: .regularExpression) != nil { s.keepAlive = k }
         }
         return s
     }
@@ -84,6 +87,7 @@ enum GWConfig {
     static var upperName: String { current.assistantName.uppercased() }
     static var wakePhrase: String { current.wakePhrase }
     static var error: String? { current.error }
+    static var keepAlive: String { current.keepAlive }
     /// GOLDWARE_PORT wins over the config, like the server's own.
     static var port: Int { Int(ProcessInfo.processInfo.environment["GOLDWARE_PORT"] ?? "") ?? current.port }
 

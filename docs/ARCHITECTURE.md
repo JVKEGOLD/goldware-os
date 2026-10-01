@@ -14,7 +14,7 @@ dashboard/index.html    the dashboard page (single file, vanilla JS/CSS, no buil
 docs/CUSTOMIZING.md     map of every setting, for humans and their AI agents
 scripts/setup.sh        one-shot installer; scripts/check_private.sh privacy gate
 tests/                  python unittest for the server and config
-Makefile                setup, app, run, test, check
+Makefile                setup, doctor, app, install, run-server, test, check
 MASTER_PROMPT.md, README.md, LICENSE (MIT)
 ```
 Repo root detection (app and server): the folder containing `goldware.default.json`.
@@ -23,7 +23,7 @@ Repo root detection (app and server): the folder containing `goldware.default.js
 - assistantName (string, 1-24 chars): the name shown everywhere and used in prompts. Default "GoldWare".
 - wakePhrase (string): e.g. "Hey GoldWare". wakeAliases (array of strings): other spellings the
   speech recognizer may produce. Matching is case-insensitive, punctuation-tolerant.
-- accentColor (#RRGGBB). port (int, default 4188; never 4177).
+- accentColor (#RRGGBB). port (int, default 4188, 1024 to 65535, 4177 is rejected).
 - models.local (Ollama model tag), models.whisper (file name under the app data folder models/).
 - dashboard.layout (string), dashboard.cards (array of cards).
 Card: { id (unique slug), type, title, size: "s" | "m" | "l" | "w", options: {} }
@@ -54,7 +54,7 @@ embed (options.url), html (options.html, rendered in a sandboxed iframe srcdoc).
   when /api/work does not answer, and stops it on quit if it started it.
 - Dashboard window: three tabs only, data-tab="dashboard" | "voice" | "vision", buttons with class
   "topbar-tab" (DashboardWindow.go(tab:) clicks them).
-- Nothing about the original author: no personal names, clients, businesses, emails, or paths.
+- Nothing personal: no personal names, clients, businesses, emails, or paths.
   `scripts/check_private.sh` must pass.
 - House style: no em dashes in UI strings, docs, or comments. Calm dark UI: house palette
   (near-black #0d0c0a background, cream text, gold #C9A24A accent), fonts DM Sans, Instrument Serif,

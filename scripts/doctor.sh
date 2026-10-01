@@ -35,9 +35,14 @@ else
   row "ollama answering" NO "nothing on 127.0.0.1:11434" "brew services start ollama"
   row "model pulled" NO "cannot check, ollama is down" "ollama pull ${MODEL:-gemma4:e4b}"
 fi
-[[ -f "$MD" ]] && (( $(stat -f%z "$MD") > 104857600 )) && row "whisper model file" OK "$MD" || row "whisper model file" NO "$WFILE" "make setup   (downloads to ~/Library/Application Support/GoldWare OS/models/)"
+[[ -f "$MD" ]] && (( $(stat -f%z "$MD") > 190000000 )) && row "whisper model file" OK "$MD" || row "whisper model file" NO "$WFILE" "make setup   (downloads to ~/Library/Application Support/GoldWare OS/models/)"
 [[ -d app/build/GoldWareOS.app ]] && row "app built" OK "app/build/GoldWareOS.app" || row "app built" NO "" "make app"
 [[ -d "/Applications/GoldWare OS.app" ]] && row "app installed" OK "/Applications/GoldWare OS.app" || row "app installed" NO "" "make install"
+if [[ -d "/Applications/GoldWare OS.app" ]]; then
+  STAMP="$(cat "/Applications/GoldWare OS.app/Contents/Resources/goldware-root.txt" 2>/dev/null)"
+  if [[ -n "$STAMP" && -f "$STAMP/goldware.default.json" ]]; then row "app finds its checkout" OK "$STAMP"
+  else row "app finds its checkout" NO "${STAMP:-no stamp} is gone" "the repo folder was moved or deleted; from the new folder run: make app && make install"; fi
+fi
 if curl -fsS --max-time 2 "http://127.0.0.1:$PORT/api/work" >/dev/null 2>&1; then row "server answering" OK "http://127.0.0.1:$PORT"
 else row "server answering" NO "port $PORT" "make run-server   (or open the app, it starts the server)"; fi
 if [[ -f server/goldware_server.py ]]; then

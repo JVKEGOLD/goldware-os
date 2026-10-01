@@ -1,5 +1,6 @@
 import json
 import os
+import threading
 import shutil
 import socket
 import subprocess
@@ -240,7 +241,7 @@ class TestMisc(ServerCase):
                   "/docs/%2e%2e/%2e%2e/docs/ARCHITECTURE.md"):
             # use a raw socket so the client does not normalise the path
             s = socket.create_connection(("127.0.0.1", self.port))
-            s.sendall(("GET %s HTTP/1.0\r\nHost: x\r\n\r\n" % p).encode())
+            s.sendall(("GET %s HTTP/1.0\r\nHost: 127.0.0.1:%d\r\n\r\n" % (p, self.port)).encode())
             data = b""
             while True:
                 chunk = s.recv(4096)
@@ -260,6 +261,334 @@ class TestMisc(ServerCase):
         self.assertEqual(self.req("/api/notes", body,
                                   {"Origin": "http://localhost:%d" % self.port})[0], 200)
         self.assertEqual(self.req("/api/notes", body)[0], 200)
+
+
+def raw_request(port, data, read=True):
+    """Send raw bytes, return the full response bytes (no client-side normalising)."""
+    s = socket.create_connection(("127.0.0.1", port), timeout=10)
+    s.sendall(data)
+    out = b""
+    try:
+        while read:
+            chunk = s.recv(4096)
+            if not chunk:
+                break
+            out += chunk
+    except socket.timeout:
+        pass
+    s.close()
+    return out
+
+
+def status_of(resp):
+    return int(resp.split(b" ", 2)[1])
+
+
+class TestHardening(ServerCase):
+    def raw(self, method, path, headers=None, body=b""):
+        h = {"Host": "127.0.0.1:%d" % self.port, "Connection": "close"}
+        h.update(headers or {})
+        head = "%s %s HTTP/1.1\r\n" % (method, path) + "".join("%s: %s\r\n" % kv for kv in h.items())
+        return raw_request(self.port, head.encode() + b"\r\n" + body)
+
+    # (1) DNS rebinding
+    def test_host_header_checked_on_get_and_post(self):
+        for host in ("evil.example", "evil.example:%d" % self.port, "127.0.0.1", "127.0.0.1:1",
+                     "127.0.0.1.evil.example:%d" % self.port, ""):
+            self.assertEqual(status_of(self.raw("GET", "/api/notes", {"Host": host})), 403, host)
+            self.assertEqual(status_of(self.raw("GET", "/", {"Host": host})), 403, host)
+            body = b'{"cardId":"a","text":"b"}'
+            self.assertEqual(status_of(self.raw("POST", "/api/notes", {
+                "Host": host, "Content-Type": "application/json",
+                "Content-Length": str(len(body))}, body)), 403, host)
+        for host in ("127.0.0.1:%d" % self.port, "localhost:%d" % self.port, "LOCALHOST:%d" % self.port):
+            self.assertEqual(status_of(self.raw("GET", "/api/notes", {"Host": host})), 200, host)
+
+    def test_origin_checked_on_get_and_null_origin_rejected(self):
+        self.assertEqual(self.req("/api/notes", headers={"Origin": "http://evil.example"})[0], 403)
+        self.assertEqual(self.req("/api/notes", headers={"Origin": "null"})[0], 403)
+        self.assertEqual(self.req("/api/notes", {"cardId": "n", "text": "t"}, {"Origin": "null"})[0], 403)
+        self.assertEqual(self.req("/api/notes", headers={"Origin": self.base})[0], 200)
+
+    def test_post_requires_json_content_type(self):
+        body = b'{"cardId":"ct","text":"x"}'
+        for ct in ("text/plain", "application/x-www-form-urlencoded", "multipart/form-data; boundary=x", ""):
+            h = {"Content-Length": str(len(body))}
+            if ct:
+                h["Content-Type"] = ct
+            self.assertEqual(status_of(self.raw("POST", "/api/notes", h, body)), 415, ct)
+        h = {"Content-Type": "Application/JSON; charset=utf-8", "Content-Length": str(len(body))}
+        self.assertEqual(status_of(self.raw("POST", "/api/notes", h, body)), 200)
+        _, j, _ = self.req("/api/notes")
+        self.assertEqual(j["notes"]["ct"], "x")
+
+    # (2) no permissive CORS
+    def test_no_cors_headers(self):
+        for path in ("/api/config", "/api/notes", "/"):
+            _, _, h = self.req(path, headers={"Origin": self.base})
+            self.assertFalse([k for k in h.keys() if k.lower().startswith("access-control-")], path)
+        resp = self.raw("OPTIONS", "/api/notes", {"Origin": "http://evil.example"})
+        self.assertNotIn(b"access-control", resp.lower())
+        self.assertNotEqual(status_of(resp), 200)
+
+    # (3) traversal
+    def test_traversal_variants(self):
+        paths = ("/dashboard/%00", "/dashboard/index.html%00.png", "/dashboard/..%5cgoldware.default.json",
+                 "/dashboard/..\\goldware.default.json", "/dashboard/%252e%252e/goldware.default.json",
+                 "/dashboard//etc/passwd", "/dashboard/%2fetc%2fpasswd", "/docs/..%2f..%2fgoldware.default.json",
+                 "/dashboard/....//goldware.default.json", "/fonts/%00../../../../etc/passwd")
+        for p in paths:
+            resp = self.raw("GET", p)
+            self.assertEqual(status_of(resp), 404, p)
+            self.assertNotIn(b"assistantName", resp, p)
+            self.assertNotIn(b"root:", resp, p)
+
+    def test_symlink_escape_blocked(self):
+        link = os.path.join(REPO, "dashboard", "zz-test-link.txt")
+        target = os.path.join(self.tmp, "secret.txt")
+        with open(target, "w") as f:
+            f.write("TOPSECRET")
+        os.symlink(target, link)
+        try:
+            resp = self.raw("GET", "/dashboard/zz-test-link.txt")
+            self.assertEqual(status_of(resp), 404)
+            self.assertNotIn(b"TOPSECRET", resp)
+        finally:
+            os.unlink(link)
+
+    # (5) body limits, malformed JSON
+    def test_body_too_large_413(self):
+        big = b'{"cardId":"big","text":"' + b"a" * (1024 * 1024) + b'"}'
+        resp = self.raw("POST", "/api/notes", {"Content-Type": "application/json",
+                                                "Content-Length": str(len(big))}, big[:2000])
+        self.assertEqual(status_of(resp), 413)
+        # server is still healthy afterwards
+        self.assertEqual(self.req("/api/notes")[0], 200)
+
+    def test_bad_content_length_and_chunked(self):
+        h = {"Content-Type": "application/json"}
+        self.assertEqual(status_of(self.raw("POST", "/api/notes", dict(h, **{"Content-Length": "abc"}))), 400)
+        self.assertEqual(status_of(self.raw("POST", "/api/notes", dict(h, **{"Content-Length": "-5"}))), 400)
+        self.assertEqual(status_of(self.raw("POST", "/api/notes", dict(h, **{"Transfer-Encoding": "chunked"}),
+                                            b"0\r\n\r\n")), 411)
+
+    def test_malformed_json_variants(self):
+        for raw in (b"", b"{", b"[", b"NaN", b'{"cardId":"a","text":NaN}', b"\xff\xfe", b"[" * 100000):
+            code, j, _ = self.req("/api/notes", raw=raw)
+            self.assertEqual(code, 400, raw[:20])
+            self.assertIn("error", j)
+        self.assertEqual(self.req("/api/config", raw=b'{"assistantName":"A","accentColor":"#C9A24A","x":Infinity}')[0], 400)
+
+    def test_concurrent_writes_stay_consistent(self):
+        errors = []
+
+        def worker(i):
+            try:
+                for k in range(8):
+                    c1, _, _ = self.req("/api/work", {"create": True, "request_id": "c-%d-%d" % (i, k),
+                                                      "changes": {"title": "t%d-%d" % (i, k)}})
+                    c2, _, _ = self.req("/api/notes", {"cardId": "n%d" % i, "text": "v%d" % k})
+                    if c1 != 200 or c2 != 200:
+                        errors.append((c1, c2))
+            except Exception as e:  # pragma: no cover
+                errors.append(repr(e))
+
+        ts = [threading.Thread(target=worker, args=(i,)) for i in range(8)]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join()
+        self.assertEqual(errors, [])
+        _, w, _ = self.req("/api/work")
+        self.assertEqual(len([t for t in w["tasks"] if t["title"].startswith("t")]), 64)
+        with open(os.path.join(self.data, "tasks.json")) as f:
+            json.load(f)
+        self.assertEqual([n for n in os.listdir(self.data) if n.endswith(".tmp")], [])
+
+    def test_corrupt_data_is_quarantined_not_500(self):
+        os.makedirs(self.data, exist_ok=True)
+        for name, url, key in (("tasks.json", "/api/work", "tasks"), ("notes.json", "/api/notes", "notes")):
+            path = os.path.join(self.data, name)
+            with open(path, "w") as f:
+                f.write("{this is not json")
+            code, j, _ = self.req(url)
+            self.assertEqual(code, 200, name)
+            self.assertFalse(j[key])
+            kept = [n for n in os.listdir(self.data) if n.startswith(name + ".corrupt-")]
+            self.assertEqual(len(kept), 1, name)
+            with open(os.path.join(self.data, kept[0])) as f:
+                self.assertEqual(f.read(), "{this is not json")
+        # wrong shape is treated the same, and writing works again
+        with open(os.path.join(self.data, "tasks.json"), "w") as f:
+            json.dump({"tasks": ["oops", 5]}, f)
+        self.assertEqual(self.req("/api/work")[0], 200)
+        self.assertEqual(self.req("/api/work", {"create": True, "request_id": "after", "changes": {"title": "ok"}})[0], 200)
+
+    # (6) config validation completeness
+    def test_config_limits(self):
+        base = self.default_cfg()
+
+        def mod(fn):
+            c = json.loads(json.dumps(base))
+            fn(c)
+            return c
+        cards = lambda c: c["dashboard"]["cards"]
+        cases = [
+            ("wakePhrase", mod(lambda c: c.update(wakePhrase=5))),
+            ("wakePhrase", mod(lambda c: c.update(wakePhrase="x" * 101))),
+            ("wakeAliases", mod(lambda c: c.update(wakeAliases=["a"] * 51))),
+            ("wakeAliases", mod(lambda c: c.update(wakeAliases=["a" * 101]))),
+            ("models.local", mod(lambda c: c["models"].update(local=5))),
+            ("models.whisper", mod(lambda c: c["models"].update(whisper="../../etc/passwd"))),
+            ("models.whisper", mod(lambda c: c["models"].update(whisper="a\\b.bin"))),
+            ("dashboard.layout", mod(lambda c: c["dashboard"].update(layout="x" * 65))),
+            ("dashboard.layout", mod(lambda c: c["dashboard"].update(layout=3))),
+            ("at most", mod(lambda c: c["dashboard"].update(cards=[
+                {"id": "c%d" % i, "type": "clock", "size": "s"} for i in range(101)]))),
+            (".id", mod(lambda c: cards(c)[0].update(id="has space"))),
+            (".id", mod(lambda c: cards(c)[0].update(id="../x"))),
+            (".id", mod(lambda c: cards(c)[0].update(id="a" * 65))),
+            (".id", mod(lambda c: cards(c)[0].update(id=7))),
+            (".title", mod(lambda c: cards(c)[0].update(title="t" * 101))),
+            (".options", mod(lambda c: cards(c)[0].update(options=[1]))),
+            ("options.html", mod(lambda c: cards(c)[0].update(options={"html": "x" * (200 * 1024 + 1)}))),
+            ("options.html", mod(lambda c: cards(c)[0].update(options={"html": 5}))),
+            ("options.url", mod(lambda c: cards(c)[0].update(options={"url": "javascript:alert(1)"}))),
+            ("options.url", mod(lambda c: cards(c)[0].update(options={"url": "//evil.example/x"}))),
+            ("options.url", mod(lambda c: cards(c)[0].update(options={"url": 5}))),
+            ("options.links", mod(lambda c: cards(c)[0].update(options={"links": "nope"}))),
+            ("options.links", mod(lambda c: cards(c)[0].update(options={"links": [{"label": "a", "url": "javascript:1"}]}))),
+            ("options.links", mod(lambda c: cards(c)[0].update(options={"links": [{"label": 3, "url": "/x"}]}))),
+        ]
+        for field, cfg in cases:
+            code, j, _ = self.req("/api/config", cfg)
+            self.assertEqual(code, 400, field)
+            self.assertIn(field, j["error"])
+        self.assertFalse(os.path.exists(self.user_cfg()))
+        ok = mod(lambda c: cards(c)[0].update(options={"html": "x" * (200 * 1024),
+                                                         "url": "/docs/CUSTOMIZING.md"}))
+        self.assertEqual(self.req("/api/config", ok)[0], 200)
+        many = mod(lambda c: c["dashboard"].update(cards=[
+            {"id": "c%d" % i, "type": "clock", "size": "s"} for i in range(100)]))
+        self.assertEqual(self.req("/api/config", many)[0], 200)
+
+    def test_zz_config_post_writes_only_user_file(self):
+        before = set(os.listdir(self.root))
+        for _ in range(2):
+            self.assertEqual(self.req("/api/config", self.default_cfg())[0], 200)
+        after = set(os.listdir(self.root))
+        self.assertEqual(after - before - {"goldware.json", "goldware.json.bak"}, set())
+        # the body cannot influence the destination: path-like fields are just data or rejected
+        evil = dict(self.default_cfg(), **{"path": "../../x", "file": "/etc/passwd"})
+        self.assertEqual(self.req("/api/config", evil)[0], 200)
+        self.assertEqual(set(os.listdir(self.root)) - {"goldware.json", "goldware.json.bak", "goldware.default.json"}, set())
+
+    def test_errors_do_not_leak_paths(self):
+        resp = self.raw("GET", "/dashboard/%00")
+        self.assertNotIn(REPO.encode(), resp)
+
+    # (4) iframe sandbox
+    def test_dashboard_sandbox_rules(self):
+        with open(os.path.join(REPO, "dashboard", "index.html"), encoding="utf-8") as f:
+            html = f.read()
+        import re
+        # html card: scripts only, never same-origin
+        m = re.search(r'sandbox: "([^"]*)", srcdoc', html)
+        self.assertIsNotNone(m)
+        self.assertEqual(m.group(1), "allow-scripts")
+        # embed card: same-origin permission only on the branch for non-local URLs
+        m = re.search(r'sandbox: isLocalUrl\(o\.url\) \? "([^"]*)" : "([^"]*)"', html)
+        self.assertIsNotNone(m)
+        self.assertNotIn("allow-same-origin", m.group(1))
+        self.assertIn("allow-scripts", m.group(1))
+        self.assertNotIn("allow-top-navigation", html)
+        self.assertIn("(?!\\/)", html)  # protocol-relative URLs are not "safe"
+
+    def test_sandboxed_frame_origin_cannot_call_api(self):
+        # A sandboxed iframe without allow-same-origin sends Origin: null.
+        self.assertEqual(self.req("/api/config", headers={"Origin": "null"})[0], 403)
+        self.assertEqual(self.req("/api/config", self.default_cfg(), {"Origin": "null"})[0], 403)
+        self.assertEqual(self.req("/api/work", {"create": True, "request_id": "z", "changes": {"title": "x"}},
+                                  {"Origin": "null"})[0], 403)
+
+    def test_frame_ancestors_header(self):
+        _, _, h = self.req("/")
+        self.assertIn("frame-ancestors 'self'", h["Content-Security-Policy"])
+        self.assertEqual(h["X-Content-Type-Options"], "nosniff")
+
+
+class TestStartup(unittest.TestCase):
+    def run_server(self, *args, **env):
+        e = dict(os.environ, **env)
+        return subprocess.run([sys.executable, SERVER] + list(args), env=e, stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, universal_newlines=True, timeout=20)
+
+    def test_port_in_use_exits_cleanly(self):
+        blocker = socket.socket()
+        blocker.bind(("127.0.0.1", 0))
+        blocker.listen(1)
+        port = blocker.getsockname()[1]
+        tmp = tempfile.mkdtemp()
+        try:
+            r = self.run_server("--port", str(port), GOLDWARE_DATA_ROOT=tmp)
+        finally:
+            blocker.close()
+            shutil.rmtree(tmp, ignore_errors=True)
+        self.assertEqual(r.returncode, 3)
+        self.assertIn("Cannot listen on 127.0.0.1:%d" % port, r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+
+    def test_bad_port_values(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            self.assertEqual(self.run_server("--port", "80", GOLDWARE_DATA_ROOT=tmp).returncode, 2)
+            r = self.run_server(GOLDWARE_PORT="abc", GOLDWARE_DATA_ROOT=tmp)
+            self.assertEqual(r.returncode, 2)
+            self.assertNotIn("Traceback", r.stderr)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_binds_loopback_only(self):
+        sys.path.insert(0, os.path.join(REPO, "server"))
+        try:
+            import goldware_server
+        finally:
+            sys.path.pop(0)
+        httpd = goldware_server.make_server(0)
+        try:
+            self.assertEqual(httpd.server_address[0], "127.0.0.1")
+        finally:
+            httpd.server_close()
+        with open(SERVER, encoding="utf-8") as f:
+            src = f.read()
+        self.assertNotIn("0.0.0.0", src)
+        self.assertNotIn('("", ', src)
+
+    def test_check_mode(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            def check():
+                return self.run_server("--check", GOLDWARE_ROOT=tmp)
+            r = check()  # no default file at all
+            self.assertEqual(r.returncode, 1)
+            self.assertIn("goldware.default.json", r.stdout)
+            shutil.copy(os.path.join(REPO, "goldware.default.json"), tmp)
+            r = check()
+            self.assertEqual(r.returncode, 0, r.stdout)
+            self.assertIn("Config OK", r.stdout)
+            with open(os.path.join(tmp, "goldware.json"), "w") as f:
+                json.dump({"assistantName": "x", "accentColor": "#C9A24A", "port": 4177}, f)
+            r = check()
+            self.assertEqual(r.returncode, 1)
+            self.assertIn("port", r.stdout)
+            os.remove(os.path.join(tmp, "goldware.json"))
+            with open(os.path.join(tmp, "goldware.default.json"), "w") as f:
+                json.dump({"assistantName": "", "accentColor": "#C9A24A"}, f)
+            r = check()  # an invalid default is also reported
+            self.assertEqual(r.returncode, 1)
+            self.assertIn("assistantName", r.stdout)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 if __name__ == "__main__":

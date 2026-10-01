@@ -38,6 +38,8 @@
 html { scroll-behavior: smooth; }
 body { font-family: var(--font); background: var(--bg); color: var(--text); line-height: 1.55; min-height: 100vh; -webkit-font-smoothing: antialiased; }
 button { font: inherit; color: inherit; cursor: pointer; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.name-in:focus-visible, .field:focus-visible, .task-add input:focus-visible, textarea.notes:focus-visible { outline: none; }
 a { color: var(--accent); text-underline-offset: 3px; }
 code { font-family: var(--mono); font-size: .86em; background: var(--surface2); border: 1px solid var(--border); padding: 1px 6px; border-radius: 6px; color: var(--text-dim); }
 kbd { font-family: var(--mono); font-size: .82em; background: var(--surface2); border: 1px solid var(--border-light); border-bottom-width: 2px; padding: 1px 7px; border-radius: 6px; color: var(--text); white-space: nowrap; }
@@ -133,10 +135,10 @@ iframe.frame { width: 100%; min-height: 260px; height: 100%; border: 1px solid v
 .editing .card.drop-before { box-shadow: -6px 0 0 -2px var(--accent); }
 .editing .card.drop-after { box-shadow: 6px 0 0 -2px var(--accent); }
 .editing .card.dragging { opacity: .35; }
-.card-bar { display: flex; gap: 8px; align-items: center; }
+.card-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .handle { cursor: grab; color: var(--text-muted); font-size: 18px; letter-spacing: -3px; padding: 0 6px; user-select: none; }
 .handle:active { cursor: grabbing; }
-.name-in { flex: 1; min-width: 0; background: transparent; border: 1px solid transparent; border-bottom-color: var(--border-light); color: var(--text); font: inherit; font-size: 13px; padding: 4px 6px; outline: none; }
+.name-in { flex: 1 1 110px; min-width: 0; background: transparent; border: 1px solid transparent; border-bottom-color: var(--border-light); color: var(--text); font: inherit; font-size: 13px; padding: 4px 6px; outline: none; }
 .name-in:focus { border-color: var(--accent); border-radius: 6px; }
 .ctl { background: var(--surface2); border: 1px solid var(--border-light); border-radius: 8px; color: var(--text-dim); font-size: 12px; padding: 3px 9px; font-family: var(--mono); transition: all var(--t) var(--ease); }
 .ctl:hover { border-color: var(--accent); color: var(--accent); }
@@ -455,7 +457,16 @@ details p { color: var(--text-muted); font-size: 14px; margin-top: 8px; }
   function $(s, r) { return (r || document).querySelector(s); }
   function clone(o) { return JSON.parse(JSON.stringify(o)); }
   function uid(type) { return type + "-" + Math.random().toString(36).slice(2, 8); }
-  function safeUrl(u) { return /^(https?:\/\/|\/)/i.test(String(u || "").trim()); }
+  function safeUrl(u) { return /^(https?:\/\/|\/(?!\/))/i.test(String(u || "").trim()); }
+  /* A page on this machine (the dashboard itself, any loopback port) must never get allow-same-origin:
+     with allow-scripts it could escape the sandbox and call /api as the dashboard. */
+  function isLocalUrl(u) {
+    try {
+      var x = new URL(String(u).trim(), location.href), n = x.hostname.toLowerCase();
+      return x.origin === location.origin || n === "localhost" || /\.localhost$/.test(n) ||
+        n === "[::1]" || n === "0.0.0.0" || /^127\./.test(n);
+    } catch (e) { return true; }
+  }
 
   function toast(msg, actionLabel, fn, isErr) {
     var box = $("#toasts");
@@ -513,7 +524,7 @@ details p { color: var(--text-muted); font-size: 14px; margin-top: 8px; }
   function renderBanner() {
     var b = $("#banner");
     b.textContent = "";
-    if (state.error) b.appendChild(h("div", { class: "banner", text: "Your goldware.json has a problem: " + state.error + ". Showing the default layout until it is fixed." }));
+    if (state.error) b.appendChild(h("div", { class: "banner", text: "Your goldware.json has a problem: " + String(state.error).replace(/\s*Using defaults\.?\s*$/, "").replace(/\.$/, "") + ". Showing the default layout until it is fixed." }));
   }
 
   function save() {
@@ -607,6 +618,17 @@ details p { color: var(--text-muted); font-size: 14px; margin-top: 8px; }
     if (state.editing) {
       var bar = h("div", { class: "card-bar" });
       var handle = h("span", { class: "handle", title: "Drag to reorder", text: "\u22EE\u22EE" });
+      handle.setAttribute("tabindex", "0"); handle.setAttribute("role", "button");
+      handle.setAttribute("aria-label", "Reorder card. Arrow keys move it earlier or later.");
+      handle.addEventListener("keydown", function (e) {
+        var d = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 }[e.key];
+        var to = index + d;
+        if (!d || to < 0 || to >= state.draft.length) return;
+        e.preventDefault();
+        state.draft.splice(to, 0, state.draft.splice(index, 1)[0]);
+        renderDashboard();
+        var hs = document.querySelectorAll("#grid .handle"); if (hs[to]) hs[to].focus();
+      });
       handle.addEventListener("mousedown", function () { el.draggable = true; });
       handle.addEventListener("mouseup", function () { el.draggable = false; });
       var name = h("input", { class: "name-in", value: c.title || "", "aria-label": "Card title" });
@@ -710,7 +732,7 @@ details p { color: var(--text-muted); font-size: 14px; margin-top: 8px; }
       case "agents": return agentsBody(body);
       case "embed":
         if (!safeUrl(o.url)) { body.appendChild(h("p", { class: "muted", text: "Add a page address in this card's settings." })); return; }
-        body.appendChild(h("iframe", { class: "frame", src: o.url, sandbox: "allow-scripts allow-same-origin allow-forms allow-popups", loading: "lazy", title: c.title || "Embed" }));
+        body.appendChild(h("iframe", { class: "frame", src: o.url, sandbox: isLocalUrl(o.url) ? "allow-scripts allow-forms allow-popups" : "allow-scripts allow-same-origin allow-forms allow-popups", loading: "lazy", title: c.title || "Embed" }));
         return;
       case "html":
         body.appendChild(h("iframe", { class: "frame", sandbox: "allow-scripts", srcdoc: o.html || "<body style=\"margin:0;display:grid;place-items:center;height:100vh;background:#0d0c0a;color:#8f8676;font:14px -apple-system,sans-serif\">Empty card. Click Customize, then Settings, to add HTML.</body>", title: c.title || "Custom" }));
@@ -832,17 +854,22 @@ details p { color: var(--text-muted); font-size: 14px; margin-top: 8px; }
   }
 
   /* voice prompts */
-  function copyText(t) {
+  function copyText(t, src) {
     function done() { toast("Copied"); }
     if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(t).then(done, fallback); } else fallback();
     function fallback() {
-      var ta = h("textarea", { style: "position:fixed;opacity:0" }); ta.value = t; document.body.appendChild(ta); ta.select();
-      try { document.execCommand("copy"); done(); } catch (e) {} document.body.removeChild(ta);
+      var ok = false, ta = h("textarea", { style: "position:fixed;opacity:0" }); ta.value = t; document.body.appendChild(ta); ta.select();
+      try { ok = document.execCommand("copy"); } catch (e) {}
+      document.body.removeChild(ta);
+      if (ok) return done();
+      if (src) { var r = document.createRange(); r.selectNodeContents(src); var sel = getSelection(); sel.removeAllRanges(); sel.addRange(r); }
+      toast("Could not copy. The text is selected, press Cmd+C.", null, null, true);
     }
   }
   var pbox = $("#prompts");
   PROMPTS.forEach(function (p) {
-    pbox.appendChild(h("div", { class: "prompt" }, h("span", { text: p }), h("button", { class: "btn sm", text: "Copy", onclick: function () { copyText(p); } })));
+    var txt = h("span", { text: p });
+    pbox.appendChild(h("div", { class: "prompt" }, txt, h("button", { class: "btn sm", text: "Copy", "aria-label": "Copy prompt: " + p, onclick: function () { copyText(p, txt); } })));
   });
 
   /* routing */

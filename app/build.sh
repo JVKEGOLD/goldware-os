@@ -44,3 +44,4 @@ PLIST
 IDENTITY=$(security find-identity -v -p codesigning | awk -F'"' '/Apple Development/ {print $2; exit}')
 codesign --force --sign "${IDENTITY:--}" "$APP"
 echo "Built $APP (signed with: ${IDENTITY:-ad-hoc})"
+[[ -n "$IDENTITY" ]] || echo "Note: ad-hoc signed. macOS may forget Microphone/Accessibility/Camera permissions after each rebuild; re-enable them in System Settings > Privacy & Security."

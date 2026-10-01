@@ -121,11 +121,17 @@ final class Assistant {
         req.timeoutInterval = timeout
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try JSONSerialization.data(withJSONObject: [
-            "model": model, "stream": false, "think": false, "keep_alive": "60m",
+            "model": model, "stream": false, "think": false, "keep_alive": GWConfig.keepAlive,
             "format": schema, "options": ["temperature": temperature],
             "messages": [["role": "system", "content": system], user],
         ] as [String: Any])
-        let (data, resp) = try await URLSession.shared.data(for: req)
+        let (data, resp): (Data, URLResponse)
+        do { (data, resp) = try await URLSession.shared.data(for: req) } catch {
+            throw EngineError.message(OllamaProblem.message(model: model, status: nil, connectFailed: true))
+        }
+        if let st = (resp as? HTTPURLResponse)?.statusCode, st != 200 {
+            throw EngineError.message(OllamaProblem.message(model: model, status: st, connectFailed: false))
+        }
         guard (resp as? HTTPURLResponse)?.statusCode == 200,
               let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let content = (json["message"] as? [String: Any])?["content"] as? String

@@ -10,19 +10,24 @@ enum EngineError: LocalizedError {
 final class WhisperEngine {
     let port = 8178
     private var process: Process?
+    /// Why the speech engine could not start, in words for the user. nil when it started or has not been tried.
+    private(set) var problem: String?
 
     var baseURL: URL { URL(string: "http://127.0.0.1:\(port)")! }
 
     func start() {
         guard process == nil else { return }
+        problem = nil
         killStaleServer()
         guard FileManager.default.fileExists(atPath: Paths.whisperModel.path) else {
             NSLog("GoldWareOS: missing speech model at \(Paths.whisperModel.path). Run make setup to install the speech model.")
+            problem = "Speech model missing (\(GWConfig.current.whisperModel)). Run make setup, then restart."
             return
         }
         let p = Process()
         guard let binary = Paths.whisperServerBinary else {
             NSLog("GoldWareOS: whisper-server not found. Run make setup to install the speech model.")
+            problem = "whisper-server not found. Run make setup (it installs whisper-cpp with Homebrew), then restart."
             return
         }
         p.executableURL = URL(fileURLWithPath: binary)
@@ -45,6 +50,7 @@ final class WhisperEngine {
             process = p
         } catch {
             NSLog("GoldWareOS: could not launch whisper-server: \(error)")
+            problem = "Speech engine could not launch: \(error.localizedDescription)"
         }
     }
 
@@ -95,7 +101,10 @@ final class WhisperEngine {
         body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
         req.httpBody = body
 
-        let (data, resp) = try await URLSession.shared.data(for: req)
+        let (data, resp): (Data, URLResponse)
+        do { (data, resp) = try await URLSession.shared.data(for: req) } catch {
+            throw EngineError.message(problem ?? "The speech engine is not running yet. Wait a moment and try again.")
+        }
         guard (resp as? HTTPURLResponse)?.statusCode == 200,
               let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let text = json["text"] as? String
@@ -126,6 +135,15 @@ final class WhisperEngine {
 }
 
 // MARK: - Cleanup (local LLM through Ollama)
+
+enum OllamaProblem {
+    /// A message a person can act on, for a failed Ollama request.
+    static func message(model: String, status: Int?, connectFailed: Bool) -> String {
+        if connectFailed { return "Ollama is not running. Open the Ollama app, then try again." }
+        if status == 404 { return "The model \(model) is not installed. Run: ollama pull \(model)" }
+        return "Ollama returned an error (HTTP \(status ?? 0)) for \(model)."
+    }
+}
 
 final class CleanupEngine {
     let baseURL = URL(string: "http://127.0.0.1:11434")!
@@ -199,7 +217,7 @@ final class CleanupEngine {
             "model": model,
             "stream": false,
             "think": false,
-            "keep_alive": "60m",
+            "keep_alive": GWConfig.keepAlive,
             "options": ["temperature": 0.1],
             "messages": [
                 ["role": "system", "content": system],
@@ -207,7 +225,13 @@ final class CleanupEngine {
             ],
         ]
         req.httpBody = try JSONSerialization.data(withJSONObject: payload)
-        let (data, resp) = try await URLSession.shared.data(for: req)
+        let (data, resp): (Data, URLResponse)
+        do { (data, resp) = try await URLSession.shared.data(for: req) } catch {
+            throw EngineError.message(OllamaProblem.message(model: model, status: nil, connectFailed: true))
+        }
+        if let st = (resp as? HTTPURLResponse)?.statusCode, st != 200 {
+            throw EngineError.message(OllamaProblem.message(model: model, status: st, connectFailed: false))
+        }
         guard (resp as? HTTPURLResponse)?.statusCode == 200,
               let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let message = json["message"] as? [String: Any],

@@ -6,6 +6,7 @@
   "port": 4188,
   "models": {
     "local": "gemma4:e4b",
+    "keepAlive": "5m",
     "whisper": "ggml-small.en-q5_1.bin"
   },
   "dashboard": {

@@ -6,3 +6,6 @@ build/
 goldware.json
 goldware.json.bak
 data/
+*.bak
+__pycache__/
+*.pyc

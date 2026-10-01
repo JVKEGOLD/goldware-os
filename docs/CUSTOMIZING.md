@@ -15,13 +15,14 @@ Then `make check` for the full gate. Back up first: `cp goldware.json goldware.j
 | Field | Meaning | Example |
 |---|---|---|
 | `assistantName` | Name shown everywhere and used in prompts (1 to 24 chars) | `"Juno"` |
-| `wakePhrase` | Phrase that wakes the assistant | `"Hey Juno"` |
+| `wakePhrase` | Phrase that wakes the assistant. Must not be blank (the app rejects a blank phrase and falls back to defaults, although `--check` does not catch it) | `"Hey Juno"` |
 | `wakeAliases` | Other spellings the recognizer may produce (case-insensitive, punctuation-tolerant) | `["hey june oh", "hey juneo"]` |
 | `accentColor` | Accent as `#RRGGBB` | `"#4A9CC9"` |
-| `port` | Dashboard server port (default 4188) | `4188` |
+| `port` | Dashboard server port, whole number 1024 to 65535, not 4177 (default 4188). Restart the app after changing it | `4188` |
 | `models.local` | Ollama model tag | `"gemma4:e4b"` |
+| `models.keepAlive` | How long Ollama keeps the language model in RAM after use (`"5m"`, `"0"` to unload at once, `"-1"` to keep loaded). Keep it short on a 16 GB Mac | `"5m"` |
 | `models.whisper` | Speech model file name under `~/Library/Application Support/GoldWare OS/models/` | `"ggml-small.en-q5_1.bin"` |
-| `dashboard.layout` | Layout name | `"starter"` |
+| `dashboard.layout` | A label only: it must be text but nothing reads it. Card order in `dashboard.cards` is what is displayed | `"starter"` |
 | `dashboard.cards` | Ordered list of cards | see below |
 
 ## Cards
@@ -37,8 +38,8 @@ Each card: `{ "id": "unique-slug", "type": "...", "title": "...", "size": "s" | 
 | `links` | Link list | `links`: `[{ "label": "Docs", "url": "https://example.com" }]` |
 | `system` | CPU, memory, disk | none |
 | `agents` | Running local AI processes (ollama, whisper-server, hermes, claude, codex) | none |
-| `embed` | A web page in a frame | `url` |
-| `html` | Your own HTML in a sandboxed iframe | `html` |
+| `embed` | A web page in a frame (`http://`, `https://`, or a `/path` on this server; many sites refuse to be framed) | `url` |
+| `html` | Your own HTML in a sandboxed iframe. Scripts run, but the card cannot reach the dashboard or `/api/...`. If it fetches a public web API, that request leaves this Mac | `html` |
 
 Examples:
 
@@ -54,13 +55,15 @@ Examples:
 
 ## Adding a new card type
 
-Card rendering lives in `dashboard/index.html` (single file, vanilla JS and CSS, no build step, no CDN). The renderers are registered in a `CARD_TYPES` object that maps a type name to a render function. If your checkout names it differently, search `dashboard/index.html` for the object the built-in types (`clock`, `tasks`, ...) are registered in.
+Card rendering lives in `dashboard/index.html` (single file, vanilla JS and CSS, no build step, no CDN). There is no registry object. A card type is wired in four places, and the server rejects the config if the first is missing:
 
-1. Add a renderer: a function that receives the card (`id`, `title`, `size`, `options`) and a container element, and fills the container. Register it, for example `CARD_TYPES.weather = (card, el) => { ... }`.
-2. Fetch data from the local server (`/api/...`, same origin) if you need any. If you need a new endpoint, add it in `server/goldware_server.py` (Python stdlib only) and a test in `tests/`.
-3. If the server validates card types, add the new name to its list of allowed types.
-4. Use the new type in `goldware.json`, run `python3 server/goldware_server.py --check`, and reload http://127.0.0.1:4188.
-5. Style with the house palette: background `#0d0c0a`, cream text, gold `#C9A24A`, fonts DM Sans, Instrument Serif, JetBrains Mono. No em dashes in UI text.
+1. `server/goldware_server.py`: add the name to the `CARD_TYPES` list near the top (this is what `--check` validates against).
+2. `dashboard/index.html`: add `["name", "Label"]` to the `TYPES` array (the add-card menu) and an entry to `DEFAULT_TITLE` and `DEFAULT_SIZE`.
+3. `dashboard/index.html`: add `case "name": return nameBody(body, c);` to the `switch (c.type)` in `fillBody(body, c)`, and write `nameBody`, which appends elements to `body` (see `clockBody` or `linksBody`; `h(tag, attrs, ...children)` builds elements).
+4. If the card needs data, fetch from the local server (`/api/...`, same origin). A new endpoint goes in `server/goldware_server.py` (Python stdlib only) with a test in `tests/test_server.py`.
+
+Then use the new type in `goldware.json`, run `python3 server/goldware_server.py --check`, and reload http://127.0.0.1:4188.
+Style with the house palette: background `#0d0c0a`, cream text, gold `#C9A24A`, fonts DM Sans, Instrument Serif, JetBrains Mono. No em dashes in UI text.
 
 ## Rename the assistant and wake phrase
 
@@ -80,16 +83,18 @@ To use a different speech model, put the `ggml-*.bin` file in `~/Library/Applica
 
 Voice commands are Swift code in `app/Sources/GoldWareOS`:
 
-- `TerminalCommands.swift`: spoken commands that run actions.
-- `Assistant.swift` (if present in your checkout): intent handling for the assistant. Otherwise search for where spoken text is matched to actions, for example `grep -rn "intent" app/Sources/GoldWareOS`.
+- Fixed phrases: `AppDelegate.swift`, function `handleAssistant(_:record:)`. It first checks `TerminalCommands.matchesFinishUp` and `matchesLockUp` (defined with their actions in `TerminalCommands.swift`). For a phrase such as "open Spotify", write a `matchesX` function and an action the same way, call it from `handleAssistant` before the generic request handling, and show feedback with `self.hud.show(...)`.
+- Anything else goes to the language model in `Assistant.swift`: `interpret` returns an intent from a fixed list (task, draft, note, paste, recall, agenda, complete, undo, closeout, vision_on, vision_off) and `perform` acts on it. A new intent means editing the prompt text, the schema `enum`, and `perform`.
+- Tests are `--test-*` flags handled in `app/Sources/GoldWareOS/main.swift` (phrase matching: `--test-terminal-commands`). Add cases there.
 
 Pattern: find an existing command, copy its shape, add your trigger phrases and the action, then:
 
 ```sh
-make app && make install
+make app
+scripts/setup.sh --only install --yes
 ```
 
-Quit and reopen the app. Run `make test` (it includes the app self-tests) before you rely on it.
+(`make install` does the same but skips the copy when nobody can answer its question, as when an agent runs it.) Quit and reopen the app; macOS may ask for the permissions again. `make test` runs the Python tests and the hand, quadrants, chord, wake, and shelf self-tests; run others yourself, for example `GOLDWARE_DATA=$TMPDIR/gw app/.build/release/GoldWareOS --test-terminal-commands`.
 
 ## Where data lives
 
@@ -100,7 +105,7 @@ Quit and reopen the app. Run `make test` (it includes the app self-tests) before
 | Models, app data, history | `~/Library/Application Support/GoldWare OS/` (`GOLDWARE_DATA` overrides it) |
 | Whisper model | `~/Library/Application Support/GoldWare OS/models/` |
 | Language models | managed by Ollama (`ollama list`) |
-| Built app | `app/build/GoldWareOS.app`, installed copy at `/Applications/GoldWare OS.app` |
+| Built app | `app/build/GoldWareOS.app`, installed copy at `/Applications/GoldWare OS.app` (it remembers this checkout's path, so keep the folder or set `GOLDWARE_ROOT`) |
 
 ## Example requests and the edits they map to
 
@@ -112,6 +117,6 @@ Quit and reopen the app. Run `make test` (it includes the app self-tests) before
 | "Put tasks first and make it wide" | reorder `dashboard.cards`, set `size: "w"` on the tasks card |
 | "Embed my calendar" | add an `embed` card with `options.url` (the site must allow framing) |
 | "Use a smaller model, my Mac is slow" | `ollama pull gemma4:e2b`, set `models.local`, restart app |
-| "Add a weather card" | new renderer in `CARD_TYPES` in `dashboard/index.html`, then a card of that type in `goldware.json` |
-| "Add a voice command: open my notes" | new case in `TerminalCommands.swift`, `make app`, `make install`, relaunch |
+| "Add a weather card" | simplest: an `html` card that fetches a public weather API (see the privacy note above). Or a new card type, see "Adding a new card type" |
+| "Add a voice command: open my notes" | new phrase matcher and action called from `handleAssistant` in `AppDelegate.swift`, `make app`, install, relaunch |
 | "Undo that" | restore `goldware.json.bak` or revert the code with git, then `make check` |

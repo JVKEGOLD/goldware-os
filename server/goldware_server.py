@@ -10,9 +10,11 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.environ.get("GOLDWARE_ROOT") or os.path.dirname(HERE))
@@ -24,7 +26,14 @@ CARD_TYPES = ["welcome", "clock", "tasks", "notes", "links", "system", "agents",
 CARD_SIZES = ["s", "m", "l", "w"]
 STATUSES = ["inbox", "ready", "doing", "done", "dropped"]
 TASK_FIELDS = ["title", "context", "status", "due_on", "priority", "focus_on"]
-LOCK = threading.Lock()
+# Re-entrant: readers and writers of the data files all take it.
+LOCK = threading.RLock()
+MAX_BODY = 1024 * 1024          # request bodies above this get 413
+MAX_CARDS = 100
+MAX_HTML = 200 * 1024           # options.html per card
+MAX_TASKS = 10000
+MAX_NOTES = 200
+MAX_NOTE_TEXT = 200 * 1024
 VERBOSE = os.environ.get("GOLDWARE_VERBOSE") == "1"
 
 CONTENT_TYPES = {
@@ -50,6 +59,11 @@ def user_path():
     return os.path.join(ROOT, "goldware.json")
 
 
+def _bad_url(u):
+    """Card and link URLs: http(s) or a same-site path. No javascript:, data:, or //host."""
+    return not isinstance(u, str) or len(u) > 2000 or not re.match(r"^(https?://|/(?!/))", u.strip(), re.I)
+
+
 def validate_config(cfg):
     """Return None when valid, else a human message naming the field."""
     if not isinstance(cfg, dict):
@@ -66,31 +80,46 @@ def validate_config(cfg):
             return "port must be a whole number between 1024 and 65535."
         if port == 4177:
             return "port must not be 4177, it is reserved."
-    if "wakePhrase" in cfg and not isinstance(cfg["wakePhrase"], str):
-        return "wakePhrase must be text."
+    if "wakePhrase" in cfg and (not isinstance(cfg["wakePhrase"], str) or not 1 <= len(cfg["wakePhrase"].strip()) <= 100):
+        return "wakePhrase must be text between 1 and 100 characters."
     if "wakeAliases" in cfg:
         al = cfg["wakeAliases"]
-        if not isinstance(al, list) or not all(isinstance(a, str) for a in al):
-            return "wakeAliases must be a list of text values."
-    if "models" in cfg and not isinstance(cfg["models"], dict):
-        return "models must be an object."
+        if (not isinstance(al, list) or len(al) > 50
+                or not all(isinstance(a, str) and len(a) <= 100 for a in al)):
+            return "wakeAliases must be a list of up to 50 text values, each up to 100 characters."
+    if "models" in cfg:
+        models = cfg["models"]
+        if not isinstance(models, dict):
+            return "models must be an object."
+        for k in ("local", "whisper"):
+            v = models.get(k)
+            if v is not None and (not isinstance(v, str) or not 1 <= len(v) <= 200):
+                return "models.%s must be text up to 200 characters." % k
+        w = models.get("whisper")
+        if isinstance(w, str) and (re.search(r"[/\\\x00]", w) or ".." in w):
+            return "models.whisper must be a file name, not a path."
+        ka = models.get("keepAlive")
+        if ka is not None and (not isinstance(ka, str) or not re.match(r"^-?[0-9]+[smh]?$", ka)):
+            return "models.keepAlive must be text like \"5m\", \"0\" or \"-1\"."
     dash = cfg.get("dashboard")
     if dash is not None:
         if not isinstance(dash, dict):
             return "dashboard must be an object."
-        if "layout" in dash and not isinstance(dash["layout"], str):
-            return "dashboard.layout must be text."
+        if "layout" in dash and (not isinstance(dash["layout"], str) or len(dash["layout"]) > 64):
+            return "dashboard.layout must be text up to 64 characters."
         cards = dash.get("cards", [])
         if not isinstance(cards, list):
             return "dashboard.cards must be a list."
+        if len(cards) > MAX_CARDS:
+            return "dashboard.cards can hold at most %d cards." % MAX_CARDS
         seen = set()
         for i, card in enumerate(cards):
             where = "dashboard.cards[%d]" % i
             if not isinstance(card, dict):
                 return where + " must be an object."
             cid = card.get("id")
-            if not isinstance(cid, str) or not cid:
-                return where + ".id must be non-empty text."
+            if not isinstance(cid, str) or not re.match(r"^[A-Za-z0-9_-]{1,64}$", cid):
+                return where + ".id must be a slug of 1 to 64 letters, digits, dashes or underscores."
             if cid in seen:
                 return where + ".id \"%s\" is used by more than one card." % cid
             seen.add(cid)
@@ -98,16 +127,39 @@ def validate_config(cfg):
                 return where + ".type must be one of: " + ", ".join(CARD_TYPES) + "."
             if card.get("size") not in CARD_SIZES:
                 return where + ".size must be one of: s, m, l, w."
-            if "title" in card and not isinstance(card["title"], str):
-                return where + ".title must be text."
-            if "options" in card and not isinstance(card["options"], dict):
-                return where + ".options must be an object."
+            if "title" in card and (not isinstance(card["title"], str) or len(card["title"]) > 100):
+                return where + ".title must be text up to 100 characters."
+            if "options" in card:
+                opts = card["options"]
+                if not isinstance(opts, dict):
+                    return where + ".options must be an object."
+                if "html" in opts and (not isinstance(opts["html"], str) or len(opts["html"]) > MAX_HTML):
+                    return where + ".options.html must be text up to %d characters." % MAX_HTML
+                if "url" in opts and opts["url"] not in (None, "") and _bad_url(opts["url"]):
+                    return where + ".options.url must start with http://, https://, or /."
+                if "links" in opts:
+                    links = opts["links"]
+                    if not isinstance(links, list) or len(links) > 50:
+                        return where + ".options.links must be a list of up to 50 links."
+                    for j, l in enumerate(links):
+                        if (not isinstance(l, dict) or not isinstance(l.get("label"), str)
+                                or len(l["label"]) > 100 or _bad_url(l.get("url"))):
+                            return where + ".options.links[%d] needs a label and an http(s) or / url." % j
     return None
+
+
+def _no_constants(name):
+    raise ValueError("%s is not valid JSON" % name)
+
+
+def parse_json(text):
+    """json.loads that rejects NaN and Infinity, which the browser cannot parse back."""
+    return json.loads(text, parse_constant=_no_constants)
 
 
 def read_json(path):
     with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+        return parse_json(f.read())
 
 
 def load_config():
@@ -119,6 +171,9 @@ def load_config():
         default_err = "goldware.default.json could not be read: %s" % e
     else:
         default_err = None
+        verr = validate_config(default)
+        if verr:
+            default_err = "goldware.default.json is invalid: %s" % verr
     up = user_path()
     if not os.path.exists(up):
         return default, "default", default_err
@@ -141,12 +196,20 @@ def config_port():
 def atomic_write(path, text):
     d = os.path.dirname(path)
     os.makedirs(d, exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        f.write(text)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, path)
+    # Unique temp file in the same folder, so concurrent writers never share one.
+    fd, tmp = tempfile.mkstemp(prefix=os.path.basename(path) + ".", suffix=".tmp", dir=d)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def save_config(cfg):
@@ -162,11 +225,36 @@ def data_path(name):
     return os.path.join(DATA_ROOT, name)
 
 
-def load_data(name, fallback):
+def log(msg):
+    sys.stderr.write("goldware: %s\n" % msg)
+    sys.stderr.flush()
+
+
+def quarantine(name, why):
+    """Move a damaged data file aside so the next write starts fresh without destroying it."""
+    src = data_path(name)
+    dst = "%s.corrupt-%s" % (src, time.strftime("%Y%m%d-%H%M%S"))
+    n = 0
+    while os.path.exists(dst):
+        n += 1
+        dst = "%s.corrupt-%s-%d" % (src, time.strftime("%Y%m%d-%H%M%S"), n)
     try:
-        return read_json(data_path(name))
-    except Exception:
-        return fallback
+        os.replace(src, dst)
+        log("%s is unusable (%s). Saved it as %s and starting fresh." % (name, why, os.path.basename(dst)))
+    except OSError as e:
+        log("%s is unusable (%s) and could not be moved aside: %s" % (name, why, e))
+
+
+def load_data(name, fallback):
+    with LOCK:
+        path = data_path(name)
+        if not os.path.exists(path):
+            return fallback
+        try:
+            return read_json(path)
+        except Exception as e:
+            quarantine(name, "not valid JSON: %s" % e)
+            return fallback
 
 
 def revision_of(task):
@@ -181,8 +269,12 @@ def today_str():
 
 def stored_tasks():
     data = load_data("tasks.json", {"tasks": []})
-    tasks = data.get("tasks", []) if isinstance(data, dict) else []
-    return tasks if isinstance(tasks, list) else []
+    tasks = data.get("tasks") if isinstance(data, dict) else None
+    if not isinstance(tasks, list) or not all(isinstance(t, dict) for t in tasks):
+        if os.path.exists(data_path("tasks.json")):
+            quarantine("tasks.json", "unexpected structure")
+        return []
+    return tasks
 
 
 def with_revision(task):
@@ -210,11 +302,15 @@ def check_changes(changes, creating):
             if not isinstance(v, str) or not v.strip():
                 return None, "title must be non-empty text."
             v = v.strip()
+            if len(v) > 500:
+                return None, "title must be 500 characters or fewer."
         elif k == "context":
             if v is None:
                 v = ""
             if not isinstance(v, str):
                 return None, "context must be text."
+            if len(v) > 20000:
+                return None, "context must be 20000 characters or fewer."
         elif k == "status":
             if v not in STATUSES:
                 return None, "status must be one of: " + ", ".join(STATUSES) + "."
@@ -224,6 +320,8 @@ def check_changes(changes, creating):
         elif k == "priority":
             if v is not None and (isinstance(v, bool) or not isinstance(v, (int, str))):
                 return None, "priority must be a number, text, or null."
+            if isinstance(v, str) and len(v) > 50:
+                return None, "priority text must be 50 characters or fewer."
         clean[k] = v
     if creating and "title" not in clean:
         return None, "title is required."
@@ -231,7 +329,9 @@ def check_changes(changes, creating):
 
 
 def work_get():
-    tasks = [with_revision(t) for t in stored_tasks() if isinstance(t, dict)]
+    with LOCK:
+        stored = stored_tasks()
+    tasks = [with_revision(t) for t in stored]
     return 200, {"today": today_str(), "tasks": tasks}
 
 
@@ -242,8 +342,8 @@ def work_post(body):
         tasks = stored_tasks()
         if body.get("create") is True:
             rid = body.get("request_id")
-            if not isinstance(rid, str) or not rid:
-                return 400, {"error": "request_id is required to create a task."}
+            if not isinstance(rid, str) or not 1 <= len(rid) <= 200:
+                return 400, {"error": "request_id is required to create a task (text up to 200 characters)."}
             changes, err = check_changes(body.get("changes"), True)
             if err:
                 return 400, {"error": err}
@@ -251,6 +351,8 @@ def work_post(body):
             for t in tasks:
                 if t.get("id") == tid:
                     return 200, {"task": with_revision(t), "created": False}
+            if len(tasks) >= MAX_TASKS:
+                return 400, {"error": "Too many tasks (limit %d)." % MAX_TASKS}
             task = {"id": tid, "title": "", "status": "inbox", "context": "",
                     "due_on": None, "priority": None, "focus_on": None}
             task.update(changes)
@@ -279,21 +381,32 @@ def work_post(body):
 # ---------- notes ----------
 
 def notes_get():
+    with LOCK:
+        return _notes_get()
+
+
+def _notes_get():
     data = load_data("notes.json", {"notes": {}})
-    notes = data.get("notes", {}) if isinstance(data, dict) else {}
-    return notes if isinstance(notes, dict) else {}
+    notes = data.get("notes") if isinstance(data, dict) else None
+    if not isinstance(notes, dict) or not all(isinstance(v, str) for v in notes.values()):
+        if os.path.exists(data_path("notes.json")):
+            quarantine("notes.json", "unexpected structure")
+        return {}
+    return notes
 
 
 def notes_post(body):
     if not isinstance(body, dict):
         return 400, {"error": "Body must be a JSON object."}
     cid, text = body.get("cardId"), body.get("text")
-    if not isinstance(cid, str) or not cid:
-        return 400, {"error": "cardId must be non-empty text."}
-    if not isinstance(text, str):
-        return 400, {"error": "text must be text."}
+    if not isinstance(cid, str) or not 1 <= len(cid) <= 100:
+        return 400, {"error": "cardId must be non-empty text up to 100 characters."}
+    if not isinstance(text, str) or len(text) > MAX_NOTE_TEXT:
+        return 400, {"error": "text must be text up to %d characters." % MAX_NOTE_TEXT}
     with LOCK:
         notes = notes_get()
+        if cid not in notes and len(notes) >= MAX_NOTES:
+            return 400, {"error": "Too many notes (limit %d)." % MAX_NOTES}
         notes[cid] = text
         atomic_write(data_path("notes.json"), json.dumps({"notes": notes}, indent=2) + "\n")
     return 200, {"notes": notes}
@@ -370,8 +483,15 @@ PLACEHOLDER = (b"<!doctype html><meta charset=utf-8><title>GoldWare OS</title>"
 
 
 def safe_join(base, rel):
+    """Resolve rel under base. None for NUL bytes, backslashes, or anything that escapes
+    base once symlinks are resolved."""
+    if "\x00" in rel or "\\" in rel:
+        return None
     base = os.path.realpath(base)
-    full = os.path.realpath(os.path.join(base, rel))
+    try:
+        full = os.path.realpath(os.path.join(base, rel))
+    except (ValueError, OSError):
+        return None
     if full != base and not full.startswith(base + os.sep):
         return None
     return full
@@ -380,6 +500,7 @@ def safe_join(base, rel):
 class Handler(BaseHTTPRequestHandler):
     server_version = "GoldWareOS"
     protocol_version = "HTTP/1.1"
+    timeout = 30  # drop stalled or slow-loris connections
 
     def log_message(self, fmt, *args):
         if VERBOSE:
@@ -391,6 +512,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         if nostore:
             self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Content-Security-Policy", "frame-ancestors 'self'")
+        if self.close_connection:
+            self.send_header("Connection", "close")
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)
@@ -402,13 +527,19 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json(code, {"error": msg})
 
     def serve_file(self, base, rel, force_text=False):
-        full = safe_join(base, rel)
+        full = safe_join(base, unquote(rel))
         if full is None or not os.path.isfile(full):
             return self.err(404, "Not found.")
         ext = os.path.splitext(full)[1].lower()
         ctype = "text/plain; charset=utf-8" if force_text else CONTENT_TYPES.get(ext, "application/octet-stream")
         with open(full, "rb") as f:
             self.send(200, f.read(), ctype)
+
+    def host_ok(self):
+        """DNS rebinding guard: only our own loopback names, with our port, are accepted."""
+        host = (self.headers.get("Host") or "").strip().lower()
+        port = self.server.server_address[1]
+        return host in ("127.0.0.1:%d" % port, "localhost:%d" % port)
 
     def origin_ok(self):
         origin = self.headers.get("Origin")
@@ -417,7 +548,21 @@ class Handler(BaseHTTPRequestHandler):
         port = self.server.server_address[1]
         return origin in ("http://127.0.0.1:%d" % port, "http://localhost:%d" % port)
 
+    def guard(self):
+        """Common checks for every request. Returns True when the request may proceed."""
+        if not self.host_ok():
+            self.close_connection = True
+            self.err(403, "Unexpected Host header.")
+            return False
+        if not self.origin_ok():
+            self.close_connection = True
+            self.err(403, "Requests from other origins are not allowed.")
+            return False
+        return True
+
     def do_GET(self):
+        if not self.guard():
+            return
         path = urlparse(self.path).path
         try:
             if path == "/":
@@ -427,6 +572,11 @@ class Handler(BaseHTTPRequestHandler):
                         return self.send(200, f.read(), CONTENT_TYPES[".html"], True)
                 return self.send(200, PLACEHOLDER, CONTENT_TYPES[".html"], True)
             if path == "/api/config":
+                if "default=1" in (urlparse(self.path).query or "").split("&"):
+                    try:
+                        return self.send_json(200, {"config": read_json(default_path()), "source": "default", "error": None})
+                    except Exception as e:
+                        return self.err(500, "goldware.default.json could not be read: %s" % e)
                 cfg, source, error = load_config()
                 return self.send_json(200, {"config": cfg, "source": source, "error": error})
             if path == "/api/work":
@@ -450,21 +600,38 @@ class Handler(BaseHTTPRequestHandler):
                 return self.serve_file(os.path.join(CODE_ROOT, "docs"), path[len("/docs/"):], True)
             return self.err(404, "Not found.")
         except Exception as e:
-            return self.err(500, "Server error: %s" % e)
+            log("GET %s failed: %r" % (path, e))
+            return self.err(500, "Server error.")
 
     do_HEAD = do_GET
 
     def do_POST(self):
+        if not self.guard():
+            return
         path = urlparse(self.path).path
-        if not self.origin_ok():
-            return self.err(403, "Requests from other origins are not allowed.")
         try:
-            length = int(self.headers.get("Content-Length") or 0)
-            if length > 5 * 1024 * 1024:
-                return self.err(400, "Body too large.")
+            # A cross-site HTML form can only send text/plain, form-encoded or multipart,
+            # so requiring JSON blocks simple cross-site posts even without an Origin header.
+            ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            if ctype != "application/json":
+                self.close_connection = True
+                return self.err(415, "Content-Type must be application/json.")
+            if self.headers.get("Transfer-Encoding"):
+                self.close_connection = True
+                return self.err(411, "Send a Content-Length, chunked bodies are not supported.")
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                length = -1
+            if length < 0:
+                self.close_connection = True
+                return self.err(400, "Invalid Content-Length.")
+            if length > MAX_BODY:
+                self.close_connection = True  # the unread body must not be parsed as a new request
+                return self.err(413, "Body too large (limit %d bytes)." % MAX_BODY)
             raw = self.rfile.read(length) if length else b""
             try:
-                body = json.loads(raw.decode("utf-8"))
+                body = parse_json(raw.decode("utf-8"))
             except Exception:
                 return self.err(400, "Body must be valid JSON.")
             if path == "/api/config":
@@ -482,7 +649,15 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(code, obj)
             return self.err(404, "Not found.")
         except Exception as e:
-            return self.err(500, "Server error: %s" % e)
+            log("POST %s failed: %r" % (path, e))
+            return self.err(500, "Server error.")
+
+
+def make_server(port):
+    """Bind loopback only, whatever the environment says."""
+    httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    httpd.daemon_threads = True
+    return httpd
 
 
 def main(argv=None):
@@ -497,10 +672,21 @@ def main(argv=None):
             return 1
         print("Config OK (%s)" % source)
         return 0
-    port = args.port or (int(os.environ["GOLDWARE_PORT"]) if os.environ.get("GOLDWARE_PORT") else config_port())
+    try:
+        port = args.port or (int(os.environ["GOLDWARE_PORT"]) if os.environ.get("GOLDWARE_PORT") else config_port())
+    except ValueError:
+        sys.stderr.write("GOLDWARE_PORT must be a whole number.\n")
+        return 2
+    if not 1024 <= port <= 65535:
+        sys.stderr.write("Port %d is out of range (1024 to 65535).\n" % port)
+        return 2
     os.makedirs(DATA_ROOT, exist_ok=True)
-    httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
-    httpd.daemon_threads = True
+    try:
+        httpd = make_server(port)
+    except OSError as e:
+        sys.stderr.write("Cannot listen on 127.0.0.1:%d (%s). Another GoldWare OS server or app may "
+                         "already be using it; stop it or set a different port.\n" % (port, e.strerror or e))
+        return 3
     print("GoldWare OS server on http://127.0.0.1:%d" % port, flush=True)
     try:
         httpd.serve_forever()

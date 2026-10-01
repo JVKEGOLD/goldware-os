@@ -314,9 +314,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             lastEvent = "accessibility granted, hotkey reinstalled"
             hud.show("Accessibility on. Hold Right Option to talk.", orb: .breathing, autoHide: 2.5)
         }
+        let changed = trusted != wasTrusted
         wasTrusted = trusted
-        writeStatus()
+        // status.json is for debugging: refresh it every 30 s instead of every tick, so idle stays idle.
+        statusTicks += 1
+        if changed || statusTicks % 15 == 0 { writeStatus() }
     }
+    private var statusTicks = 0
 
     /// Diagnostics for whoever is helping debug: status.json in the data folder.
     private func writeStatus() {
@@ -346,17 +350,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func bootEngines() async {
         await MainActor.run { statusLine = "Loading speech model…" }
         for _ in 0..<60 {
+            if whisper.problem != nil { break }   // missing binary or model: waiting will not help
+            if whisper.problem != nil { break }   // missing binary or model: waiting will not help
             if await whisper.isReady() { break }
             try? await Task.sleep(nanoseconds: 500_000_000)
         }
         models = await cleanup.availableModels()
-        if cleanupEnabled {
-            await MainActor.run { statusLine = "Loading cleanup model…" }
-            await cleanup.warm(model: cleanupModel)
-        }
+        // The language model loads on first use (keep_alive is short), not at launch: it pins ~5 GB on a 16 GB Mac.
         let ready = await whisper.isReady()
         await MainActor.run {
-            statusLine = ready ? "Ready" : "Speech engine failed to start (see whisper-server.log)"
+            statusLine = ready ? "Ready" : (whisper.problem ?? "Speech engine failed to start (see whisper-server.log)")
+            if ready, let bad = GWConfig.error { statusLine = bad; hud.show(bad, orb: .shaping, autoHide: 6) }
             if ready { hud.show("\(GWConfig.name) is here. Hold ⌥ to dictate, ⌘ to talk to me.", orb: .breathing, tint: .assistant, autoHide: 3) }
         }
         await MainActor.run { flushOutbox(quiet: true) }
@@ -1055,8 +1059,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func chooseModel(_ sender: NSMenuItem) {
         guard let m = sender.representedObject as? String else { return }
         cleanupModel = m
-        hud.show("Loading \(m)…", orb: .working, autoHide: 2)
-        Task { await cleanup.warm(model: m) }
+        hud.show("Using \(m)", orb: .working, autoHide: 2)
+        if cleanupEnabled { Task { await cleanup.warm(model: m) } }
     }
 
     @objc private func openHistory() {
