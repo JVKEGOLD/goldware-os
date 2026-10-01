@@ -504,6 +504,15 @@ class TestHardening(ServerCase):
         self.assertNotIn("allow-top-navigation", html)
         self.assertIn("(?!\\/)", html)  # protocol-relative URLs are not "safe"
 
+    def test_vision_tab_draws_each_hand_gesture(self):
+        with open(os.path.join(REPO, "dashboard", "index.html"), encoding="utf-8") as f:
+            html = f.read()
+        import re
+        for g in ("scan", "file", "point", "pinch", "fist", "open", "lock"):
+            self.assertRegex(html, r'data-gesture="%s"><div class="gicon"><svg class="hand-art"' % g, g)
+        # 7 cards plus one hand per quadrant
+        self.assertEqual(len(re.findall(r'<svg class="hand-art"', html)), 11)
+
     def test_sandboxed_frame_origin_cannot_call_api(self):
         # A sandboxed iframe without allow-same-origin sends Origin: null.
         self.assertEqual(self.req("/api/config", headers={"Origin": "null"})[0], 403)
