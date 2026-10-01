@@ -152,7 +152,7 @@ make doctor
 
 | Memory | Tier | Local model |
 |---|---|---|
-| under 12 GB | small | `gemma4:e2b` |
+| under 12 GB | small | `gemma4:e2b`; AI Cleanup ships off here (the model makes dictation slow on 8 GB). Turn it on from the menu bar icon > AI Cleanup |
 | 12 to 28 GB | standard | `gemma4:e4b` |
 | 28 GB or more | large | `gemma4:e4b` by default, `gemma4:12b` if you opt in (set `GOLDWARE_TIER=large` with `--yes`, or answer yes when asked) |
 

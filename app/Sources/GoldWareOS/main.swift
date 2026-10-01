@@ -968,6 +968,8 @@ if args.count >= 2, args[1] == "--test-quadrants" {
     expect("quadrants tile the screen without overlap", r[0].maxX == r[1].minX && r[2].maxY == r[0].minY &&
            !r[0].intersects(r[3]) && r[0].width == r[3].width)
     expect("1 is top left and 4 is bottom right", r[0].minX < r[1].minX && r[0].minY > r[2].minY && r[3].minX > r[2].minX)
+    expect("AI Cleanup ships off under 12 GB and on from 12 GB",
+           !CleanupEngine.defaultOn(memory: 8 << 30) && CleanupEngine.defaultOn(memory: 12 << 30) && CleanupEngine.defaultOn(memory: 16 << 30))
     expect("without Accessibility the message says to turn it on, not that there is no text box",
            QuadrantDictation.noTargetMessage(trusted: false, app: nil).contains("Accessibility"))
     expect("an empty quadrant and a window without a text box read differently",

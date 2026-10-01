@@ -148,6 +148,12 @@ enum OllamaProblem {
 final class CleanupEngine {
     let baseURL = URL(string: "http://127.0.0.1:11434")!
 
+    /// AI Cleanup ships off on Macs under 12 GB: loading the model there pushes macOS into swap, so
+    /// every dictation waits on it. The menu's AI Cleanup switch turns it on.
+    static func defaultOn(memory: UInt64) -> Bool { memory >= 12 << 30 }
+    /// The longest a dictation waits for cleanup before pasting what Whisper heard.
+    static let timeout: TimeInterval = 15
+
     static let systemPrompt = """
     You are a dictation cleanup engine. You receive a raw speech-to-text transcript of the user talking, and you return the text they meant to type, ready to paste.
 
@@ -195,7 +201,7 @@ final class CleanupEngine {
         }
         let user = "\(context)\n<transcript>\n\(raw)\n</transcript>"
 
-        var out = try await chat(model: model, system: Self.systemPrompt, user: user, timeout: 60)
+        var out = try await chat(model: model, system: Self.systemPrompt, user: user, timeout: Self.timeout)
         out = out.replacingOccurrences(of: #"(?s)<think>.*?</think>"#, with: "", options: .regularExpression)
             .replacingOccurrences(of: "</?transcript>", with: "", options: .regularExpression)
             .replacingOccurrences(of: "\u{2014}", with: ", ")

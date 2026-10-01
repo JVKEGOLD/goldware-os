@@ -61,7 +61,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var vaultLoadedAt = Date.distantPast
 
     private var cleanupEnabled: Bool {
-        get { UserDefaults.standard.object(forKey: "cleanupEnabled") as? Bool ?? true }
+        get { UserDefaults.standard.object(forKey: "cleanupEnabled") as? Bool ?? CleanupEngine.defaultOn(memory: ProcessInfo.processInfo.physicalMemory) }
         set { UserDefaults.standard.set(newValue, forKey: "cleanupEnabled") }
     }
     private var cleanupModel: String {
