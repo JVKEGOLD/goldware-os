@@ -300,7 +300,8 @@ struct MirrorToggle {
 /// A pose that has to be held to count, riding out brief misreads (a thumb flickering in or out).
 struct HeldGesture {
     enum Result { case idle, holding, fired }
-    static let seconds = 0.8
+    init(seconds: Double = 0.8) { self.seconds = seconds }
+    var seconds = 0.8
     private var since: CFTimeInterval?
     private var lastSeen: CFTimeInterval = 0
     var isHolding: Bool { since != nil }
@@ -312,7 +313,7 @@ struct HeldGesture {
         if seen {
             lastSeen = now
             if since == nil { since = now }
-            if let s = since, s > 0, now - s >= Self.seconds { since = -1; return .fired }
+            if let s = since, s > 0, now - s >= seconds { since = -1; return .fired }
             return since == -1 ? .idle : .holding
         }
         guard since != nil else { return .idle }
@@ -358,7 +359,7 @@ final class HandControl: VisionDriver {
     enum Pose: String { case none = "NO HAND", track = "POINTING", pinch = "PINCHED", scroll = "SCROLLING",
                          open = "OPEN HAND", other = "RESTING", switching = "FOUR FINGERS · TO QUADRANTS",
                          letsWork = "LET'S WORK · PULL APART", lockUp = "TWO HANDS · FISTS LOCK UP · ONE FIST CLEARS OUT",
-                         clear = "PINKY · CLEAR" }
+                         clear = "PINKY · CLEAR", shaka = "SHAKA · SEND" }
 
     private(set) var pose: Pose = .none {
         didSet { if pose != oldValue { PoseLog.shared.write("\(oldValue.rawValue) -> \(pose.rawValue)  \(diag)") } }
@@ -393,6 +394,11 @@ final class HandControl: VisionDriver {
     var onClear: (() -> Void)?
     private var clearHold = HeldGesture()
     private var switchHold = HeldGesture()
+    /// The shaka held half a second sends, like the diamond.
+    private var shakaHold = HeldGesture(seconds: 0.5)
+    /// Set once the shaka sends, until the hand leaves the little-finger shape: tucking the thumb to
+    /// lower it reads as the pinky clear, which must not undo the send.
+    private var shakaSent = false
     /// Last frame's fingers, so a finger at the line does not flicker (see `HandGesture.extended`).
     private var lastFingers: [Bool]?
     /// For `--test-hand`: when set, pointer moves are reported here instead of posted, and the pointer
@@ -446,6 +452,8 @@ final class HandControl: VisionDriver {
     func stop() {
         switchHold.reset()
         clearHold.reset()
+        shakaHold.reset()
+        shakaSent = false
         send.reset()
         lastFingers = nil
         pinched = false
@@ -613,8 +621,27 @@ final class HandControl: VisionDriver {
         case .idle:
             break
         }
+        // The shaka, held: send what was just dictated. While it is up the pinky clear cannot run, so a
+        // thumb flickering in mid-shaka never clears what was just sent.
+        if ext != [false, false, false, true] { shakaSent = false }
+        switch shakaHold.update(!pinched && HandGesture.isShaka(frame.squared, last: ext), now: now) {
+        case .fired:
+            shakaSent = true
+            clearHold.reset()
+            resetMotion()
+            pose = .shaka
+            onSend?()
+            return
+        case .holding:
+            clearHold.reset()
+            resetMotion()
+            pose = .shaka
+            return
+        case .idle:
+            break
+        }
         // The pinky alone, held: clear what was just pasted. It already moves nothing (not a point).
-        switch clearHold.update(!pinched && HandGesture.isPinky(frame.squared, last: ext), now: now) {
+        switch clearHold.update(!pinched && !shakaSent && HandGesture.isPinky(frame.squared, last: ext), now: now) {
         case .fired:
             resetMotion()
             pose = .clear

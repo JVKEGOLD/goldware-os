@@ -69,6 +69,13 @@ enum HandGesture: Equatable {
         extended(j, last: last)?.fingers == [false, false, false, true] && thumb(j) != .spread
     }
 
+    /// The shaka ("call me"): only the little finger up and the thumb spread out to the side. Sends what
+    /// was just dictated. One hand, and the palm need not face the camera, so it never reads as an open
+    /// palm (the pointer) or a quadrant.
+    static func isShaka(_ j: Joints, last: [Bool]? = nil) -> Bool {
+        extended(j, last: last)?.fingers == [false, false, false, true] && thumb(j) == .spread
+    }
+
     /// The OK sign: thumb and index tips touching in a ring, the other three fingers straight. On HaGRID
     /// photos this is 98% of OK signs and none of the other one-hand gestures.
     static func isOK(_ j: Joints) -> Bool {

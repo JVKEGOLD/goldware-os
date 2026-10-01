@@ -394,6 +394,41 @@ if args.count >= 2, args[1] == "--test-hand" {
            "true false false false")
     expect("the pinky is never quadrant 1; the index still is",
            "\(QuadrantDictation.quadrant(pinky).map { "\($0)" } ?? "none") \(QuadrantDictation.quadrant(hand([true, false, false, false], thumb: "in")).map { "\($0)" } ?? "none")", "none 1")
+    // The shaka (thumb and pinky out), held 0.5 s, sends in both styles; it is never the pinky clear.
+    let shaka = callMe
+    expect("reads the shaka, not the pinky, a fist, an open hand, or one finger",
+           "\(HandGesture.isShaka(shaka)) \(HandGesture.isShaka(pinky)) \(HandGesture.isShaka(fist)) \(HandGesture.isShaka(open)) \(HandGesture.isShaka(hand([true, false, false, false], thumb: "side")))",
+           "true false false false false")
+    expect("the shaka is never a quadrant", "\(QuadrantDictation.quadrant(shaka).map { "\($0)" } ?? "none")", "none")
+    for style in ["pointer", "quadrants"] {
+        let pc = HandControl(), qc = QuadrantDictation()
+        pc.dryRun = { _ in }; qc.dryRun = true
+        var sent = 0, cleared = 0, moved = 0, dictated: [Bool] = []
+        pc.onSend = { sent += 1 }; qc.onSend = { sent += 1 }
+        pc.onClear = { cleared += 1 }; qc.onClear = { cleared += 1 }
+        pc.dryRun = { _ in moved += 1 }; qc.onDictate = { dictated.append($0) }
+        func feedS(_ j: HandGesture.Joints?, _ seconds: Double) {
+            let end = t + seconds
+            while t < end {
+                var f = VisionFrame(); f.time = t; if let j { f.lead = j }
+                if style == "pointer" { pc.handle(f) } else { qc.handle(f) }
+                t += 1.0 / 30
+            }
+        }
+        feedS(fist, 0.5); feedS(shaka, 0.3)
+        expect("\(style): a shaka held 0.3 s does not send yet", "\(sent)", "0")
+        feedS(shaka, 0.4)
+        expect("\(style): a shaka held 0.5 s sends once", "\(sent)", "1")
+        feedS(shaka, 1.5)
+        expect("\(style): holding it longer does not send again", "\(sent)", "1")
+        feedS(pinky, 1.2)
+        expect("\(style): tucking the thumb to lower it does not clear what was sent", "\(cleared)", "0")
+        feedS(fist, 0.5); feedS(shaka, 0.6)
+        expect("\(style): a second shaka sends again", "\(sent)", "2")
+        feedS(fist, 0.5); feedS(pinky, 1.0)
+        expect("\(style): the pinky alone still clears", "\(cleared)", "1")
+        expect("\(style): the shaka moved no pointer and dictated nothing", "\(moved) \(dictated)", "0 []")
+    }
     let pclear = HandControl()
     var pcMoves = 0, pcClears = 0
     pclear.dryRun = { _ in pcMoves += 1 }
@@ -761,6 +796,7 @@ if args.count >= 3, args[1] == "--gesture-eval" {
             if e.fingers == [true, true, true, true] && HandGesture.thumb(j) == .tucked { fired.append("four") }
             if let q = QuadrantDictation.quadrant(j) { fired.append("q\(q)") }
             if HandGesture.isPinky(j) { fired.append("pinky") }
+            if HandGesture.isShaka(j) { fired.append("shaka") }
             if e.fingers == [false, false, false, true] { fired.append("pinkyAnyThumb") }
             for k in fired { hits[k, default: 0] += 1 }
         }
