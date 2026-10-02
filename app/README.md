@@ -31,7 +31,8 @@ GOLDWARE_DATA=$TMPDIR/gw-data .build/release/GoldWareOS --test-wake
 ```
 
 Available: `--test-hand`, `--test-quadrants`, `--test-chord`, `--test-shelf`, `--test-wake`,
-`--test-terminal-commands`, `--test-plan-usage`, `--test-work`, `--test-control-center`.
+`--test-terminal-commands`, `--test-plan-usage`, `--test-work`, `--test-control-center`,
+`--test-agent-peek` (agents on the pill and both hover glides).
 Renders: `--render-control-center out.png`, `--indicator-sheet out.png`.
 
 ## Where data lives

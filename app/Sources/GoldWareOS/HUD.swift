@@ -1,8 +1,8 @@
 import AppKit
 
 /// The always-on indicator at the bottom of the screen:
-///   1. a tiny orb while idle,
-///   2. hover it: your recent dictations; click one to copy it (for anything a paste missed).
+///   1. a tiny orb while idle, with the Office's agents beside it,
+///   2. hover the orb: your recent dictations; click one to copy it (for anything a paste missed).
 /// While you talk it becomes the status pill. It never takes focus from your app.
 final class HUD {
     enum Tint { case plain, assistant }
@@ -31,6 +31,8 @@ final class HUD {
     private var cardOpen = false
     /// Files parked on the pill. The resting indicator grows into a row of thumbnails while it holds any.
     let shelf = ShelfStore()
+    /// The Office's agents, shown on the resting indicator with a working / ready / question mark.
+    private let agentFeed = AgentPeekFeed()
 
     init() {
         Theme.registerFonts()
@@ -64,6 +66,16 @@ final class HUD {
             if self.isIdle { self.settleIdle() }
         }
         watchFileDrags()
+        pillView.onAgentClick = { agent in
+            guard !agent.tty.isEmpty else { return }
+            WorkData.focus(tty: "/dev/" + agent.tty)
+        }
+        agentFeed.onChange = { [weak self] agents in
+            guard let self, agents != self.pillView.agents else { return }
+            self.pillView.agents = agents
+            if self.isIdle { self.settleIdle() }
+        }
+        agentFeed.start()
         shelf.onChange = { [weak self] in
             guard let self else { return }
             self.pillView.needsDisplay = true
@@ -220,6 +232,7 @@ final class HUD {
         }, completionHandler: { [weak self] in
             guard let self, !self.cardOpen else { return }
             self.card.orderOut(nil)
+            self.cardView.hot = nil
             self.update()
         })
     }
@@ -317,7 +330,8 @@ final class HUD {
         Theme.registerFonts()
         let history = HistoryView(), empty = HistoryView()
         history.rows = rows
-        history.hot = rows.isEmpty ? nil : 0
+        history.hot = rows.isEmpty ? nil : 1
+        history.settleHover()
         let mini = PillView(), active = PillView(), assistant = PillView()
         mini.mode = .mini
         active.mode = .active(text: "Listening…", assistant: false)
@@ -337,7 +351,15 @@ final class HUD {
         let shelved = PillView(), dropping = PillView()
         for (p, drop) in [(shelved, PillView.Drop.none), (dropping, .over)] { p.shelf = shelf; p.mode = .shelf(drop: drop) }
         let cards: [(NSView, NSSize)] = [(history, history.preferredSize), (empty, empty.preferredSize)]
-        let pillViews: [PillView] = [mini, active, assistant, shelved, dropping]
+        // The resting pill with agents: one asking, one working (hovered), one ready.
+        let names = AgentPeek.castNames
+        let crew = [AgentPeek(id: "a", name: names[0], title: "Fix the signup form", tty: "", state: .question),
+                    AgentPeek(id: "b", name: names[1], title: "Write the launch post", tty: "", state: .working),
+                    AgentPeek(id: "c", name: names[2], title: "Tidy the inbox", tty: "", state: .ready)]
+        let miniCrew = PillView()
+        miniCrew.mode = .mini; miniCrew.agents = crew
+        miniCrew.setHoveredAgent(crew[1]); for _ in 0..<60 { miniCrew.stepLift() }
+        let pillViews: [PillView] = [mini, active, assistant, shelved, dropping, miniCrew]
         let pills: [(NSView, NSSize)] = pillViews.map { ($0, $0.preferredSize) }
 
         let pad: CGFloat = 28
@@ -407,6 +429,13 @@ final class PillView: NSView, NSDraggingSource {
     /// A file drag entered (true) or left (false) the pill.
     var onDropHover: (Bool) -> Void = { _ in }
     weak var shelf: ShelfStore?
+    /// Agents drawn after the orb at rest. Click one to bring up its terminal.
+    var agents: [AgentPeek] = [] { didSet { relayout(); updateTicker() } }
+    var onAgentClick: (AgentPeek) -> Void = { _ in }
+    private var ticker: Timer?
+    /// Each agent's hover amount, eased toward 1 under the pointer and back to 0 after.
+    private(set) var lift: [String: CGFloat] = [:]
+    private var liftTimer: Timer?
     let orb = OrbView()
     let peek = PeekView()
 
@@ -459,10 +488,85 @@ final class PillView: NSView, NSDraggingSource {
     override var isFlipped: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
+    // MARK: Agents
+
+    private static let moreFont = Theme.sans(10.5, "Medium")
+    private var shownAgents: ArraySlice<AgentPeek> { agents.prefix(AgentPeek.maxShown) }
+    private var moreLabel: String? { agents.count > AgentPeek.maxShown ? "+\(agents.count - AgentPeek.maxShown)" : nil }
+    private var showsAgents: Bool {
+        if case .mini = mode { return !agents.isEmpty } else { return false }
+    }
+    /// Width of the agent strip, including its leading gap.
+    private var agentsWidth: CGFloat {
+        guard showsAgents else { return 0 }
+        let more = moreLabel.map { Theme.size($0, font: Self.moreFont).width + 4 } ?? 0
+        return 4 + CGFloat(shownAgents.count) * AgentPeek.slot + more + 14
+    }
+    private let agentsStart: CGFloat = 26
+    func agentRects() -> [(AgentPeek, NSRect)] {
+        guard showsAgents else { return [] }
+        let s = AgentPeek.slot
+        return shownAgents.enumerated().map { i, a in
+            (a, NSRect(x: agentsStart + 4 + CGFloat(i) * s, y: (bounds.height - s) / 2, width: s, height: s))
+        }
+    }
+    private func agent(at p: NSPoint) -> AgentPeek? { agentRects().first { $0.1.insetBy(dx: 0, dy: -4).contains(p) }?.0 }
+
+    /// Redraw about 12 times a second only while a spinner or question mark is moving.
+    private func updateTicker() {
+        let moving = showsAgents && agents.contains { $0.state != .ready }
+        if moving, ticker == nil {
+            ticker = Timer.scheduledTimer(withTimeInterval: 1.0 / 12, repeats: true) { [weak self] _ in
+                guard let self, self.window?.isVisible == true else { return }
+                self.needsDisplay = true
+            }
+        } else if !moving {
+            ticker?.invalidate(); ticker = nil
+        }
+    }
+
+    private var hoveredAgent: String?
+
+    /// Point the hover at an agent (or none) and glide every sprite toward its new lift.
+    func setHoveredAgent(_ a: AgentPeek?) {
+        hoveredAgent = a?.id
+        toolTip = a?.tooltip
+        if let a, lift[a.id] == nil { lift[a.id] = 0 }
+        guard liftTimer == nil else { return }
+        let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in self?.stepLift() }
+        RunLoop.main.add(timer, forMode: .common)
+        liftTimer = timer
+    }
+
+    /// One 60 Hz frame; the timer stops once every sprite has settled.
+    func stepLift() {
+        var settled = true
+        for (id, v) in lift {
+            let target: CGFloat = id == hoveredAgent ? 1 : 0
+            let n = AgentPeek.easeHover(v, to: target)
+            if n == 0 && target == 0 { lift[id] = nil } else { lift[id] = n }
+            if n != target { settled = false }
+        }
+        needsDisplay = true
+        if settled { liftTimer?.invalidate(); liftTimer = nil }
+    }
+
+    private func drawAgents() {
+        let rects = agentRects()
+        guard let first = rects.first?.1 else { return }
+        let t = Date().timeIntervalSinceReferenceDate
+        for (a, r) in rects { a.draw(in: r, t: t, lift: lift[a.id] ?? 0) }
+        if let more = moreLabel {
+            let s = Theme.size(more, font: Self.moreFont)
+            let x = (rects.last?.1.maxX ?? first.minX) + 3
+            Theme.draw(more, at: NSPoint(x: x, y: bounds.midY - s.height / 2), font: Self.moreFont, color: Theme.textDim)
+        }
+    }
+
     var preferredSize: NSSize {
         switch mode {
         case .mini:
-            return NSSize(width: 26, height: 26)
+            return showsAgents ? NSSize(width: 26 + agentsWidth, height: AgentPeek.slot + 6) : NSSize(width: 26, height: 26)
         case .active(let text, _):
             let w = Theme.size(text, font: Theme.sans(13.5, "Medium")).width
             return NSSize(width: min(680, max(170, 8 + 40 + 10 + ceil(w) + 22 + chipWidth)), height: 52 + headroom)
@@ -471,10 +575,10 @@ final class PillView: NSView, NSDraggingSource {
         }
     }
 
-    /// The part of the pill that opens the history.
+    /// The part of the pill that opens the history: the orb, not the agents beside it.
     var orbZone: NSRect {
         switch mode {
-        case .mini: return bounds
+        case .mini: return showsAgents ? NSRect(x: 0, y: 0, width: 26, height: bounds.height) : bounds
         case .shelf(.none): return NSRect(x: 0, y: 0, width: 30, height: bounds.height)
         default: return .zero
         }
@@ -483,7 +587,7 @@ final class PillView: NSView, NSDraggingSource {
     private func relayout() {
         switch mode {
         case .mini:
-            orb.frame = NSRect(x: 3, y: 3, width: 20, height: 20)
+            orb.frame = NSRect(x: 3, y: (preferredSize.height - 20) / 2, width: 20, height: 20)
             orb.speedMul = 0.4
             orb.idle = true
             orb.state = .breathing
@@ -502,6 +606,7 @@ final class PillView: NSView, NSDraggingSource {
         peek.frame = NSRect(x: 3, y: 0, width: 50, height: headroom + 2)
         peek.horizon = headroom + 0.5
         if headroom == 0 { peek.settle(.hidden) }
+        updateTicker()
         orb.needsDisplay = true
         needsDisplay = true
     }
@@ -575,6 +680,7 @@ final class PillView: NSView, NSDraggingSource {
                 Theme.draw(label, at: NSPoint(x: chip.midX - ls.width / 2, y: chip.midY - ls.height / 2), font: chipFont, color: Theme.goldHi)
             }
         }
+        drawAgents()
     }
 
     override func updateTrackingAreas() {
@@ -595,7 +701,9 @@ final class PillView: NSView, NSDraggingSource {
 
     override func mouseEntered(with event: NSEvent) { hovering = true; needsDisplay = true; report(event) }
     override func mouseMoved(with event: NSEvent) { report(event); updateThumbHover(event) }
-    override func mouseExited(with event: NSEvent) { hovering = false; hoveredThumb = nil; needsDisplay = true; report(nil) }
+    override func mouseExited(with event: NSEvent) {
+        hovering = false; hoveredThumb = nil; setHoveredAgent(nil); needsDisplay = true; report(nil)
+    }
 
     private var hoveredThumb: URL?
     private var pressedThumb: URL?
@@ -609,6 +717,11 @@ final class PillView: NSView, NSDraggingSource {
     }
 
     private func updateThumbHover(_ event: NSEvent) {
+        if showsAgents {
+            let a = agent(at: convert(event.locationInWindow, from: nil))
+            if a?.id != hoveredAgent { setHoveredAgent(a) }
+            if a != nil { return }
+        }
         let t = thumb(at: event)
         if t != hoveredThumb {
             hoveredThumb = t
@@ -653,6 +766,7 @@ final class PillView: NSView, NSDraggingSource {
             NSWorkspace.shared.open(url)
             return
         }
+        if !dragged, let a = agent(at: convert(event.locationInWindow, from: nil)) { onAgentClick(a); return }
         if !dragged { onClick() } else { onDragged() }
     }
 
@@ -701,13 +815,14 @@ final class PillView: NSView, NSDraggingSource {
 // MARK: - History
 
 /// Recent dictations above the orb. Click a row to copy its text, for anything a paste missed.
+/// The hover highlight glides between rows instead of jumping.
 final class HistoryView: NSView {
-    var rows: [Dictation] = [] { didSet { hot = nil; invalidateIntrinsicSize() } }
+    var rows: [Dictation] = [] { didSet { hot = nil; glow = nil; invalidateIntrinsicSize() } }
     var onHover: (Bool) -> Void = { _ in }
     var onCopy: (Dictation) -> Void = { _ in }
     var onOpenAll: () -> Void = {}
     /// Hovered row index, or -1 for the "All history" link.
-    var hot: Int? { didSet { if hot != oldValue { needsDisplay = true } } }
+    var hot: Int? { didSet { if hot != oldValue { startGlide() } } }
 
     static let limit = 8
     private let width: CGFloat = 340
@@ -718,6 +833,51 @@ final class HistoryView: NSView {
     private var hits: [(NSRect, Int)] = []
     private let textFont = Theme.sans(12.5, "Medium")
     private let metaFont = Theme.sans(10.5)
+
+    // MARK: Smooth hover
+    /// The highlight's current top edge and opacity; they ease toward the hovered row.
+    private(set) var glow: (y: CGFloat, alpha: CGFloat)?
+    private var glideTimer: Timer?
+    /// Fraction of the remaining distance covered per 1/60 s frame (about 0.2 s to settle).
+    static let ease: CGFloat = 0.22
+
+    private func rowTop(_ i: Int) -> CGFloat { headerHeight + CGFloat(i) * rowHeight }
+    private var target: (y: CGFloat, alpha: CGFloat)? {
+        guard let h = hot, h >= 0, h < shown.count else { return nil }
+        return (rowTop(h), 1)
+    }
+
+    /// One easing step toward the hovered row. Pure on its inputs, so the self-test can drive it.
+    static func step(_ g: (y: CGFloat, alpha: CGFloat)?, to t: (y: CGFloat, alpha: CGFloat)?) -> (y: CGFloat, alpha: CGFloat)? {
+        guard let t else {
+            guard let g else { return nil }
+            let a = g.alpha * (1 - ease * 1.4)
+            return a < 0.02 ? nil : (g.y, a)
+        }
+        guard let g else { return (t.y, 0.35) }   // first hover: fade in where it is, no slide from nowhere
+        let y = abs(t.y - g.y) < 0.4 ? t.y : g.y + (t.y - g.y) * ease
+        let a = min(1, g.alpha + (1 - g.alpha) * ease * 1.6)
+        return (y, a > 0.98 ? 1 : a)
+    }
+
+    private func startGlide() {
+        needsDisplay = true
+        guard glideTimer == nil else { return }
+        let t = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in self?.glideTick() }
+        RunLoop.main.add(t, forMode: .common)
+        glideTimer = t
+    }
+
+    private func glideTick() {
+        let next = Self.step(glow, to: target)
+        let done = next.map { n in target.map { n.y == $0.y && n.alpha == 1 } ?? false } ?? true
+        glow = next
+        needsDisplay = true
+        if done { glideTimer?.invalidate(); glideTimer = nil }
+    }
+
+    /// Jump straight to the end state (offscreen renders).
+    func settleHover() { glow = target }
 
     override var isFlipped: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
@@ -769,27 +929,31 @@ final class HistoryView: NSView {
             Theme.draw("Nothing yet. Hold ⌥ and talk.", at: NSPoint(x: pad, y: y + 12), font: textFont, color: Theme.textDim)
             y += 44
         }
+        if let g = glow {
+            let row = NSRect(x: 6, y: g.y, width: width - 12, height: rowHeight - 2)
+            let bg = NSBezierPath(roundedRect: row, xRadius: 9, yRadius: 9)
+            Theme.surface2.withAlphaComponent(g.alpha).setFill(); bg.fill()
+            Theme.goldLine.withAlphaComponent(0.34 * g.alpha).setStroke(); bg.lineWidth = 1; bg.stroke()
+        }
         for (i, d) in list.enumerated() {
             let row = NSRect(x: 6, y: y, width: width - 12, height: rowHeight - 2)
-            if hot == i {
-                let bg = NSBezierPath(roundedRect: row, xRadius: 9, yRadius: 9)
-                Theme.surface2.setFill(); bg.fill()
-                Theme.goldLine.setStroke(); bg.lineWidth = 1; bg.stroke()
-            }
+            // How lit this row is: 1 under the settled highlight, fading as it slides away.
+            let lit = glow.map { max(0, 1 - abs($0.y - y) / rowHeight) * $0.alpha } ?? 0
             let assistant = d.mode == "assistant"
             let text = d.finalText.replacingOccurrences(of: "\n", with: " ")
-            (text as NSString).draw(with: NSRect(x: pad, y: y + 7, width: width - pad * 2 - (hot == i ? 40 : 0), height: 17),
+            (text as NSString).draw(with: NSRect(x: pad + 3 * lit, y: y + 7, width: width - pad * 2 - 40 * lit, height: 17),
                                     options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine],
                                     attributes: [.font: textFont, .foregroundColor: Theme.text])
             var meta = [Self.when(d.createdAt)]
             if let app = d.appName, !app.isEmpty { meta.append(app) }
             if assistant { meta.append(GWConfig.name) }
-            Theme.draw(meta.joined(separator: " · "), at: NSPoint(x: pad, y: y + 27), font: metaFont,
+            Theme.draw(meta.joined(separator: " · "), at: NSPoint(x: pad + 3 * lit, y: y + 27), font: metaFont,
                        color: assistant ? Theme.gold : Theme.textMuted)
-            if hot == i {
+            if lit > 0.05 {
                 let c = "Copy", cf = Theme.sans(10.5, "SemiBold")
                 let cs = Theme.size(c, font: cf)
-                Theme.draw(c, at: NSPoint(x: row.maxX - 10 - cs.width, y: row.midY - cs.height / 2), font: cf, color: Theme.goldHi)
+                Theme.draw(c, at: NSPoint(x: row.maxX - 10 - cs.width, y: row.midY - cs.height / 2), font: cf,
+                           color: Theme.goldHi.withAlphaComponent(lit))
             }
             hits.append((row, i))
             y += rowHeight
