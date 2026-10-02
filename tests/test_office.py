@@ -866,6 +866,16 @@ class OfficeHttp(unittest.TestCase):
             self.assertEqual(code, 404, path)
             self.assertNotIn(b"assistantName", body if isinstance(body, bytes) else json.dumps(body).encode())
 
+    def test_custom_cast_is_served_when_present_and_404_when_not(self):
+        self.assertEqual(self.call("/custom/office-cast.js")[0], 404)
+        os.makedirs(os.path.join(self.root, "custom"), exist_ok=True)
+        with open(os.path.join(self.root, "custom", "office-cast.js"), "w") as f:
+            f.write("OfficeCast.customize({ Bolt: { color: '#ff0000' } });")
+        r = urllib.request.urlopen(self.base + "/custom/office-cast.js", timeout=5)
+        self.assertIn("javascript", r.headers["Content-Type"])
+        self.assertIn(b"customize", r.read())
+        shutil.rmtree(os.path.join(self.root, "custom"))   # the tests share one root
+
     def test_custom_css_symlink_out_of_custom_is_refused(self):
         outside = os.path.join(self.tmp, "outside.css")
         with open(outside, "w") as f:

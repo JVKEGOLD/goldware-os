@@ -691,13 +691,16 @@ class Handler(BaseHTTPRequestHandler):
                 return self.office_get(path, parse_qs(urlparse(self.path).query))
             if path.startswith("/api/"):
                 return self.err(404, "Not found.")
-            if path == "/custom/office.css":
-                # Your own look for the Office. Lives in custom/ (git-ignored), so updates keep it.
-                full = safe_join(os.path.join(ROOT, "custom"), "office.css")
+            if path in ("/custom/office.css", "/custom/office-cast.js"):
+                # Your own look for the Office and its characters. Lives in custom/ (git-ignored), so
+                # updates keep it. Only these two files are served from that folder.
+                name = path[len("/custom/"):]
+                ctype = CONTENT_TYPES[os.path.splitext(name)[1]]
+                full = safe_join(os.path.join(ROOT, "custom"), name)
                 if full is None or not os.path.isfile(full):
-                    return self.send(404, b"", CONTENT_TYPES[".css"])
+                    return self.send(404, b"", ctype)
                 with open(full, "rb") as f:
-                    return self.send(200, f.read(), CONTENT_TYPES[".css"], True)
+                    return self.send(200, f.read(), ctype, True)
             if path.startswith("/dashboard/"):
                 return self.serve_file(os.path.join(CODE_ROOT, "dashboard"), path[len("/dashboard/"):])
             if path.startswith("/fonts/"):

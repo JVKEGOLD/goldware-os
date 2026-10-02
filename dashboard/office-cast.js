@@ -2,7 +2,9 @@
    (no image files). Each grid is the LEFT half of the character, mirrored when painted; the last
    column is the middle. Letters: . clear, o outline, b body, h light, s shade, w white, k dark,
    a accent, c second accent, p cheek. Each character has its own palette and signature colour.
-   Exposes window.OfficeCast = { names, has(name), color(name), size(name), canvas(name), url(name) }. */
+   Exposes window.OfficeCast = { names, has(name), color(name), size(name), canvas(name), url(name), customize(looks) }.
+   custom/office-cast.js (git-ignored) calls OfficeCast.customize({...}) to restyle characters; the
+   GoldWare OS pill reads the same file, so both draw the same look. See docs/CUSTOMIZING.md. */
 (() => {
   const CAST = {
     Bolt: { // steel-blue robot with an antenna and a cyan visor
@@ -283,6 +285,20 @@
   const urls = {};
   window.OfficeCast = {
     names: Object.keys(CAST),
+    // The grid itself, for the GoldWare OS pill (it runs this file in JavaScriptCore).
+    data: name => CAST[name] && { color: CAST[name].color, pal: { ...CAST[name].pal }, rows: CAST[name].rows.slice() },
+    // Your own look, from custom/office-cast.js: per character, `color` and `rows` replace, `pal`
+    // merges (so { pal: { b: '#c04040' } } recolours just the body). Unknown names are ignored.
+    customize: looks => {
+      Object.entries(looks || {}).forEach(([name, o]) => {
+        const c = CAST[name];
+        if (!c || !o) return;
+        if (typeof o.color === 'string') c.color = o.color;
+        if (o.pal) Object.assign(c.pal, o.pal);
+        if (Array.isArray(o.rows) && o.rows.length) c.rows = o.rows.map(String);
+        delete built[name]; delete urls[name];
+      });
+    },
     has: name => !!CAST[name],
     color: name => CAST[name] && CAST[name].color,
     size: name => { const b = build(name); return b && [b.w, b.h]; },
