@@ -254,16 +254,17 @@ details p { color: var(--text-muted); font-size: 14px; margin-top: 8px; }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
 </style>
 <link rel="stylesheet" href="/dashboard/office.css">
+<link rel="stylesheet" href="/custom/office.css">
 </head>
 <body>
 
 <div class="topbar">
   <div class="brand"><img src="/logo.png" alt=""><span class="brand-name" data-name>GoldWare</span></div>
   <div class="topbar-tabs">
+    <button class="topbar-tab" data-tab="office" title="The agents on this Mac, at their desks">Office</button>
     <button class="topbar-tab" data-tab="dashboard">Dashboard</button>
     <button class="topbar-tab" data-tab="voice">Voice</button>
     <button class="topbar-tab" data-tab="vision">Vision</button>
-    <button class="topbar-tab" data-tab="office" title="The agents on this Mac, at their desks">Office</button>
   </div>
   <div class="topbar-spacer"></div>
 </div>
@@ -456,13 +457,26 @@ details p { color: var(--text-muted); font-size: 14px; margin-top: 8px; }
       <div class="office-hud" id="office-hud" aria-label="The office">
         <div class="oh-brand"><span class="oh-gw" aria-hidden="true">GW</span><b>GoldWare</b><i class="oh-sep" aria-hidden="true"></i><span class="oh-room">Office</span></div>
         <div class="oh-floor"><span class="oh-status" role="status">Opening the office…</span></div>
+        <div class="oh-new-wrap">
+          <button class="oh-new" type="button" title="Open a new terminal with an agent"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>New agent</button><button class="oh-new-more" type="button" aria-haspopup="menu" aria-expanded="false" title="Choose the agent and the topic" aria-label="Choose the agent and the topic"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg></button>
+          <div class="oh-new-menu" role="menu" hidden>
+            <div class="oh-topics" role="radiogroup" aria-label="Topic">
+              <small>Topic</small>
+              <span class="oh-topics-list"></span>
+            </div>
+            <small class="oh-menu-head">Agent</small>
+            <div class="oh-presets"></div>
+            <button type="button" class="oh-edit" role="menuitem" data-edit><b>Edit</b><small>Topics and agents</small></button>
+          </div>
+          <div class="oe-editor" role="dialog" aria-label="Edit topics and agents" hidden></div>
+        </div>
         <button class="oh-usage" type="button" data-tab="usage" title="AI usage"><span class="oh-usage-text">Usage</span></button>
         <button class="oh-full" type="button" aria-pressed="false" title="Full screen (F)" aria-label="Full screen"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4"/></svg></button>
       </div>
       <aside class="office-roster" id="office-roster" aria-label="Office tools">
         <nav class="or-tabs" aria-label="Office panels">
           <button type="button" data-tab="floor" aria-expanded="false" aria-controls="office-roster-list office-helper"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 7h12v6M4 13V9m8 4V9M5 3h6v4H5z"/></svg>Floor</button>
-          <button type="button" data-tab="tasks" aria-expanded="false" aria-controls="office-board"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m2 4 1 1 2-2m2 1h7M2 8h3m2 0h7M2 12h3m2 0h7"/></svg>Tasks<i></i></button>
+          <button type="button" data-tab="tasks" aria-expanded="false" aria-controls="office-board"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m2 4 1 1 2-2m2 1h7M2 8h3m2 0h7M2 12h3m2 0h7"/></svg>Whiteboards<i></i></button>
           <button type="button" data-tab="ideas" aria-expanded="false" aria-controls="office-board"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 11C6 9 3.5 8 3.5 5.5a4.5 4.5 0 0 1 9 0C12.5 8 10 9 10 11zm0 3h4"/></svg>Ideas<i></i></button>
           <button type="button" data-tab="lab" aria-expanded="false" aria-controls="office-board"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 2h4M7 2v5l-4 6v1h10v-1L9 7V2M5 10h6"/></svg>Lab<i></i></button>
           <button type="button" data-tab="usage" aria-expanded="false" aria-controls="office-board"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 13V8m5 5V3m5 10V6"/></svg>Usage</button>
@@ -483,8 +497,9 @@ details p { color: var(--text-muted); font-size: 14px; margin-top: 8px; }
               <span><i class="k-sleep"></i>Zzz: asleep, nothing for 45 minutes</span>
               <span><i class="k-help"></i>Little ones on a desk: helpers it sent out, each with a light for what it is doing</span>
               <span><i class="k-boss"></i>Front desk: you, the boss, who they all report to</span>
+              <span><i class="k-type"></i>Click an agent at its desk to talk to it. Hover for its name and what it is doing</span>
               <span><i class="k-type"></i>Left and right arrows step from desk to desk, Esc closes</span>
-              <span><i class="k-you"></i>Wall boards: tasks, ideas, the lab. Click one to open it</span>
+              <span><i class="k-you"></i>Wall boards (ideas, the lab) and a whiteboard at each table. Click one to open it</span>
               <span><i class="k-sleep"></i>Bunk beds: a plan ran out of usage; its agents sleep until it resets</span>
             </div>
           </details>
@@ -1010,7 +1025,7 @@ details p { color: var(--text-muted); font-size: 14px; margin-top: 8px; }
   /* routing */
   function route() {
     var t = (location.hash || "#dashboard").replace("#", "");
-    if (["dashboard", "voice", "vision", "office"].indexOf(t) < 0) t = "dashboard";
+    if (["office", "dashboard", "voice", "vision"].indexOf(t) < 0) t = "dashboard";
     state.tab = t;
     document.querySelectorAll(".topbar-tab").forEach(function (b) { b.classList.toggle("active", b.dataset.tab === t); });
     document.querySelectorAll(".tab-content").forEach(function (n) { n.classList.toggle("active", n.id === "tab-" + t); });
@@ -1027,6 +1042,7 @@ details p { color: var(--text-muted); font-size: 14px; margin-top: 8px; }
   });
 })();
 </script>
+<script src="/dashboard/office-cast.js"></script>
 <script src="/dashboard/office.js"></script>
 </body>
 </html>

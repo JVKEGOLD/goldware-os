@@ -15,6 +15,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO, "server"))
 os.environ["GOLDWARE_OFFICE_DRY_RUN"] = "1"   # no test ever runs osascript
 import office  # noqa: E402
+import office_launch  # noqa: E402
 
 NOW = 1_800_000_000.0
 
@@ -124,7 +125,7 @@ class Snapshots(unittest.TestCase):
         # Claude and Codex still show up with no ~/.hermes at all.
         s = self.snap(PS_MIXED)
         self.assertEqual(sorted(a["kind"] for a in s["agents"]), ["claude", "codex"])
-        self.assertEqual(sorted(a["name"] for a in s["agents"]), ["Ada", "Bo"])
+        self.assertEqual(sorted(a["name"] for a in s["agents"]), ["Bolt", "Mocha"])
         self.assertEqual(office.hourly(NOW, home=os.path.join(self.tmp, "no-hermes"))[0]["claude"], 0)
 
     def test_hermes_present(self):
@@ -149,6 +150,26 @@ class Snapshots(unittest.TestCase):
         b = office.name_agents(self.tmp, ["x", "y", "z"])
         self.assertEqual(a["x"], b["x"])
         self.assertEqual(len(set(b.values())), 3)
+
+    def test_names_come_from_the_cast_then_agent_n(self):
+        ids = ["a%d" % i for i in range(12)]
+        names = office.name_agents(self.tmp, ids)
+        self.assertEqual([names[i] for i in ids[:10]], office.NAMES)
+        self.assertEqual([names[i] for i in ids[10:]], ["Agent 11", "Agent 12"])
+
+    def test_a_table_only_sends_to_its_own_agents(self):
+        agents = [{"id": "a", "tty": "ttys001", "cwd": "/work/one"}, {"id": "b", "tty": "ttys002", "cwd": "/work/two"},
+                  {"id": "c", "tty": "ttys003", "cwd": None}]
+        self.assertEqual([a["id"] for a in office.table_agents(agents, {"group": "/work/two"})], ["b"])
+        self.assertEqual([a["id"] for a in office.table_agents(agents, {})], ["c"])
+
+    def test_chat_turns_fold_tool_calls(self):
+        rows = [{"role": "user", "text": "Fix it"},
+                {"role": "assistant", "text": "", "tools": ["terminal", "terminal", "patch"]},
+                {"role": "assistant", "text": "Done.", "tools": []}]
+        self.assertEqual(office.chat_turns(rows), [{"kind": "you", "text": "Fix it"},
+                                                    {"kind": "did", "text": "Ran 2 commands, edited 1 file"},
+                                                    {"kind": "said", "text": "Done."}])
 
 
 class Terminal(unittest.TestCase):
@@ -230,7 +251,7 @@ class Terminal(unittest.TestCase):
             office.focus_agent({"id": "nope"}, **self.kw)
 
     def test_assign_types_into_the_agents_terminal(self):
-        office.board_action(self.tmp, {"action": "add", "title": "Write the readme"}, **self.kw)
+        office.board_action(self.tmp, {"action": "add", "title": "Write the readme", "group": "/work/shop"}, **self.kw)
         tid = office.board_view(self.tmp)["tasks"][0]["id"]
         out = office.board_action(self.tmp, {"action": "assign", "id": tid, "agent": "auto"}, **self.kw)
         t = out["board"]["tasks"][0]
@@ -329,13 +350,213 @@ def free_port():
     return p
 
 
+class Launch(unittest.TestCase):
+    """New agent: ids in, a quoted cd line out, and settings that only touch office.topics and office.presets."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.root = os.path.join(self.tmp, "root")
+        os.makedirs(self.root)
+        self.default = os.path.join(self.root, "goldware.default.json")
+        self.user = os.path.join(self.root, "goldware.json")
+        self.odd = os.path.join(self.tmp, "my app's \"dir\"")        # a space, a quote and a double quote
+        self.plain = os.path.join(self.tmp, "plain")
+        os.makedirs(self.odd)
+        os.makedirs(self.plain)
+        with open(self.default, "w") as f:
+            json.dump({"assistantName": "GoldWare", "accentColor": "#C9A24A",
+                       "office": {"topics": [{"id": "home", "label": "Home", "dir": "~"}],
+                                  "presets": [{"id": "echo", "label": "Echo", "command": "echo hi"},
+                                              {"id": "ghost", "label": "Ghost", "command": "no-such-agent-binary --x"}]}}, f)
+        del office.DRY_LOG[:]
+        office_launch.reset_throttle()
+        self._env = os.environ.get("GOLDWARE_OFFICE_TERMINAL")
+        os.environ["GOLDWARE_OFFICE_TERMINAL"] = "iTerm"
+
+    def tearDown(self):
+        if self._env is None:
+            os.environ.pop("GOLDWARE_OFFICE_TERMINAL", None)
+        else:
+            os.environ["GOLDWARE_OFFICE_TERMINAL"] = self._env
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def write_user(self, topics, presets, extra=None):
+        cfg = {"office": {"topics": topics, "presets": presets}}
+        cfg.update(extra or {})
+        with open(self.user, "w") as f:
+            json.dump(cfg, f)
+
+    def new(self, body):
+        return office_launch.new_agent(body, self.default, self.user)
+
+    def test_defaults_when_goldware_json_is_absent(self):
+        r = self.new({"type": "echo", "topic": "home"})
+        self.assertTrue(r["ok"])
+        name, argv = office.DRY_LOG[-1]
+        self.assertEqual(name, "new")
+        self.assertEqual(argv[:2], ["osascript", "-e"])
+        self.assertEqual(argv[2], office_launch.NEW_ITERM_SCRIPT)
+        self.assertEqual(argv[4], "cd %s && echo hi" % os.path.expanduser("~"))
+
+    def test_folder_with_space_and_quotes_is_shell_quoted(self):
+        import shlex
+        self.write_user([{"id": "odd", "label": "Odd", "dir": self.odd}], [{"id": "e", "label": "E", "command": "echo \"a b\" 'c'"}])
+        self.new({"type": "e", "topic": "odd"})
+        argv = office.DRY_LOG[-1][1]
+        line = argv[4]
+        self.assertEqual(shlex.split(line), ["cd", self.odd, "&&", "echo", "a b", "c"])   # round-trips through a shell parser
+        self.assertEqual(argv[2], office_launch.NEW_ITERM_SCRIPT)                        # the script never contains the line
+        self.assertNotIn(self.odd, argv[2])
+        self.assertNotIn("echo", argv[2])
+
+    def test_terminal_fallback_script(self):
+        os.environ["GOLDWARE_OFFICE_TERMINAL"] = "Terminal"
+        r = self.new({"type": "echo", "topic": "home"})
+        self.assertEqual(r["terminal"], "Terminal")
+        self.assertEqual(office.DRY_LOG[-1][1][2], office_launch.NEW_TERMINAL_SCRIPT)
+
+    def test_unknown_ids_are_422(self):
+        for body in ({"type": "nope", "topic": "home"}, {"type": "echo", "topic": "nope"}, {"type": 5, "topic": "home"},
+                     {"type": ["echo"], "topic": "home"}, {"type": "echo", "topic": {"dir": "/tmp"}}):
+            office_launch.reset_throttle()
+            with self.assertRaises(office.OfficeError) as cm:
+                self.new(body)
+            self.assertEqual(cm.exception.status, 422, body)
+        self.assertEqual(office.DRY_LOG, [])
+
+    def test_request_cannot_supply_a_folder_or_command(self):
+        self.new({"type": "echo", "topic": "home", "dir": "/etc", "command": "rm -rf /", "cmd": "x"})
+        line = office.DRY_LOG[-1][1][4]
+        self.assertTrue(line.endswith("&& echo hi"))
+        self.assertNotIn("/etc", line)
+
+    def test_missing_folder_says_so(self):
+        gone = os.path.join(self.tmp, "gone")
+        self.write_user([{"id": "gone", "label": "Gone", "dir": gone}], [{"id": "e", "label": "E", "command": "echo hi"}])
+        with self.assertRaises(office.OfficeError) as cm:
+            self.new({"type": "e", "topic": "gone"})
+        self.assertIn("folder for Gone is missing", str(cm.exception))
+        self.assertEqual(office.DRY_LOG, [])
+
+    def test_unavailable_binary_is_refused_and_flagged(self):
+        with self.assertRaises(office.OfficeError) as cm:
+            self.new({"type": "ghost", "topic": "home"})
+        self.assertEqual(cm.exception.status, 422)
+        self.assertIn("not installed", str(cm.exception))
+        v = office_launch.view(self.default, self.user)
+        self.assertEqual({p["id"]: p["available"] for p in v["presets"]}, {"echo": True, "ghost": False})
+
+    def test_rate_limit_one_window_per_gap(self):
+        self.new({"type": "echo", "topic": "home"})
+        with self.assertRaises(office.OfficeError) as cm:
+            self.new({"type": "echo", "topic": "home"})
+        self.assertEqual(cm.exception.status, 429)
+        self.assertEqual(len(office.DRY_LOG), 1)
+
+    def good(self):
+        return {"topics": [{"label": "Plain", "dir": self.plain}, {"label": "Home", "dir": "~"}],
+                "presets": [{"label": "My agent", "command": "echo hello"}]}
+
+    def test_save_validation(self):
+        long_label = "x" * 41
+        bad = [
+            ({"topics": [{"label": "A", "dir": "relative/path"}]}, "start with"),
+            ({"topics": [{"label": "A", "dir": os.path.join(self.tmp, "nope")}]}, "does not exist"),
+            ({"topics": [{"label": "A", "dir": self.plain + "\nx"}]}, "one line"),
+            ({"topics": [{"label": long_label, "dir": self.plain}]}, "1 to 40"),
+            ({"topics": [{"label": "", "dir": self.plain}]}, "1 to 40"),
+            ({"topics": [{"label": "A\x07", "dir": self.plain}]}, "control"),
+            ({"topics": []}, "between 1 and 20"),
+            ({"topics": [{"label": "T%d" % i, "dir": self.plain} for i in range(21)]}, "between 1 and 20"),
+            ({"presets": [{"label": "P%d" % i, "command": "echo"} for i in range(21)]}, "between 1 and 20"),
+            ({"presets": [{"label": "A", "command": "echo\nrm -rf /"}]}, "one line"),
+            ({"presets": [{"label": "A", "command": "echo \x1b[31m"}]}, "one line"),
+            ({"presets": [{"label": "A", "command": "x" * 200}]}, "under 200"),
+            ({"presets": [{"label": "A", "command": 5}]}, "needs a command"),
+            ({"presets": [{"label": long_label, "command": "echo"}]}, "1 to 40"),
+            ({"presets": "echo"}, "between 1 and 20"),
+            ({}, "Send topics"),
+        ]
+        for body, word in bad:
+            with self.assertRaises(office.OfficeError, msg=str(body)[:60]) as cm:
+                office_launch.save(body, self.default, self.user)
+            self.assertEqual(cm.exception.status, 422)
+            self.assertIn(word, str(cm.exception))
+        self.assertFalse(os.path.exists(self.user))          # nothing was written by any failed save
+
+    def test_save_creates_from_defaults_and_makes_slug_ids(self):
+        body = self.good()
+        body["topics"].append({"label": "Plain", "dir": self.plain})      # duplicate label -> unique id
+        out = office_launch.save(body, self.default, self.user)
+        with open(self.user) as f:
+            cfg = json.load(f)
+        self.assertEqual(cfg["assistantName"], "GoldWare")                # created from the defaults
+        self.assertEqual([t["id"] for t in cfg["office"]["topics"]], ["plain", "home", "plain-2"])
+        self.assertEqual(cfg["office"]["presets"], [{"id": "my-agent", "label": "My agent", "command": "echo hello"}])
+        self.assertEqual([t["id"] for t in out["topics"]], ["plain", "home", "plain-2"])
+        self.assertEqual(os.listdir(self.root).count("goldware.json"), 1)
+        self.assertFalse([n for n in os.listdir(self.root) if n.endswith(".tmp")])
+
+    def test_save_preserves_other_keys_and_only_replaces_what_was_sent(self):
+        orig = {"assistantName": "Mine", "accentColor": "#112233", "custom": {"keep": [1, 2]},
+                "office": {"other": "stay", "topics": [{"id": "x", "label": "X", "dir": "~"}],
+                           "presets": [{"id": "y", "label": "Y", "command": "echo y"}]}}
+        with open(self.user, "w") as f:
+            json.dump(orig, f)
+        office_launch.save({"presets": [{"label": "Z", "command": "echo z"}]}, self.default, self.user)
+        with open(self.user) as f:
+            cfg = json.load(f)
+        self.assertEqual(cfg["assistantName"], "Mine")
+        self.assertEqual(cfg["custom"], {"keep": [1, 2]})
+        self.assertEqual(cfg["office"]["other"], "stay")
+        self.assertEqual(cfg["office"]["topics"], orig["office"]["topics"])
+        self.assertEqual(cfg["office"]["presets"], [{"id": "z", "label": "Z", "command": "echo z"}])
+
+    def test_save_is_atomic(self):
+        orig = json.dumps({"office": {"topics": [{"id": "x", "label": "X", "dir": "~"}], "presets": [{"id": "y", "label": "Y", "command": "echo y"}]}})
+        with open(self.user, "w") as f:
+            f.write(orig)
+        real = os.replace
+        calls = []
+
+        def boom(src, dst):
+            calls.append((src, dst))
+            raise OSError("disk full")
+        office_launch.os.replace = boom
+        try:
+            with self.assertRaises(OSError):
+                office_launch.save(self.good(), self.default, self.user)
+        finally:
+            office_launch.os.replace = real
+        with open(self.user) as f:
+            self.assertEqual(f.read(), orig)                              # untouched
+        self.assertEqual(calls[0][1], self.user)                          # it went through a rename
+        self.assertNotEqual(calls[0][0], self.user)
+        self.assertEqual(os.path.dirname(calls[0][0]), self.root)         # temp file in the same folder
+        self.assertFalse([n for n in os.listdir(self.root) if n.endswith(".tmp")])   # and was cleaned up
+
+    def test_broken_goldware_json_is_not_overwritten(self):
+        with open(self.user, "w") as f:
+            f.write("{ not json")
+        with self.assertRaises(office.OfficeError) as cm:
+            office_launch.save(self.good(), self.default, self.user)
+        self.assertEqual(cm.exception.status, 409)
+        with open(self.user) as f:
+            self.assertEqual(f.read(), "{ not json")
+
+    def test_saved_lists_are_used_by_new_agent(self):
+        office_launch.save(self.good(), self.default, self.user)
+        self.new({"type": "my-agent", "topic": "plain"})
+        self.assertEqual(office.DRY_LOG[-1][1][4], "cd %s && echo hello" % self.plain)
+
+
 class OfficeHttp(unittest.TestCase):
     """The real server on an empty fixture: JSON everywhere, and POSTs only from the dashboard itself."""
 
     @classmethod
     def setUpClass(cls):
         cls.tmp = tempfile.mkdtemp()
-        root = os.path.join(cls.tmp, "root")
+        root = cls.root = os.path.join(cls.tmp, "root")
         os.makedirs(root)
         shutil.copy(os.path.join(REPO, "goldware.default.json"), root)
         cls.port = free_port()
@@ -412,6 +633,69 @@ class OfficeHttp(unittest.TestCase):
         self.assertEqual((code, j["board"]["tasks"][0]["title"]), (200, "Hello"))
         code, j = self.call("/api/office/board", {"action": "bogus"}, origin)
         self.assertEqual(code, 422)
+
+    def test_new_and_settings_posts_need_same_origin(self):
+        for path in ("/api/office/new", "/api/office/settings"):
+            self.assertEqual(self.call(path, {"type": "echo"})[0], 403, path)
+            self.assertEqual(self.call(path, {"type": "echo"}, {"Origin": "http://evil.example"})[0], 403, path)
+            self.assertEqual(self.call(path, {"type": "echo"}, {"Origin": self.base, "Sec-Fetch-Site": "cross-site"})[0], 403, path)
+            self.assertEqual(self.call(path, b"type=x", {"Origin": self.base}, ctype="text/plain")[0], 415, path)
+
+    def test_new_over_http_uses_ids_only(self):
+        origin = {"Origin": self.base}
+        code, j = self.call("/api/office/new", {"type": "nope", "topic": "home"}, origin)
+        self.assertEqual(code, 422)
+        code, j = self.call("/api/office/new", {"type": "hermes", "topic": "nope"}, origin)
+        self.assertEqual(code, 422)
+        code, j = self.call("/api/office/settings")
+        self.assertEqual(code, 200)
+        self.assertEqual([t["id"] for t in j["topics"]], ["home"])
+        self.assertEqual([p["id"] for p in j["presets"]], ["hermes", "claude-code", "codex"])
+
+    def test_settings_save_over_http(self):
+        origin = {"Origin": self.base}
+        code, j = self.call("/api/office/settings", {"topics": [{"label": "Tmp", "dir": "/tmp"}]}, origin)
+        self.assertEqual(code, 200)
+        self.assertEqual(j["topics"][0]["id"], "tmp")
+        code, j = self.call("/api/office/settings", {"topics": [{"label": "Bad", "dir": "relative"}]}, origin)
+        self.assertEqual(code, 422)
+        code, j = self.call("/api/office/settings")
+        self.assertEqual([t["id"] for t in j["topics"]], ["tmp"])
+        cfg = self.call("/api/config")[1]["config"]
+        self.assertEqual(cfg["office"]["topics"], [{"id": "tmp", "label": "Tmp", "dir": "/tmp"}])
+        self.assertIn("presets", cfg["office"])
+        self.assertEqual(cfg["assistantName"], "GoldWare")
+        os.remove(os.path.join(self.root, "goldware.json"))            # leave the fixture as it was
+
+    def test_custom_css_is_served_when_present_and_404_when_not(self):
+        code, _ = self.call("/custom/office.css")
+        self.assertEqual(code, 404)
+        os.makedirs(os.path.join(self.root, "custom"))
+        with open(os.path.join(self.root, "custom", "office.css"), "w") as f:
+            f.write(".oh-brand { color: red; }\n")
+        r = urllib.request.urlopen(self.base + "/custom/office.css", timeout=5)
+        self.assertEqual(r.status, 200)
+        self.assertIn("text/css", r.headers["Content-Type"])
+        self.assertIn("color: red", r.read().decode())
+        # nothing else under /custom/ is served, and no way out of it
+        with open(os.path.join(self.root, "custom", "secret.txt"), "w") as f:
+            f.write("nope")
+        for path in ("/custom/secret.txt", "/custom/", "/custom/../goldware.default.json", "/custom/%2e%2e/goldware.default.json",
+                     "/custom/office.css/../../goldware.default.json", "/custom/..%2fgoldware.default.json", "/custom/office.css%00.txt"):
+            code, body = self.call(path)
+            self.assertEqual(code, 404, path)
+            self.assertNotIn(b"assistantName", body if isinstance(body, bytes) else json.dumps(body).encode())
+
+    def test_custom_css_symlink_out_of_custom_is_refused(self):
+        outside = os.path.join(self.tmp, "outside.css")
+        with open(outside, "w") as f:
+            f.write("a { color: blue }")
+        os.makedirs(os.path.join(self.root, "custom"), exist_ok=True)
+        link = os.path.join(self.root, "custom", "office.css")
+        if os.path.lexists(link):
+            os.unlink(link)
+        os.symlink(outside, link)
+        self.assertEqual(self.call("/custom/office.css")[0], 404)
 
     def test_wrong_host_header_is_refused(self):
         r = urllib.request.Request(self.base + "/api/office/agents", headers={"Host": "evil.example"})

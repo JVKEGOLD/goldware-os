@@ -2,7 +2,8 @@
 /* The Office: every agent working on this Mac, at a desk, drawn as pixel art.
    Reads /api/office/agents (server/office.py) every 3 s while the tab is open
    and draws at 12 fps only while it is visible. You are the boss, at the front desk.
-   Add ?office-demo to the URL for made-up agents (no terminals are touched). */
+   Characters come from office-cast.js. Add ?office-demo to the URL for made-up agents
+   (no terminals are touched). */
 (() => {
   const tab = document.getElementById('tab-office');
   const canvas = document.getElementById('office-canvas');
@@ -23,8 +24,8 @@
     suit: '#34323a', suitHi: '#4a4852', suitLo: '#232228', skin: '#e2b48c', skinLo: '#c4966f', hair: '#2b1d14', eye: '#f2eee4', pupil: '#0c0b09',
     gold: '#d2aa5f', goldHi: '#f9d976', ink: '#0c0b09', text: '#f2eee4', green: '#9fd07f', red: '#f0806b', cyan: '#86cbc2'
   };
-  // The boss (you) wears a charcoal suit and a gold tie. Everyone else gets their own colour, in order,
-  // and keeps it for as long as they sit here. Claude Code and Codex wear their own brands.
+  // The boss (you) wears a charcoal suit and a gold tie. Everyone else is a character from the cast and
+  // keeps its colour; a plain blob (past the cast) gets the next colour in order.
   const COLORS = ['#3f9a8c', '#8a63c4', '#d08a2e', '#4f8fd0', '#5b9a4a', '#c0566e', '#b8a23a', '#6a7fd8', '#2f8fb0', '#a8577f'];
   const shade = (hex, f) => {
     const n = parseInt(hex.slice(1), 16), c = [n >> 16, (n >> 8) & 255, n & 255].map(v => Math.max(0, Math.min(255, Math.round(f > 0 ? v + (255 - v) * f : v * (1 + f)))));
@@ -33,17 +34,45 @@
   const colorOf = new Map();
   let nextColor = 0;
   const assign = id => { if (!colorOf.has(id)) colorOf.set(id, COLORS[nextColor++ % COLORS.length]); return colorOf.get(id); };
+  // Every agent is a character from the cast (office-cast.js): the server names them in the cast's
+  // order. Past the cast an agent is "Agent N" and is drawn as a plain blob.
+  const cast = window.OfficeCast || { has: () => false, color: () => null, canvas: () => null, size: () => null, url: () => '' };
+  const monOf = a => a && cast.has(a.name) ? a.name : null;
+  // A tile for HTML avatars: the character on a tinted square.
+  const paintAvatar = (el, a) => {
+    const url = monOf(a) ? cast.url(a.name) : '';
+    el.style.setProperty('--agent', a.color);
+    el.classList.toggle('mon', !!url);
+    el.innerHTML = url ? '<i></i>' : '';
+    if (url) el.firstChild.style.setProperty('--mon', `url(${url})`);
+  };
+  const avatarHtml = (a, size) => {
+    const url = monOf(a) ? cast.url(a.name) : '';
+    return `<span class="oc-avatar ${size}${url ? ' mon' : ''}" style="--agent:${esc(a.color)}">${url ? `<i style="--mon:url(${url})"></i>` : ''}</span>`;
+  };
+  // Draws the character centred on cx, standing on footY; returns its top y, or null if not drawn.
+  function mon(a, cx, footY, t, opts = {}) {
+    const name = monOf(a), im = name && cast.canvas(name);
+    if (!im) return null;
+    const [w, h] = cast.size(name), act = opts.activity || a.activity;
+    const bob = BUSY.has(act) && !still ? (t % 4 < 2 ? 0 : 1) : 0, rows = opts.rows ? Math.min(h, opts.rows) : h;
+    const x = Math.round(cx - w / 2), y = Math.round(footY - rows) + bob + (act === 'asleep' ? 2 : 0);
+    if (act === 'asleep' && !opts.rows) ctx.globalAlpha = 0.85;
+    ctx.drawImage(im, 0, 0, w, rows, x, y, w, rows);
+    ctx.globalAlpha = 1;
+    return y;
+  }
   const WORDS = {
     typing: 'Running commands', writing: 'Writing files', reading: 'Reading', browsing: 'On the web',
     looking: 'Looking at an image', delegating: 'Handing work to helpers', thinking: 'Thinking',
-    working: 'Working', your_turn: 'Waiting on you', idle: 'Idle', asleep: 'Asleep',
+    working: 'Working', your_turn: 'Waiting on you', idle: 'Idle', done: 'Done', asleep: 'Asleep',
     helpers: 'Waiting on its helpers', bed: 'Out of usage, in bed'
   };
   const BUSY = new Set(['typing', 'writing', 'reading', 'browsing', 'looking', 'delegating', 'thinking', 'working', 'helpers']);
 
   let data = null, error = false, selected = null, frame = 0, timer = null, poller = null, W = 332, H = 282;
   const seen = new Map(), log = [];
-
+  
   const px = (x, y, w, h, c) => { ctx.fillStyle = c; ctx.fillRect(Math.round(x), Math.round(y), w, h); };
   const pattern = (x, y, rows, c) => rows.forEach((r, j) => [...r].forEach((ch, i) => { if (ch === '#') px(x + i, y + j, 1, 1, c); }));
   const rand = n => { const s = Math.sin(n * 12.9898) * 43758.5453; return s - Math.floor(s); };
@@ -52,33 +81,73 @@
   //    tried and the one that draws the room biggest in the space it has wins (ties: fewer columns,
   //    so rows stay balanced). Rows step toward you; Your desk is always at the front. ──
   const FRONT = 96;   // Your row at the front of the room
-  function roomSize(n, cols) {
-    const rows = n ? Math.ceil(n / cols) : 0, area = Math.max(4, cols) * SLOT;
+  // Desks sit at tables, one table per project folder (an agent's working directory); each table
+  // starts a new row and has its own roll-around whiteboard (WB wide) on its left.
+  const WB = 44;
+  function roomSize(sizes, cols) {
+    const rows = sizes.reduce((r, n) => r + Math.ceil(n / Math.max(1, cols)), 0), area = Math.max(4, cols) * SLOT + (sizes.length ? WB : 0);
     const bossY = rows ? 130 + (rows - 1) * ROW + FRONT : 150;
-    return { cols, rows, area, W: 48 + area, H: bossY + 56 + (rows > 1 ? 6 : 0), bossY };
+    return { cols, rows, area, W: 48 + area, H: bossY + 56 + (rows > 1 ? 6 : 0), bossY, sig: sizes.join(',') };
   }
-  function chooseLayout(n, aw, ah) {
+  function chooseLayout(sizes, aw, ah) {
     let best = null;
-    for (let cols = n ? 1 : 0; cols <= Math.min(Math.max(n, 0), 8); cols++) {
-      const g = roomSize(n, cols), scale = Math.min(aw / g.W, ah / g.H);
-      if (!best || scale > best.scale * 1.02) best = { ...g, n, scale };
+    const most = Math.max(0, ...sizes);
+    for (let cols = most ? 1 : 0; cols <= Math.min(most, 8); cols++) {
+      const g = roomSize(sizes, cols), scale = Math.min(aw / g.W, ah / g.H);
+      if (!best || scale > best.scale * 1.02) best = { ...g, scale };
     }
     return best;
   }
-  let geo = roomSize(0, 0), bossSpot = { x: 148, y: 150 };
+  // Which table an agent sits at, and what the table is called.
+  const homeDir = () => (data && data.home) || '';
+  const tableOf = a => (a && a.cwd) || homeDir();
+  const taskTable = t => t.group || homeDir();
+  // A table is named after its project: the New agent topics first (your own list), else the folder's own name.
+  const tableName = key => {
+    if (!key || key === homeDir()) return 'Home';
+    const t = ((data && data.topics) || []).find(x => x.path === key);
+    return t ? t.label : key.split('/').filter(Boolean).pop();
+  };
+  // Agents in seat order: grouped by table (tables in the order their first agent arrived).
+  function seatOrder(agents) {
+    const first = new Map();
+    agents.forEach(a => { const k = tableOf(a); if (!first.has(k) || a.started_at < first.get(k)) first.set(k, a.started_at || 0); });
+    return agents.slice().sort((x, y) => (first.get(tableOf(x)) - first.get(tableOf(y))) || tableOf(x).localeCompare(tableOf(y)) || (x.started_at - y.started_at));
+  }
+  const tableSizes = agents => { const m = new Map(); agents.forEach(a => m.set(tableOf(a), (m.get(tableOf(a)) || 0) + 1)); return [...m.values()]; };
+  let tables = [];   // [{ key, x, y, h }] the whiteboards, set by layout()
+  let geo = roomSize([], 0), bossSpot = { x: 148, y: 150 };
   // The room canvas is as big as the space it has; the desks sit in the middle of it (ox, oy) and the
   // extra becomes wall and floor, so the room fills the window instead of letterboxing.
   let ox = 0, oy = 0;
-  function layout(n) {
-    const { cols, area } = geo, desks = n;
+  function layout(agents) {
+    const { cols, area } = geo, spots = [];
     bossSpot = { x: Math.round(ox + 6 + area / 2), y: oy + geo.bossY };
-    return Array.from({ length: desks }, (_, i) => {
-      const r = Math.floor(i / cols), c = i % cols;
-      const inRow = Math.min(cols, desks - r * cols);
-      const offset = (area - inRow * SLOT) / 2;
-      // A desk alone in its row may use the spare width for its plate, so it keeps its whole title.
-      return { x: Math.round(ox + 6 + offset + SLOT * c + SLOT / 2), y: oy + 130 + r * ROW, slot: inRow === 1 ? Math.min(SLOT * 2, area) : SLOT };
-    });
+    tables = [];
+    let row = 0, i = 0;
+    while (i < agents.length) {
+      const key = tableOf(agents[i]);
+      let n = 0;
+      while (i + n < agents.length && tableOf(agents[i + n]) === key) n++;
+      const rows = Math.ceil(n / cols);
+      for (let k = 0; k < n; k++) {
+        const r = Math.floor(k / cols), c = k % cols, inRow = Math.min(cols, n - r * cols);
+        const offset = WB + (area - WB - inRow * SLOT) / 2;
+        spots.push({ x: Math.round(ox + 6 + offset + SLOT * c + SLOT / 2), y: oy + 130 + (row + r) * ROW, slot: SLOT });
+        if (k === 0) tables.push({ key, x: Math.round(ox + 6 + offset - WB + 4), y: oy + 130 + row * ROW - 48, h: 44, n });
+      }
+      row += rows; i += n;
+    }
+    return spots;
+  }
+  // A roll-around whiteboard: white surface in an aluminium frame, legs, a marker tray and casters.
+  // The writing (the table's name and its open tasks) is HTML in its button.
+  function whiteboard(tb) {
+    const { x, y } = tb, w = WB - 8, h = 34;
+    px(x - 1, y - 1, w + 2, h + 2, '#9a968c'); px(x, y, w, h, '#ece9e0'); px(x + 1, y + 1, w - 2, 1, '#ffffff');
+    px(x + 2, y + h + 1, w - 4, 2, '#8a867c'); px(x + 5, y + h, 3, 1, '#d24a3a'); px(x + 9, y + h, 3, 1, '#3a6ad2');
+    px(x + 3, y + h + 1, 2, 12, '#7d796f'); px(x + w - 5, y + h + 1, 2, 12, '#7d796f'); px(x + 1, y + h + 12, w - 2, 2, '#6d695f');
+    [x + 1, x + w - 4].forEach(cx => { px(cx, y + h + 14, 3, 3, '#2a2724'); px(cx + 1, y + h + 15, 1, 1, '#555'); });
   }
   const lamps = () => { const l = []; for (let x = 70; x < W - 50; x += 96) l.push(x); return l; };
   // Bulbs on a sagging wire from the left wall to the rack: [x, y, colour, index].
@@ -143,23 +212,23 @@
     }
     px(0, WALL, W, 1, C.floorHi);
     // Windows: Hawaii outside, the real sky for the hour.
-    // The wall, left to right: a window, the three boards (tasks, ideas, the lab), a portrait of the boss,
+    // The wall, left to right: a window, the boards (ideas, the lab), a portrait of the boss,
     // the clock, more windows while they fit, the plant. The rack stands at the right end.
     // The boards are written on, so they take the wall's spare width (46 to 104 px each).
     const BW = Math.max(46, Math.min(104, Math.floor((W - 19 - 64 - 72 - 40 - 34 - 30) / 3)));
-    const wallPlan = [['win', 62, 'a'], ['tasks', BW + 4], ['ideas', BW + 4], ['lab', BW + 4], ['portrait', 30], ['clock', 24], ['win', 62, 'b']];
+    const wallPlan = [['win', 62, 'a'], ['ideas', BW + 4], ['lab', BW + 4], ['portrait', 30], ['clock', 24], ['win', 62, 'b']];
     for (let k = 0; k < 6; k++) wallPlan.push(['win', 62, 'c']);
     wallPlan.push(['plant', 12]);
     const placed = {}, wins = [];
     let cur = 19;
     wallPlan.forEach(([kind, w, id]) => {
       const fits = cur + w <= W - 50 - (kind === 'plant' ? 0 : 14);
-      const must = kind === 'tasks' || kind === 'ideas' || kind === 'lab';
+      const must = kind === 'ideas' || kind === 'lab';
       if (!fits && !must) return;
       if (kind === 'win') wins.push([cur + 3, id]); else placed[kind] = cur;
       cur += w + 10;
     });
-    wallBoards = { tasks: { x: placed.tasks, y: 9, w: BW, h: 54 }, ideas: { x: placed.ideas, y: 9, w: BW, h: 54 }, lab: { x: placed.lab, y: 9, w: BW, h: 50 } };
+    wallBoards = { tasks: {}, ideas: { x: placed.ideas, y: 9, w: BW, h: 54 }, lab: { x: placed.lab, y: 9, w: BW, h: 50 } };
     wallClock = placed.clock != null ? placed.clock + 12 : null;
     wins.forEach(([wx, id]) => {
       const ww = 56, wh = 44, wy = 16;
@@ -305,6 +374,10 @@
       px(x + 2, y + 7, 13, 1, '#4a4a40');
     } else if (act === 'thinking') {
       for (let i = 0; i < 3; i++) px(x + 4 + i * 3, y + 5, 2, 1, (Math.floor(t / 3) % 3) === i ? C.goldHi : '#4a4a40');
+    } else if (act === 'done') {
+      // Finished: a big green check mark.
+      px(x + 1, y + 1, sw - 2, sh - 2, '#14241a');
+      pattern(x + 3, y + 1, ['.........##', '........##.', '.......##..', '##....##...', '.##..##....', '..####.....', '...##......'], C.green);
     } else if (act === 'your_turn') {
       px(x + 2, y + 2, 12, 5, '#1b2a22');
       px(x + 3, y + 3, 8, 1, '#4f8f6a'); px(x + 3, y + 5, 5, 1, '#4f8f6a');
@@ -412,7 +485,7 @@
 
   // Helpers (subagents) stand on their agent's desk: two to the right of it, one beside the monitor.
   // Each keeps its own colour and carries a light for what it is doing; a helper's own helpers are
-  // smaller. Past three, the name plate counts them.
+  // smaller. Past three, the agent's tooltip counts them.
   const HELPER_SPOTS = [50, 57, 26];
   const helperList = a => (a.helpers || []).length ? a.helpers : (a.activity === 'delegating' ? [{ id: a.id + ':helper', activity: 'thinking', depth: 1 }] : []);
   function helpers(x0, deskY, a, t) {
@@ -537,8 +610,11 @@
     px(chx - 2, chairTop, 20, 3, '#6b4426'); px(chx - 2, chairTop, 20, 1, '#8a5a32');
     px(chx - 1, chairTop + 3, 2, 14, '#5a3820'); px(chx + 15, chairTop + 3, 2, 14, '#5a3820'); px(chx + 1, chairTop + 7, 14, 1, '#5a3820');
     if (a) px(chx + 4, chairTop + 1, 8, 1, a.color);
-    let top = dy - 16;
-    if (a) { const { y } = blob(cx + 2, top, a, t); top = y; }
+    let top = dy - 16, poke = false;
+    if (a) {
+      const my = mon(a, cx + 9, dy + 1, t);
+      if (my !== null) { poke = true; top = my; } else { const { y } = blob(cx + 2, top, a, t); top = y; }
+    }
     px(x0, dy, 64, 3, '#a8743f'); px(x0, dy, 64, 1, '#c48a4c'); px(x0, dy + 3, 64, 2, '#6b4426');
     px(x0 + 4, dy + 5, 3, 17, '#4a2e18'); px(x0 + 57, dy + 5, 3, 17, '#4a2e18'); px(x0 + 4, dy + 15, 56, 2, '#5a3820');
     px(x0 + 10, dy + 11, 3, 4, '#7a3a2a'); px(x0 + 13, dy + 12, 2, 3, '#3f6a5a'); px(x0 + 15, dy + 10, 3, 5, '#c9a46a'); px(x0 + 44, dy + 12, 6, 3, '#8a5a32');
@@ -553,15 +629,15 @@
       ctx.fillRect(mx - 2, dy, 22, 3); ctx.globalAlpha = 1;
     }
     if (a) { px(cx + 2, dy - 1, 14, 2, '#3a3631'); px(cx + 3, dy - 1, 12, 1, '#57524a'); }
-    if (a) arms(cx + 2, top, a, t, shade(a.color, 0.3), dy);
+    if (a && (!poke || a.activity === 'reading' || a.activity === 'looking')) arms(cx + 2, poke ? dy - 16 : top, a, t, shade(a.color, 0.3), dy);
     const crowd = a ? helperList(a).length : 0;
     // A latte in a cup and saucer, steaming while it is fresh.
     if (!crowd) { px(x0 + 53, dy - 1, 8, 1, '#efe6d2'); px(x0 + 54, dy - 5, 5, 4, a ? '#efe6d2' : '#8a8578'); px(x0 + 55, dy - 5, 3, 1, '#c9963a'); px(x0 + 59, dy - 4, 1, 2, '#efe6d2'); }
-    if (a && !crowd && (a.activity === 'idle' || a.activity === 'your_turn') && !still) {
+    if (a && !crowd && (a.activity === 'idle' || a.activity === 'done' || a.activity === 'your_turn') && !still) {
       for (let i = 0; i < 2; i++) { const p = ((t + i * 5) % 10) / 10; ctx.globalAlpha = 0.6 * (1 - p); px(x0 + 55 + i * 2 + Math.round(Math.sin(p * 5)), dy - 7 - p * 7, 1, 2, '#e9e3d4'); }
       ctx.globalAlpha = 1;
     }
-    if (a) { helpers(x0, dy, a, t); bubble(cx + 15, top - 16, a, t); }
+    if (a) { helpers(x0, dy, a, t); bubble(cx + 15, Math.max(top, dy - 30) - 16, a, t); }
   }
 
   function night(phase, spots, agents) {
@@ -601,13 +677,12 @@
   }
 
   // One table per agent on the floor.
-  const seatCount = agents => agents.length;
+  const seatCount = agents => tableSizes(agents).join(',');
   let lastSpots = [];
   function draw() {
     const agents = (data && data.agents) || [];
-    const n = seatCount(agents);
-    if (geo.n !== n) fit();
-    const spots = layout(n);
+    if (geo.sig !== seatCount(agents)) fit();
+    const spots = layout(agents);
     lastSpots = spots;
     const now = new Date();
     if (hourOverride !== null) now.setHours(hourOverride);
@@ -618,6 +693,7 @@
     labStaff(t);
     // Back row first so the front row overlaps it.
     // An agent whose plan is out of usage is not at its desk: it is in a bunk (or walking there).
+    tables.forEach(whiteboard);
     spots.forEach((s, i) => {
       const away = agents[i] && (agents[i].bed || walking.has(agents[i].id) || awayToBoss(agents[i].id));
       desk(s, away ? undefined : agents[i], t + i * 3, phase);
@@ -779,13 +855,18 @@
         if (p < 0.75) { const q = p / 0.75; x = sx + (ladderX - sx) * q; y = sy + (floorY - sy) * q; }
         else { const q = (p - 0.75) / 0.25; x = ladderX - (slot.top ? 0 : q * 14); y = floorY - q * (floorY - (slot.y - 4)); }
         const step = !still && Math.floor(frame / 3) % 2;
-        px(x, y, 9, 9, a.color); px(x, y, 1, 8, shade(a.color, 0.22));
-        px(x + 2, y + 3, 2, 2, C.eye); px(x + 5, y + 3, 2, 2, C.eye);
-        px(x + 1 + (step ? 1 : 0), y + 9, 2, 2, '#0a0908'); px(x + 6 - (step ? 1 : 0), y + 9, 2, 2, '#0a0908');
+        if (mon(a, x + 4, y + 11 - (step ? 1 : 0), t, { activity: 'idle' }) === null) {
+          px(x, y, 9, 9, a.color); px(x, y, 1, 8, shade(a.color, 0.22));
+          px(x + 2, y + 3, 2, 2, C.eye); px(x + 5, y + 3, 2, 2, C.eye);
+          px(x + 1 + (step ? 1 : 0), y + 9, 2, 2, '#0a0908'); px(x + 6 - (step ? 1 : 0), y + 9, 2, 2, '#0a0908');
+        }
         return;
       }
       // Asleep: a head on the pillow, a blanket in its colour, Zzz rising.
-      px(slot.x - 3, slot.y - 6, 7, 6, a.color); px(slot.x - 2, slot.y - 4, 2, 1, C.eye); px(slot.x + 1, slot.y - 4, 2, 1, C.eye);
+      // A character shows its top 10 rows (the head) on the pillow, under its blanket.
+      if (mon(a, slot.x, slot.y - 1, t, { activity: 'asleep', rows: 10 }) === null) {
+        px(slot.x - 3, slot.y - 6, 7, 6, a.color); px(slot.x - 2, slot.y - 4, 2, 1, C.eye); px(slot.x + 1, slot.y - 4, 2, 1, C.eye);
+      }
       px(slot.x + 4, slot.y - 6, 18, 5, shade(a.color, -0.2)); px(slot.x + 4, slot.y - 6, 18, 1, shade(a.color, 0.15));
       bubble(slot.x - 2, slot.y - 22, { activity: 'asleep' }, t + i * 5);
     });
@@ -828,12 +909,21 @@
     trips.forEach((tr, id) => { if (frame - tr.at >= TRIP) { trips.delete(id); lastPlateKey = ''; } });
   }
   // The line beside the front desk: first on the left, second on the right, then further out.
+  // The line forms to the right of the front desk, each agent with its bubble on its left (QB wide).
+  // Characters are up to ~45 px wide, so a place in line is the bubble plus 48 px. When the right side
+  // is full the line continues on the left.
+  const QB = 62, QSTEP = QB + 48;
   function queueSpot(k) {
-    const step = Math.floor(k / 2) * 18, left = k % 2 === 0;
-    const x = left ? bossSpot.x - 68 - step : bossSpot.x + 54 + step;
-    return { x: Math.max(4, Math.min(W - 60, x)), y: bossSpot.y - 17 };
+    const right = Math.max(0, Math.floor((W - 60 - (bossSpot.x + 56 + QB)) / QSTEP) + 1);
+    const x = k < right ? bossSpot.x + 56 + QB + k * QSTEP : bossSpot.x - 70 - (k - right) * QSTEP;
+    return { x: Math.max(QB + 6, Math.min(W - 60, x)), y: bossSpot.y - 17 };
   }
-  const queueLine = agents => agents.filter(a => atBoss.has(a.id) || (trips.get(a.id) || {}).to === false);
+  // In arrival order: the first to walk up is first in line.
+  const queueLine = agents => {
+    const by = new Map(agents.map(a => [a.id, a]));
+    const ids = [...atBoss, ...[...trips].filter(([, tr]) => !tr.to).map(([id]) => id)];
+    return [...new Set(ids)].map(id => by.get(id)).filter(Boolean);
+  };
   function bossQueue(agents, spots, t) {
     queueLine(agents).forEach((a, k) => {
       const s = spots[agents.indexOf(a)];
@@ -847,17 +937,32 @@
       // Shadow, feet (stepping while it walks), the body, and on arrival a question mark.
       ctx.globalAlpha = 0.3; ctx.fillStyle = '#000'; ctx.beginPath(); ctx.ellipse(x + 7, y + 17, 8, 2, 0, 0, 7); ctx.fill(); ctx.globalAlpha = 1;
       const st = moving ? Math.floor(frame / 3) % 2 : 0;
-      px(x + 2, y + 15 - st, 4, 2, '#0a0908'); px(x + 8, y + 14 + st, 4, 2, '#0a0908');
-      blob(x, y, { ...a, activity: moving ? 'idle' : 'your_turn' }, t);
+      const monTop = mon(a, x + 7, y + 16 + (moving && st ? -1 : 0), t, { activity: moving ? 'idle' : 'your_turn' });
+      if (monTop === null) {
+        px(x + 2, y + 15 - st, 4, 2, '#0a0908'); px(x + 8, y + 14 + st, 4, 2, '#0a0908');
+        blob(x, y, { ...a, activity: moving ? 'idle' : 'your_turn' }, t);
+      }
       if (!moving) {
         const lift = still ? 0 : (t % 10 < 5 ? 0 : -1), bx = x + 9, by = y - 15 + lift;
         px(bx, by, 11, 11, C.gold); px(bx + 1, by + 1, 9, 9, '#fbf3df'); px(bx + 2, by + 11, 2, 2, '#fbf3df'); px(bx + 1, by + 13, 1, 1, '#fbf3df');
         pattern(bx + 3, by + 2, ['.##.', '#..#', '..#.', '.#..', '....', '.#..'], C.ink);
         // Arm up toward the boss.
         const toward = q.x < bossSpot.x ? 1 : -1, ax = toward > 0 ? x + 13 : x - 3;
-        px(ax, y + 2, 4, 9, '#0c0b09'); px(ax + 1, y + 3, 2, 8, shade(a.color, 0.3));
+        if (monTop === null) { px(ax, y + 2, 4, 9, '#0c0b09'); px(ax + 1, y + 3, 2, 8, shade(a.color, 0.3)); }
       }
     });
+  }
+  // Who stands in line: only an agent with a real question (its reply ends in one, or it is asking
+  // through clarify), and it keeps its place until answered. A finished agent sits idle at its desk.
+  // At rest, the difference matters: an agent that finished a task (its last reply is a statement)
+  // is "done" and shows a check mark on its screen until you give it something new; one with no
+  // task at all (a fresh chat, nothing said yet) sleeps at its desk.
+  function lineActivity(a) {
+    const asks = !!((a.closing && a.closing.question) || a.tool === 'clarify');
+    const rest = a.activity === 'your_turn' || a.activity === 'idle' || a.activity === 'asleep';
+    if (!rest || a.working || a.bed) return a.activity;
+    if (asks) return 'your_turn';
+    return a.closing ? 'done' : 'asleep';
   }
   function tickWalks() {
     walking.forEach((w, id) => {
@@ -1064,8 +1169,6 @@
   // ── HTML over the canvas: name plates and click targets ──
   const ago = s => { s = Math.max(0, Math.round(s)); return s < 60 ? s + 's' : s < 3600 ? Math.round(s / 60) + 'm' : s < 86400 ? Math.round(s / 3600) + 'h' : Math.round(s / 86400) + 'd'; };
   const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-  // "ttys004" reads as "tty 4": shown only when two desks share a title, to tell them apart.
-  const ttyName = t => String(t).replace(/^ttys0*(\d+)$/, 'tty $1');
   // Waiting and asleep say for how long, so the one that has waited longest stands out.
   const clockTime = at => new Date(at * 1000).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
   const backWhen = at => { const d = new Date(at * 1000), today = new Date(); return d.toDateString() === today.toDateString() ? clockTime(at) : d.toLocaleDateString('en-US', { weekday: 'short' }) + ' ' + clockTime(at); };
@@ -1085,7 +1188,7 @@
   let lastPlateKey = '';
   function placeDesks(spots, agents) {
     const mins = Math.floor(Date.now() / 60000);
-    const key = JSON.stringify([W, H, mins, selected, helperSel, [...atBoss], [...trips.keys()], wallBoards.tasks.x, wallBoards.tasks.w, board, running('brainstorm'), running('research'), spots.length, bossState(agents), agents.map(a => [a.id, a.name, a.title, a.activity, a.bed, a.model, a.color, a.tty, a.closing && a.closing.text, (a.helpers || []).map(h => h.id + h.activity)])]);
+    const key = JSON.stringify([W, H, mins, selected, helperSel, [...atBoss], [...trips.keys()], tables, board, running('brainstorm'), running('research'), spots.length, bossState(agents), agents.map(a => [a.id, a.name, a.title, a.activity, a.bed, a.model, a.color, a.tty, a.closing && a.closing.text, (a.helpers || []).map(h => h.id + h.activity)])]);
     if (key === lastPlateKey) return;
     lastPlateKey = key;
     const st = bossState(agents);
@@ -1093,32 +1196,33 @@
     const aLeft = (bossSpot.x / W * 100).toFixed(3);
     const bossHTML = `<button class="office-hit${selected === 'boss' ? ' on' : ''}" data-id="boss" style="left:${aLeft}%;top:${((bossSpot.y - 44) / H * 100).toFixed(3)}%;height:${(70 / H * 100).toFixed(3)}%;width:${(104 / W * 100).toFixed(3)}%" aria-label="The boss, ${esc(bossWords)}"></button>
       <div class="office-plate boss ${st === 'your_turn' ? 'you' : st === 'watching' ? 'busy' : st}" data-id="boss" style="left:${aLeft}%;top:${((bossSpot.y + 27) / H * 100).toFixed(3)}%"><div class="op-top"><b>Boss</b>${goBtn('boss')}</div><span><i></i>${esc(bossWords)}</span></div>`;
-    const dupes = new Set(agents.map(a => a.title).filter((t, i, all) => all.indexOf(t) !== i));
     const boardNames = { tasks: 'Task board', ideas: 'Idea board', lab: 'The lab: suggestions' };
     const boardHits = Object.entries(wallBoards).filter(([, b]) => b.x != null).map(([k, b]) =>
       `<button class="office-hit board" data-board="${k}" style="left:${((b.x + b.w / 2) / W * 100).toFixed(3)}%;top:${(b.y / H * 100).toFixed(3)}%;width:${(b.w / W * 100).toFixed(3)}%;height:${(b.h / H * 100).toFixed(3)}%" title="Open the ${boardNames[k].toLowerCase()}" aria-label="${boardNames[k]}">${boardWriting(k)}</button>`).join('');
     // The ones standing at the front desk are clickable where they stand, their name under their feet.
     const askers = queueLine(agents).filter(a => !trips.has(a.id)).map((a, k) => {
-      const q = queueSpot(queueLine(agents).indexOf(a));
-      return `<button class="office-hit asker${selected === a.id ? ' on' : ''}" data-id="${esc(a.id)}" style="left:${((q.x + 7) / W * 100).toFixed(3)}%;top:${((q.y - 16) / H * 100).toFixed(3)}%;width:${(24 / W * 100).toFixed(3)}%;height:${(36 / H * 100).toFixed(3)}%" aria-label="${esc(nameOf(a))} has a question" title="${esc(nameOf(a))} has a question: ${esc(a.title)}"><span style="color:${esc(nameColor(a.color))}">${esc(nameOf(a))}</span></button>`;
+      const at = queueLine(agents).indexOf(a), q = queueSpot(at);
+      const ask = a.closing && a.closing.question ? a.closing.text : 'Has a question for you';
+      return `<button class="office-hit qb" data-id="${esc(a.id)}" style="left:${((q.x - QB / 2 - 4) / W * 100).toFixed(3)}%;top:${((q.y - 24) / H * 100).toFixed(3)}%;width:${(QB / W * 100).toFixed(3)}%" title="${esc(nameOf(a))}: ${esc(a.title)}\n${esc(ask)}" aria-label="Number ${at + 1} in line, ${esc(nameOf(a))}: ${esc(a.title)}"><i>${at + 1}</i><b style="color:${esc(nameColor(a.color))}">${esc(nameOf(a))}</b><span class="qb-what">${esc(a.title)}</span><span class="qb-ask">${esc(ask)}</span></button>` +
+        `<button class="office-hit asker${selected === a.id ? ' on' : ''}" data-id="${esc(a.id)}" style="left:${((q.x + 7) / W * 100).toFixed(3)}%;top:${((q.y - 16) / H * 100).toFixed(3)}%;width:${(24 / W * 100).toFixed(3)}%;height:${(36 / H * 100).toFixed(3)}%" aria-label="${esc(nameOf(a))} has a question" title="${esc(nameOf(a))} has a question: ${esc(a.title)}"><span style="color:${esc(nameColor(a.color))}">${esc(nameOf(a))}</span></button>`;
     }).join('');
-    desksLayer.innerHTML = bossHTML + boardHits + askers + spots.map((s, i) => {
+    const boardsHTML = tables.map(tb => {
+      const open = ((board && board.tasks) || []).filter(t => t.status !== 'done' && taskTable(t) === tb.key);
+      return `<button class="office-hit wb" data-table="${esc(tb.key)}" style="left:${((tb.x + (WB - 8) / 2) / W * 100).toFixed(3)}%;top:${(tb.y / H * 100).toFixed(3)}%;width:${((WB - 8) / W * 100).toFixed(3)}%;height:${(34 / H * 100).toFixed(3)}%" title="${esc(tableName(tb.key))} whiteboard: ${open.length} open task${open.length === 1 ? '' : 's'}" aria-label="${esc(tableName(tb.key))} whiteboard"><b>${esc(tableName(tb.key))}</b>${open.slice(0, 3).map(t => `<span>${esc(t.title)}</span>`).join('') || '<em>+ add tasks</em>'}</button>`;
+    }).join('');
+    desksLayer.innerHTML = bossHTML + boardHits + boardsHTML + askers + spots.map((s, i) => {
       const a = agents[i];
-      // The plate is one slim line under the table legs (status dot, name, Talk), so it never covers the
-      // agent or the desk; the title and status open below it on hover or keyboard focus.
-      const left = (s.x / W * 100).toFixed(3), top = ((s.y - 36) / H * 100).toFixed(3), plate = ((s.y + 25) / H * 100).toFixed(3);
-      const fit = `max-width:${((s.slot - 5) / W * 100).toFixed(3)}%`;
-      if (!a) return `<div class="office-plate open" style="left:${left}%;top:${plate}%;${fit}"><b>Open desk</b><span>Waiting for an agent</span></div>`;
+      const left = (s.x / W * 100).toFixed(3), top = ((s.y - 36) / H * 100).toFixed(3);
+      if (!a) return '';
       // Each helper drawn on the desk is its own click target (over the agent's).
       const helperHits = (a.helpers || []).slice(0, HELPER_SPOTS.length).map((h, k) => {
         const hx = s.x - 32 + HELPER_SPOTS[k] + 3.5, hy = s.y - 9;
         return `<button class="office-hit helper${helperSel === h.id ? ' on' : ''}" data-helper="${esc(h.id)}" style="left:${(hx / W * 100).toFixed(3)}%;top:${((hy - 8) / H * 100).toFixed(3)}%;width:${(12 / W * 100).toFixed(3)}%;height:${(17 / H * 100).toFixed(3)}%" aria-label="Helper ${esc(h.title || '')}, ${esc(WORDS[h.activity] || h.activity || '')}" title="${esc(h.title || 'Helper')}"></button>`;
       }).join('');
-      const state = a.bed ? 'asleep' : a.activity === 'your_turn' ? 'you' : BUSY.has(a.activity) ? 'busy' : a.activity;
-      return `<button class="office-hit${selected === a.id ? ' on' : ''}" data-id="${esc(a.id)}" style="left:${left}%;top:${top}%;height:${(64 / H * 100).toFixed(3)}%;width:${(Math.min(70, s.slot - 4) / W * 100).toFixed(3)}%" aria-label="${esc(nameOf(a))}, ${esc(a.title)}, ${esc(WORDS[a.activity] || a.activity)}${(a.helpers || []).length ? `, ${a.helpers.length} helper${a.helpers.length === 1 ? '' : 's'} out` : ''}"></button>
-        <div class="office-plate ${state}" data-id="${esc(a.id)}" style="left:${left}%;top:${plate}%;${fit}">
-          ${(a.helpers || []).length ? `<em class="office-help" title="${a.helpers.length} helper${a.helpers.length === 1 ? '' : 's'} out">${a.helpers.length}</em>` : ''}<div class="op-top"><i class="op-dot"></i>${nameTag(a)}${goBtn(a.id, a)}</div><div class="op-more"><p class="op-title" title="${esc(a.title)}">${esc(a.title)}</p>${a.closing && a.activity === 'your_turn' ? `<p class="op-close${a.closing.question ? ' ask' : ''}" title="${esc(a.closing.text)}">${esc(a.closing.text)}</p>` : ''}<span><i></i>${esc(plateWords(a))}${a.tty && dupes.has(a.title) ? `<em class="office-tty">· ${esc(ttyName(a.tty))}</em>` : ''}</span></div>
-        </div>${helperHits}`;
+      // No plate on a desk: the agent and its desk stay in full view. The agent itself is the click
+      // target (its name, title and status are on hover and in the Floor list); the boss plate stays.
+      const tip = `${nameOf(a)}: ${a.title}\n${plateWords(a)}${a.closing && a.activity === 'your_turn' ? '\n' + a.closing.text : ''}${(a.helpers || []).length ? `\n${a.helpers.length} helper${a.helpers.length === 1 ? '' : 's'} out` : ''}`;
+      return `<button class="office-hit${selected === a.id ? ' on' : ''}" data-id="${esc(a.id)}" style="left:${left}%;top:${top}%;height:${(64 / H * 100).toFixed(3)}%;width:${(Math.min(70, s.slot - 4) / W * 100).toFixed(3)}%" title="${esc(tip)}" aria-label="${esc(nameOf(a))}, ${esc(a.title)}, ${esc(plateWords(a))}${(a.helpers || []).length ? `, ${a.helpers.length} helper${a.helpers.length === 1 ? '' : 's'} out` : ''}"></button>${helperHits}`;
     }).join('');
   }
 
@@ -1174,7 +1278,7 @@
   // beside the roster, minus the console when one is open, and the layout picks the biggest fit.
   const shell = document.getElementById('office-shell'), roomEl = document.getElementById('office-room'), dockEl = document.getElementById('office-dock');
   function fit() {
-    const n = seatCount((data && data.agents) || []), narrow = innerWidth <= 900;
+    const sizes = tableSizes((data && data.agents) || []), narrow = innerWidth <= 900;
     shell.style.height = narrow ? '' : Math.max(420, innerHeight - (shell.getBoundingClientRect().top + window.scrollY) - 12) + 'px';
     const r = roomEl.getBoundingClientRect();
     const cw = consoleFor && !narrow ? Math.round(Math.min(960, r.width - 296, Math.max(340, r.width * 0.60))) : 0;
@@ -1190,7 +1294,7 @@
     dockEl.hidden = !!(cw && innerHeight < 820);
     const dockH = dockEl.childElementCount && !dockEl.hidden ? dockEl.offsetHeight + 10 : 0;
     const ah = Math.max(220, narrow ? innerHeight * 0.62 : r.height - dockH);
-    geo = chooseLayout(n, aw, ah);
+    geo = chooseLayout(sizes, aw, ah);
     // Fill the whole space: grow the canvas to its shape and centre the desks in it. Most of the extra
     // height goes to the floor in front, a little to the wall, so the room does not look top-heavy.
     W = Math.max(geo.W, Math.round(aw / geo.scale)); H = Math.max(geo.H, Math.round(ah / geo.scale));
@@ -1243,6 +1347,16 @@
     setTimeout(() => { if (!consoleFor) consoleEl.hidden = true; }, 260);
   }
 
+  // Subject for the console banner. A Hermes title summarises the chat; "New chat" (not titled yet)
+  // and Claude Code's "Claude Code in <folder>" do not, so those fall back to what you asked.
+  function subjectOf(a) {
+    const generic = !a.title || a.title === 'New chat' || /^(Claude Code|Codex)( in |$)/.test(a.title);
+    const doing = (a.todos || []).find(x => x.status === 'doing');
+    const subject = generic ? (a.ask || a.title || 'No subject yet') : a.title;
+    if (doing) return { subject, label: 'Working on', now: doing.text };
+    if (a.ask && !(generic && subject === a.ask)) return { subject, label: BUSY.has(a.activity) ? 'Working on' : 'You asked', now: a.ask };
+    return { subject, label: '', now: '' };
+  }
   function renderConsole(a) {
     card.hidden = true;
     const state = a.activity === 'your_turn' ? 'you' : BUSY.has(a.activity) ? 'busy' : 'rest';
@@ -1261,14 +1375,16 @@
             <button class="oc-btn oc-jump" title="Bring its iTerm tab to the front">Open in iTerm</button>
             <button class="oc-btn oc-close" aria-label="Close">✕</button>
           </div>
+          <div class="oc-subject" aria-live="polite"><small>Subject</small><b class="oc-subject-text"></b><p class="oc-now"><span class="oc-now-label"></span> <span class="oc-now-text"></span></p></div>
         </header>
         <div class="oc-meta"></div>
         <div class="oc-closing" hidden><span class="oc-avatar md" aria-hidden="true"></span><div><small></small><p></p></div></div>
         <div class="oc-helpers" aria-label="Its helpers"></div>
-        <div class="oc-tabs" role="tablist"><button type="button" role="tab" data-view="term" aria-selected="true">&gt;_ Terminal</button><button type="button" role="tab" data-view="plan" aria-selected="false">Plan <small></small></button></div>
+        <div class="oc-tabs" role="tablist"><button type="button" role="tab" data-view="chat" aria-selected="true">Chat</button><button type="button" role="tab" data-view="term" aria-selected="false">&gt;_ Terminal</button><button type="button" role="tab" data-view="plan" aria-selected="false">Plan <small></small></button></div>
         <div class="oc-screen-wrap">
           <pre class="oc-screen" tabindex="0" aria-live="off"><span class="oc-dim">Reading its screen…</span></pre>
           <div class="oc-plan" hidden></div>
+          <div class="oc-chat" hidden tabindex="0" aria-live="off"><p class="oc-empty">Reading the conversation…</p></div>
           <button class="oc-latest" hidden>↓ Latest</button>
         </div>
         <form class="oc-send" autocomplete="off">
@@ -1279,7 +1395,7 @@
         <p class="oc-hint"></p>
         <div class="oc-usage" aria-label="Plan usage"></div>
         <p class="oc-ended" role="status"></p>`;
-      ocView = a.activity === 'your_turn' && (a.todos || []).length ? 'plan' : 'term';
+      ocView = 'chat'; lastChat = '';
       const screenEl = consoleEl.querySelector('.oc-screen');
       screenEl.addEventListener('scroll', () => {
         pinned = screenEl.scrollHeight - screenEl.scrollTop - screenEl.clientHeight < 24;
@@ -1297,10 +1413,17 @@
     }
     // In-place updates: name, colour, state, numbers.
     const $ = sel => consoleEl.querySelector(sel);
-    consoleEl.querySelectorAll('.oc-avatar').forEach(e => e.style.setProperty('--agent', a.color));
-    $('.oc-kind-text').textContent = '· ' + (a.kind === 'hermes' ? 'Hermes' + (a.model ? ' · ' + a.model : '') : a.kind === 'claude' ? 'Claude Code' : 'Codex');
+    consoleEl.querySelectorAll('.oc-avatar').forEach(e => paintAvatar(e, a));
+    $('.oc-kind-text').textContent = (a.kind === 'hermes' ? 'Hermes' + (a.model ? ' · ' + a.model : '') : a.kind === 'claude' ? 'Claude Code' : 'Codex');
     $('.oc-title').innerHTML = `${nameTag(a)}`;
-    $('.oc-full-title').textContent = a.title;
+    $('.oc-full-title').textContent = '';
+    // The banner: the conversation's subject (its title, which Hermes writes as a summary of the chat),
+    // and the task in hand right now: the step it is on, else what you last asked it.
+    const subj = subjectOf(a);
+    $('.oc-subject-text').textContent = subj.subject;
+    $('.oc-now-label').textContent = subj.label;
+    $('.oc-now-text').textContent = subj.now;
+    $('.oc-now').hidden = !subj.now;
     const steps = (a.todos || []).filter(x => x.status !== 'dropped'), doneN = steps.filter(x => x.status === 'done').length;
     $('.oc-tabs [data-view="plan"] small').textContent = steps.length ? `${doneN}/${steps.length}` : '';
     $('.oc-plan').innerHTML = steps.length ? `<ol>${steps.map(x => `<li class="${x.status}"><i>${x.status === 'done' ? '✓' : ''}</i><span>${esc(x.text)}</span></li>`).join('')}</ol>`
@@ -1325,6 +1448,7 @@
   }
 
   async function readScreen() {
+    readChat();
     if (!consoleFor || screenBusy || !active()) return;
     screenBusy = true;
     const id = consoleFor;
@@ -1375,16 +1499,71 @@
     }).join('\n');
   }
 
-  let ocView = 'term';
+  let ocView = 'chat';
   function setOcView(v) {
     ocView = v;
     consoleEl.querySelectorAll('.oc-tabs button').forEach(b => b.setAttribute('aria-selected', String(b.dataset.view === v)));
-    const pre = consoleEl.querySelector('.oc-screen'), plan = consoleEl.querySelector('.oc-plan');
-    if (pre) pre.hidden = v !== 'term'; if (plan) plan.hidden = v !== 'plan';
+    const pre = consoleEl.querySelector('.oc-screen'), plan = consoleEl.querySelector('.oc-plan'), chat = consoleEl.querySelector('.oc-chat');
+    if (pre) pre.hidden = v !== 'term'; if (plan) plan.hidden = v !== 'plan'; if (chat) chat.hidden = v !== 'chat';
+  }
+
+  // ── Chat: the conversation in plain, readable type. Hermes and Claude Code come from their
+  //    transcripts (tool calls counted into one line); Codex has none, so its screen is tidied:
+  //    box rules, spinners and status bars dropped, wrapped lines joined. No model is called. ──
+  let lastChat = '', chatBusy = false;
+  function tidyScreen(text) {
+    const RULE = /^[\s─━│┃┌┐└┘├┤┬┴┼╭╮╰╯═║╔╗╚╝╠╣╦╩╬▔▁▏▕·•⋅…\-_=|+]*$/, SPIN = /^[\s⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏✻✳✶✢·*◐◓◑◒⏺⎿]+/;
+    const out = [];
+    String(text || '').split('\n').forEach(raw => {
+      let l = raw.replace(/^[│┃║|]\s?/, '').replace(/\s?[│┃║|]\s*$/, '').replace(SPIN, '').trimEnd();
+      if (!l.trim() || RULE.test(l) || /^(esc to interrupt|\? for shortcuts|ctrl\+|⏵⏵|auto-accept)/i.test(l.trim())) { if (out.length && out[out.length - 1] !== '') out.push(''); return; }
+      l = l.trim();
+      const prev = out[out.length - 1];
+      // A terminal wraps a long line: join a line onto the previous one when it reads as its continuation.
+      if (prev && prev !== '' && !/[.!?:]$/.test(prev) && /^[a-z(]/.test(l)) out[out.length - 1] = prev + ' ' + l; else out.push(l);
+    });
+    while (out.length && out[out.length - 1] === '') out.pop();
+    return out.join('\n').split(/\n{2,}/).map(p => p.trim()).filter(Boolean);
+  }
+  // Light markdown for a reply: paragraphs, bullets, **bold**, `code`. Everything is escaped first.
+  function prose(text) {
+    const inline = t => esc(t).replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>').replace(/`([^`]+)`/g, '<code>$1</code>');
+    return String(text || '').trim().split(/\n{2,}/).map(p => {
+      const lines = p.split('\n');
+      if (lines.every(l => /^\s*([-*•]|\d+[.)])\s+/.test(l))) return `<ul>${lines.map(l => `<li>${inline(l.replace(/^\s*([-*•]|\d+[.)])\s+/, ''))}</li>`).join('')}</ul>`;
+      if (/^\s*```/.test(p)) return `<pre>${esc(p.replace(/^\s*```\w*\n?|```\s*$/g, ''))}</pre>`;
+      return `<p>${lines.map(l => inline(l.replace(/^#+\s*/, ''))).join('<br>')}</p>`;
+    }).join('');
+  }
+  function renderChat(turns, screenText) {
+    const box = consoleEl.querySelector('.oc-chat');
+    if (!box) return;
+    const html = turns
+      ? (turns.length ? turns.map(t => t.kind === 'did' ? `<p class="oc-did">${esc(t.text)}</p>`
+          : `<div class="oc-msg ${t.kind}"><small>${t.kind === 'you' ? 'You' : 'Agent'}</small>${prose(t.text)}</div>`).join('') : '<p class="oc-empty">Nothing said yet.</p>')
+      : `<p class="oc-did">Codex keeps no readable transcript, so this is its screen, tidied.</p>${tidyScreen(screenText).map(p => `<div class="oc-msg said">${prose(p)}</div>`).join('')}`;
+    if (html === lastChat) return;
+    const pinnedChat = box.scrollHeight - box.scrollTop - box.clientHeight < 40 || !lastChat;
+    lastChat = html; box.innerHTML = html;
+    if (pinnedChat) box.scrollTop = box.scrollHeight;
+  }
+  async function readChat() {
+    if (!consoleFor || chatBusy || ocView !== 'chat') return;
+    const id = consoleFor, a = data && data.agents.find(x => x.id === id);
+    if (demo) { renderChat([{ kind: 'you', text: 'Add the referral field to the waitlist form.' }, { kind: 'did', text: 'Read or searched 4 times, edited 2 files, ran 3 commands' },
+      { kind: 'said', text: (a && a.closing && a.closing.text) || 'Done: the **waitlist form** now has a referral field.\n\n- Saved in `forms/waitlist.tsx`\n- Tests pass' }]); return; }
+    if (a && a.kind === 'codex') { if (lastScreen) renderChat(null, lastScreen); return; }
+    chatBusy = true;
+    try {
+      const res = await fetchT('/api/office/chat?id=' + encodeURIComponent(id), { cache: 'no-store' }, 5000);
+      const body = await res.json().catch(() => ({}));
+      if (consoleFor !== id) return;
+      if (res.ok) renderChat(body.turns, lastScreen);
+    } catch (e) { /* next tick */ } finally { chatBusy = false; }
   }
   consoleEl.addEventListener('click', async e => {
     const tabBtn = e.target.closest('.oc-tabs button');
-    if (tabBtn) { setOcView(tabBtn.dataset.view); return; }
+    if (tabBtn) { setOcView(tabBtn.dataset.view); if (tabBtn.dataset.view === 'chat') readChat(); return; }
     if (e.target.closest('.oc-close')) { selected = null; lastPlateKey = ''; renderCard(); draw(); return; }
     if (e.target.closest('.oc-latest')) { const pre = consoleEl.querySelector('.oc-screen'); pinned = true; pre.scrollTop = pre.scrollHeight; e.target.hidden = true; return; }
     if (e.target.closest('.oc-jump')) {
@@ -1410,7 +1589,7 @@
     } catch (err) { flash(err.name === 'AbortError' ? 'iTerm did not answer. Nothing may have been sent; check the screen.' : err.message, true); }
     finally { setTimeout(() => { go.disabled = false; }, 2000); }
   });
-  function flash(text, bad) {
+    function flash(text, bad) {
     const hint = consoleEl.querySelector('.oc-hint');
     if (!hint) return;
     hint.textContent = text; hint.classList.toggle('bad', !!bad); hint.classList.add('flash');
@@ -1424,7 +1603,7 @@
       if (was === undefined && prev.size) log.unshift([now, nameOf(a), 'sat down']);
       else if (was && was !== a.activity) {
         const word = a.activity === 'your_turn' ? 'walked up to you with a question' : a.activity === 'asleep' ? 'fell asleep' : a.activity === 'helpers' ? 'is waiting on its helpers'
-          : a.activity === 'idle' ? 'finished' : (WORDS[a.activity] || a.activity).toLowerCase();
+          : a.activity === 'idle' || a.activity === 'done' ? 'finished' : (WORDS[a.activity] || a.activity).toLowerCase();
         log.unshift([now, a.title, word]);
       }
     });
@@ -1458,17 +1637,19 @@
     return { agents: acts.map((a, i) => ({
       id: 'demo-' + i, tty: 'ttys0' + String(i + 1).padStart(2, '0'), kind: i === 5 ? 'claude' : i === 6 ? 'codex' : 'hermes',
       title: ['Build the waitlist form with a referral field', 'Write the landing page copy for Sunrise', 'Research competitor pricing pages', 'Plan the onboarding flow'][i % 4] + (i >= 4 ? ' ' + (i + 1) : ''),
-      name: ['Ada', 'Bo', 'Cleo', 'Dex', 'Echo', 'Finn', 'Gus', 'Hana', 'Iggy', 'Juno', 'Kai', 'Lumi'][i % 12],
+      name: (cast.names || [])[i] || 'Agent ' + (i + 1),
       closing: a === 'your_turn' ? { text: 'The waitlist form is live locally. Should I add the referral field before we publish, or ship it as is?', question: true }
         : a === 'idle' ? { text: 'Done: the landing copy is in docs/landing.md, ready for your review.', question: false } : null,
       todos: i === 0 ? [{ text: 'Read the current waitlist code', status: 'done' }, { text: 'Add the referral field to the form', status: 'doing' }, { text: 'Run the form tests', status: 'todo' }]
         : i === 1 ? [{ text: 'Draft the hero copy', status: 'doing' }, { text: 'Write three feature blurbs', status: 'todo' }] : [],
+      ask: ['Add a referral field to the waitlist form and run the tests', 'Write the hero and three feature blurbs for Sunrise', 'Compare five competitor pricing pages', 'Sketch the onboarding flow'][i % 4],
+      cwd: ['/home/demo/sunrise', '/home/demo/sunrise', '/home/demo', '/home/demo/site'][i % 4],
       model: 'Opus 5.5', provider: i === 5 || i === 6 ? '' : 'anthropic', activity: a, working: BUSY.has(a), started_at: now - 600 * (i + 1), last_at: now - 30,
       messages: 10 * i, helpers: a === 'delegating' ? [
         { id: 'h-r' + i, title: 'Research', activity: 'browsing', depth: 1 }, { id: 'h-d' + i, title: 'Draft', activity: 'writing', depth: 1 },
         { id: 'h-f' + i, title: 'Fact check', activity: 'reading', depth: 2 }, { id: 'h-t' + i, title: 'Tests', activity: 'typing', depth: 1 }]
         : a === 'typing' ? [{ id: 'h-x' + i, title: 'Review', activity: 'thinking', depth: 1 }] : [] })),
-      rack: { ollama: true, units: [{ name: 'gemma4:26b', kind: 'ollama' }, { name: 'whisper', kind: 'whisper' }] } };
+      home: '/home/demo', rack: { ollama: true, units: [{ name: 'gemma4:26b', kind: 'ollama' }, { name: 'whisper', kind: 'whisper' }] } };
   }
 
   let demoB = null;
@@ -1476,12 +1657,12 @@
     if (!demoB) {
       const now = Date.now() / 1000;
       demoB = { project: { name: 'Sunrise', about: 'A habit app that helps people start the day with a short walk.' },
-        tasks: [{ id: 'dt1', title: 'Write the landing page', notes: 'Hero, three features, pricing', status: 'todo', created_at: now - 900 },
-          { id: 'dt2', title: 'Set up the waitlist form', notes: '', status: 'assigned', agent: 'demo-0', agent_title: 'Demo: Running commands', assigned_at: now - 400, created_at: now - 2000 },
-          { id: 'dt3', title: 'Pick the app name', notes: '', status: 'done', created_at: now - 9000, done_at: now - 3000 }],
+        tasks: [{ id: 'dt1', title: 'Write the landing page', notes: 'Hero, three features, pricing', status: 'todo', group: '/home/demo/sunrise', created_at: now - 900 },
+          { id: 'dt2', group: '/home/demo/sunrise', title: 'Set up the waitlist form', notes: '', status: 'assigned', agent: 'demo-0', agent_title: 'Demo: Running commands', assigned_at: now - 400, created_at: now - 2000 },
+          { id: 'dt3', group: '/home/demo/sunrise', title: 'Pick the app name', notes: '', status: 'done', created_at: now - 9000, done_at: now - 3000 }],
         ideas: [{ id: 'di1', title: 'A 7-day starter plan for new users', why: 'Gives first users a reason to come back daily.', at: now - 600, new: true },
           { id: 'di2', title: 'Share a progress video each week', why: 'People love showing progress; it is free marketing.', at: now - 600 }],
-        suggestions: [{ id: 'ds1', title: 'Launch to one community first', advice: 'Apps that launched into a single niche forum got their first 100 users faster. Pick one community and serve it well.', source_title: 'Demo source', source_url: 'https://example.com', at: now - 1200, new: true }],
+        suggestions: [{ id: 'ds1', title: 'Launch to one community first', advice: 'Apps that launched into a single niche forum got their first 100 users faster. Pick one riding community and serve it well.', source_title: 'Demo source', source_url: 'https://example.com', at: now - 1200, new: true }],
         runs: params.has('office-lab') ? { research: { status: 'running', started_at: now - 40 }, brainstorm: { status: 'running', started_at: now - 10 } } : {} };
     }
     demoB.progress = { done: demoB.tasks.filter(t => t.status === 'done').length, total: demoB.tasks.length };
@@ -1490,7 +1671,7 @@
   function demoBoardPost(body) {
     const b = demoB, t = b.tasks.find(x => x.id === body.id);
     let result = true;
-    if (body.action === 'add') b.tasks.push(result = { id: 'dt' + Math.random().toString(36).slice(2, 7), title: body.title, notes: body.notes || '', status: 'todo', created_at: Date.now() / 1000 });
+    if (body.action === 'add') b.tasks.push(result = { id: 'dt' + Math.random().toString(36).slice(2, 7), title: body.title, notes: body.notes || '', status: 'todo', group: body.group, created_at: Date.now() / 1000 });
     if (body.action === 'assign' && t) { const a = data.agents.find(x => x.id === body.agent) || data.agents[0]; Object.assign(t, { status: 'assigned', agent: a.id, agent_title: a.title, assigned_at: Date.now() / 1000 }); result = t; }
     if (body.action === 'done' && t) { t.status = 'done'; result = t; }
     if (body.action === 'reopen' && t) t.status = t.agent ? 'assigned' : 'todo';
@@ -1518,7 +1699,7 @@
 
   function renderRoster() {
     const agents = (data && data.agents) || [];
-    const key = JSON.stringify([selected, helperSel, agents.map(a => [a.id, a.name, a.title, a.activity, a.bed, a.color, a.closing && a.closing.text, (a.helpers || []).map(h => [h.id, h.title, h.activity, h.tool])])]);
+    const key = JSON.stringify([selected, helperSel, agents.map(a => [a.id, a.name, a.title, a.activity, a.tty, a.bed, a.color, a.closing && a.closing.text, (a.helpers || []).map(h => [h.id, h.title, h.activity, h.tool])])]);
     if (key === lastRosterKey) return;
     lastRosterKey = key;
     if (!agents.length) { rosterList.innerHTML = '<p class="or-empty">Nobody is in yet. Start Hermes, Claude Code or Codex in a terminal and it takes a desk.</p>'; return; }
@@ -1529,11 +1710,12 @@
       return `<div class="or-agent${selected === a.id ? ' on' : ''}"><button class="or-row" data-id="${esc(a.id)}">
           <em class="office-swatch" style="background:${esc(a.color)}"></em><span class="or-name">${nameTag(a)}</span><span class="or-go">${selected === a.id ? 'Open' : a.tty && !demo ? 'Talk ›' : 'Open ›'}</span>
           <span class="or-title">${esc(a.title)}</span>${a.closing && !BUSY.has(a.activity) ? `<span class="or-close${a.closing.question ? ' ask' : ''}">${esc(a.closing.text)}</span>` : ''}
-          <span class="or-state ${a.bed ? 'rest' : stateClass(a.activity)}"><i></i>${esc(plateWords(a))}${(a.helpers || []).length ? ` · ${a.helpers.length} helper${a.helpers.length === 1 ? '' : 's'}` : ''}</span></button>${helpers}</div>`;
+          <span class="or-state ${a.bed ? 'rest' : stateClass(a.activity)}"><i></i>${esc(plateWords(a))}${(a.helpers || []).length ? ` · ${a.helpers.length} helper${a.helpers.length === 1 ? '' : 's'}` : ''}</span></button>${helpers}
+          </div>`;
     }).join('');
   }
   document.getElementById('office-roster').addEventListener('click', e => {
-    const h = e.target.closest('[data-helper]');
+        const h = e.target.closest('[data-helper]');
     if (h) { openHelper(h.dataset.helper); return; }
     if (e.target.closest('.or-back')) { closeHelper(); return; }
     const row = e.target.closest('.or-row, [data-agent]');
@@ -1599,7 +1781,8 @@
   // ── Panel tabs: the floor, the three boards, usage ──
   const boardEl = document.getElementById('office-board');
   const rosterEl = document.getElementById('office-roster');
-  let panel = 'floor', boardMsg = ['', false], editingProject = false;
+  let panel = 'floor', boardMsg = ['', false], editingProject = false, tableSel = null;
+  function openTable(key) { tableSel = key; setPanel('tasks'); renderBoard(true); }
   function setPanel(name) {
     const changed = panel !== name;
     panel = name;
@@ -1627,7 +1810,7 @@
   hud.querySelector('.oh-usage').addEventListener('click', () => setPanel('usage'));
   document.addEventListener('pointerdown', e => {
     if (e.button !== 0 || !active() || shell.classList.contains('roster-folded') || rosterEl.contains(e.target)) return;
-    if (e.target.closest('.office-hit.board, .office-hit.helper, .oh-usage')) return;
+    if (e.target.closest('.office-hit.board, .office-hit.wb, .office-hit.helper, .oh-usage')) return;
     setFolded(true);
   });
 
@@ -1656,7 +1839,7 @@
   }
   function renderBoard(force) {
     if (panel === 'floor') return;
-    const key = JSON.stringify([panel, board, usage && usage.checked_at, editingProject, boardMsg, ((data && data.agents) || []).map(a => [a.id, a.title, a.name, a.todos])]);
+    const key = JSON.stringify([panel, tableSel, tables, board, usage && usage.checked_at, editingProject, boardMsg, ((data && data.agents) || []).map(a => [a.id, a.title, a.name, a.todos, a.activity, a.cwd])]);
     if (!force && key === lastBoardKey) return;
     if (!force && (shell.classList.contains('roster-folded') ||
       (boardEl.contains(document.activeElement) && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) ||
@@ -1673,24 +1856,32 @@
         <div class="ob-bar"><i style="width:${pct}%"></i></div><p>${b.progress.done} of ${b.progress.total} tasks done${b.progress.total ? ` · ${pct}%` : ''}</p></div>`;
     };
     if (panel === 'tasks') {
+      // One whiteboard per table (project folder). Picking an agent types the task into its terminal.
+      const agents = (data && data.agents) || [];
+      const keys = [...new Set([...tables.map(tb => tb.key), ...(b.tasks || []).filter(t => t.status !== 'done').map(taskTable)])];
+      if (!keys.includes(tableSel)) tableSel = keys[0] || homeDir();
+      const here = agents.filter(a => tableOf(a) === tableSel && (a.tty || demo));
+      const pick = t => `<select class="ob-pick" data-act="pick" aria-label="Give it to"><option value="">${t.status === 'assigned' ? 'Send again to…' : 'Give it to…'}</option>${here.map(a => `<option value="${esc(a.id)}">${esc(nameOf(a))}: ${esc(a.title)}</option>`).join('')}</select>`;
       const card = t => `<div class="ob-card${t.status === 'done' ? ' done' : ''}" data-id="${esc(t.id)}"><button class="ob-x" data-act="remove" data-list="tasks" title="Remove">✕</button>
-          <b>${esc(t.title)}<span class="ob-chip ${t.status}">${t.status === 'todo' ? 'To do' : t.status === 'assigned' ? 'Assigned' : 'Done'}</span></b>${t.notes ? `<p>${esc(t.notes)}</p>` : ''}
-          ${t.agent_title && t.status !== 'done' ? `<div class="ob-meta">Sent ${t.assigned_at ? ago(Date.now() / 1000 - t.assigned_at) + ' ago' : ''}</div>` : ''}
+          <b>${esc(t.title)}<span class="ob-chip ${t.status}">${t.status === 'todo' ? 'To do' : t.status === 'assigned' ? 'With ' + esc(nameOf(agents.find(a => a.id === t.agent) || { title: t.agent_title || 'an agent' })) : 'Done'}</span></b>${t.notes ? `<p>${esc(t.notes)}</p>` : ''}
+          ${t.agent_title && t.status !== 'done' && t.assigned_at ? `<div class="ob-meta">Sent ${ago(Date.now() / 1000 - t.assigned_at)} ago</div>` : ''}
           <div class="ob-actions">${t.status === 'done' ? '<button class="ob-btn" data-act="reopen">Reopen</button>'
-            : `<select class="ob-pick" aria-label="Assign to">${agentOptions()}</select><button class="ob-btn gold" data-act="assign">${t.status === 'assigned' ? 'Send again' : 'Assign'}</button><button class="ob-btn" data-act="done">Done</button>`}</div></div>`;
-      // By agent: its name in its colour, its own to-do list (live from its chat), the board tasks it has.
-      const { groups: byAgent, loose } = tasksByAgent();
-      const groups = byAgent.map(g => {
-        const a = g.agent, n = g.own.length + g.board.length, done = g.own.filter(x => x.status === 'done').length + g.board.filter(t => t.status === 'done').length;
-        const own = g.own.map(x => `<li class="${x.status}"><i>${STEP[x.status]}</i><span>${esc(x.text)}</span></li>`).join('');
-        return `<section class="ob-agent" style="--agent:${esc(nameColor(a.color))}">
-          <header><em class="office-swatch" style="background:${esc(a.color)}"></em>${nameTag(a)}<span class="ob-agent-title">${esc(a.title)}</span><small>${n ? `${done}/${n}` : ''}</small></header>
-          ${own ? `<ol class="ob-steps">${own}</ol>` : ''}${g.board.map(card).join('')}
-          ${!n ? `<p class="ob-empty">No list yet. It shows up here when ${esc(nameOf(a))} plans its work.</p>` : ''}</section>`;
-      }).join('') + (loose.length ? `<section class="ob-agent loose"><header><b class="agent-name">Not assigned</b><small>${loose.length}</small></header>${loose.map(card).join('')}</section>` : '');
-      boardEl.innerHTML = `<h3>Task board</h3><p class="ob-sub">Each agent's own to-do list fills in by itself as it plans its work. Add a task and Assign types it into an agent's terminal (Auto picks whoever is free); Done moves it off the board.</p>
-        ${project()}<form class="ob-form" data-form="task"><input name="title" maxlength="140" placeholder="Add a task" required><div class="ob-row"><input name="notes" maxlength="600" placeholder="Details (optional)"><button class="ob-btn gold" type="submit">Add</button></div></form>${msg}
-        ${groups || '<p class="ob-empty">Nobody is on the floor yet.</p>'}`;
+            : `${here.length ? pick(t) : '<span class="ob-meta">Nobody at this table yet</span>'}<button class="ob-btn" data-act="done">Done</button>`}</div></div>`;
+      const tasks = (b.tasks || []).filter(t => taskTable(t) === tableSel);
+      const running = here.map(a => {
+        const own = (a.todos || []).filter(x => x.status !== 'dropped');
+        return `<section class="ob-agent" style="--agent:${esc(nameColor(a.color))}"><header><em class="office-swatch" style="background:${esc(a.color)}"></em>${nameTag(a)}<span class="ob-agent-title">${esc(a.title)}</span><small>${esc(plateWords(a))}</small></header>
+          ${own.length ? `<ol class="ob-steps">${own.map(x => `<li class="${x.status}"><i>${STEP[x.status]}</i><span>${esc(x.text)}</span></li>`).join('')}</ol>` : `<p class="ob-empty">No plan listed yet.</p>`}</section>`;
+      }).join('');
+      const open = tasks.filter(t => t.status !== 'done'), done = tasks.filter(t => t.status === 'done');
+      boardEl.innerHTML = `<h3>Whiteboards</h3><p class="ob-sub">Each table is one project folder with its own whiteboard. Add a task, then pick who gets it: it is typed into that agent's terminal right away.</p>
+        <div class="ob-tables" role="tablist">${keys.map(k => { const n = (b.tasks || []).filter(t => t.status !== 'done' && taskTable(t) === k).length; return `<button type="button" role="tab" data-act="table" data-table="${esc(k)}" aria-selected="${k === tableSel}">${esc(tableName(k))}${n ? `<small>${n}</small>` : ''}</button>`; }).join('')}</div>
+        <div class="ob-wb"><h4>${esc(tableName(tableSel))}<small>${esc(tableSel)}</small></h4>
+        <form class="ob-form" data-form="task"><input name="title" maxlength="140" placeholder="Add a task to this whiteboard" required><div class="ob-row"><input name="notes" maxlength="600" placeholder="Details (optional)"><button class="ob-btn gold" type="submit">Add</button></div></form>${msg}
+        ${open.map(card).join('') || '<p class="ob-empty">No open tasks on this whiteboard.</p>'}</div>
+        ${running ? `<div class="ob-group">Running at this table</div>${running}` : ''}
+        ${done.length ? `<div class="ob-group">Done</div>${done.slice(-8).map(card).join('')}` : ''}
+        ${project()}`;
     } else if (panel === 'ideas' || panel === 'lab') {
       const isIdeas = panel === 'ideas', kind = isIdeas ? 'brainstorm' : 'research', list = isIdeas ? b.ideas : b.suggestions, run = (b.runs || {})[kind];
       const who = isIdeas ? 'The brainstormer' : 'The researcher';
@@ -1733,16 +1924,25 @@
         <div class="ou-key"><span><i style="background:#d2aa5f"></i>Claude</span><span><i style="background:#86cbc2"></i>Codex</span><span><i style="background:#8a8578"></i>Other</span><span style="margin-left:auto">peak ${fmt(max)}/h</span></div></div>`;
   }
 
+  // Picking an agent on a whiteboard task sends it straight away.
+  boardEl.addEventListener('change', e => {
+    const sel = e.target.closest('select[data-act="pick"]');
+    if (!sel || !sel.value) return;
+    const id = sel.closest('.ob-card').dataset.id;
+    sel.disabled = true;
+    boardPost({ action: 'assign', id, agent: sel.value });
+  });
   boardEl.addEventListener('submit', e => {
     e.preventDefault();
     const f = e.target, d = Object.fromEntries(new FormData(f));
-    if (f.dataset.form === 'task') { boardPost({ action: 'add', title: d.title, notes: d.notes }); }
+    if (f.dataset.form === 'task') { boardPost({ action: 'add', title: d.title, notes: d.notes, group: tableSel || homeDir() }); }
     else if (f.dataset.form === 'project') { editingProject = false; boardPost({ action: 'project', name: d.name, about: d.about }); }
   });
   boardEl.addEventListener('click', e => {
     const btn = e.target.closest('[data-act]');
-    if (!btn || btn.disabled) return;
+    if (!btn || btn.disabled || btn.tagName === 'SELECT') return;
     const card = btn.closest('.ob-card'), id = card && card.dataset.id, act = btn.dataset.act;
+    if (act === 'table') { tableSel = btn.dataset.table; renderBoard(true); return; }
     if (act === 'edit-project') { editingProject = true; renderBoard(true); return; }
     if (act === 'cancel-project') { editingProject = false; renderBoard(true); return; }
     if (act === 'assign') { btn.disabled = true; boardPost({ action: 'assign', id, agent: card.querySelector('.ob-pick').value }); return; }
@@ -1751,7 +1951,7 @@
     if (act === 'lab') { btn.disabled = true; boardPost({ action: 'lab', kind: btn.dataset.kind }); return; }
     if (act === 'to-task') {
       const list = panel === 'ideas' ? board.ideas : board.suggestions, c = list.find(x => x.id === id);
-      if (c) boardPost({ action: 'add', title: c.title, notes: panel === 'ideas' ? c.why : c.advice + (c.source_url ? ' Source: ' + c.source_url : ''), from: c.id }).then(() => setPanel('tasks'));
+      if (c) boardPost({ action: 'add', title: c.title, notes: panel === 'ideas' ? c.why : c.advice + (c.source_url ? ' Source: ' + c.source_url : ''), from: c.id, group: tableSel || homeDir() }).then(() => setPanel('tasks'));
     }
   });
   // ── The docked task board: agents waiting on you first, then open tasks, then what each is doing. ──
@@ -1762,14 +1962,14 @@
     if (key === lastDockKey || dockEl.contains(document.activeElement) && document.activeElement.tagName === 'SELECT') return;
     lastDockKey = key;
     const now = Date.now() / 1000, cards = [];
-    const foot = (a, extra) => `<div class="od-foot"><span class="oc-avatar sm" style="--agent:${esc(a.color)}"></span><span>${nameTag(a)} · ${esc(a.title)}</span>${extra || ''}</div>`;
+    const foot = (a, extra) => `<div class="od-foot">${avatarHtml(a, 'sm')}<span>${nameTag(a)} · ${esc(a.title)}</span>${extra || ''}</div>`;
     agents.filter(a => !a.bed && a.activity === 'your_turn').forEach(a => cards.push(`<button type="button" class="od-card you" data-agent="${esc(a.id)}"><div class="od-top"><b>${esc(a.closing ? a.closing.text : 'Finished, and waiting on you')}</b><span class="od-badge you">! Needs you</span></div>${foot(a, a.last_at ? `<time>${ago(now - a.last_at)} ago</time>` : '')}</button>`));
     (b.tasks || []).filter(t => t.status !== 'done').forEach(t => cards.push(`<div class="od-card" data-id="${esc(t.id)}"><div class="od-top"><b>${esc(t.title)}</b><span class="od-badge ${t.status}">${t.status === 'assigned' ? 'Assigned' : 'To do'}</span></div>${t.notes ? `<p>${esc(t.notes)}</p>` : ''}
       ${t.status === 'assigned' ? `<div class="od-foot"><span>With ${esc(t.agent_title || 'an agent')}</span>${t.assigned_at ? `<time>${ago(now - t.assigned_at)} ago</time>` : ''}</div>` : `<div class="od-assign"><select aria-label="Assign to">${agentOptions()}</select><button type="button" class="od-btn gold" data-act="assign">Assign</button></div>`}</div>`));
     agents.filter(a => !a.bed && a.activity !== 'your_turn').forEach(a => { const d = (a.todos || []).find(x => x.status === 'doing'); if (d) cards.push(`<button type="button" class="od-card" data-agent="${esc(a.id)}"><div class="od-top"><b>${esc(d.text)}</b><span class="od-badge doing">Working</span></div>${foot(a)}</button>`); });
     const open = (b.tasks || []).filter(t => t.status !== 'done').length, waiting = agents.filter(a => !a.bed && a.activity === 'your_turn').length;
     const max = Math.max(1, Math.min(3, Math.floor((parseFloat(dockEl.style.width) || 900) / 250)));
-    dockEl.innerHTML = `<header class="od-head"><h3><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 8 3 3 5-6"/></svg>Task board</h3><small>${[waiting ? `${waiting} need${waiting === 1 ? 's' : ''} you` : null, `${open} open`].filter(Boolean).join(' · ')}</small>
+    dockEl.innerHTML = `<header class="od-head"><h3><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 8 3 3 5-6"/></svg>Whiteboards</h3><small>${[waiting ? `${waiting} need${waiting === 1 ? 's' : ''} you` : null, `${open} open`].filter(Boolean).join(' · ')}</small>
       <button type="button" class="od-btn gold" data-go="tasks">+ <span>Add task</span></button><button type="button" class="od-btn" data-go="ideas">Ideas → <span>Tasks</span></button><button type="button" class="od-btn" data-go="lab"><span>Send</span> researcher…</button></header>
       <div class="od-cards">${cards.slice(0, max).join('') || '<p class="od-empty">Nothing waiting on you. Add a task to hand work to whoever is free.</p>'}</div>`;
   }
@@ -1818,6 +2018,153 @@
     if (!on && document.fullscreenElement) document.exitFullscreen().catch(() => {});
     requestAnimationFrame(() => { fit(); draw(); });
   }
+    // ── New agent: opens one terminal window running a model preset in a topic's folder. The page sends ids
+  //    only ({type, topic}); the server looks the folder and the command up in goldware.json. The Edit
+  //    entry opens a small editor for your own topics and presets. ──
+  const newMenu = hud.querySelector('.oh-new-menu'), newMore = hud.querySelector('.oh-new-more'), newBtn = hud.querySelector('.oh-new');
+  const topicsBox = newMenu.querySelector('.oh-topics-list'), presetsBox = newMenu.querySelector('.oh-presets');
+  const editor = hud.querySelector('.oe-editor');
+  const DEMO_SETTINGS = {
+    topics: [{ id: 'home', label: 'Home', dir: '~', exists: true }, { id: 'sunrise', label: 'Sunrise app', dir: '~/code/sunrise', exists: true }, { id: 'site', label: 'Website', dir: '~/code/site', exists: true }],
+    presets: [{ id: 'hermes', label: 'Hermes', command: 'hermes', available: true }, { id: 'claude-code', label: 'Claude Code', command: 'claude', available: true }, { id: 'codex', label: 'Codex', command: 'codex', available: false }],
+    limits: { items: 20, label: 40, command: 199 }
+  };
+  let settings = null, newTopic = '', newType = '';
+  async function loadSettings(force) {
+    if (settings && !force) return settings;
+    try {
+      if (demo) settings = settings || JSON.parse(JSON.stringify(DEMO_SETTINGS));
+      else {
+        const res = await fetchT('/api/office/settings', { cache: 'no-store' }, 5000);
+        if (res.ok) settings = await res.json();
+      }
+    } catch (e) { /* the menu says so below */ }
+    if (settings) {
+      if (!settings.topics.some(t => t.id === newTopic)) newTopic = (settings.topics[0] || {}).id || '';
+      const ok = settings.presets.filter(p => p.available);
+      if (!settings.presets.some(p => p.id === newType && p.available)) newType = (ok[0] || {}).id || '';
+    }
+    return settings;
+  }
+  function renderNewMenu() {
+    if (!settings) { topicsBox.innerHTML = '<span class="oh-note">Could not read your settings.</span>'; presetsBox.innerHTML = ''; return; }
+    topicsBox.innerHTML = settings.topics.map(t => `<button type="button" role="radio" data-topic="${esc(t.id)}" aria-checked="${t.id === newTopic}"${t.exists ? '' : ' class="gone" title="This folder is missing. Use Edit to fix it."'}>${esc(t.label)}</button>`).join('');
+    presetsBox.innerHTML = settings.presets.map(p => `<button type="button" role="menuitem" data-type="${esc(p.id)}"${p.available ? '' : ' disabled'}><b>${esc(p.label)}</b><small>${p.available ? esc(p.command.length > 22 ? p.command.slice(0, 21) + '…' : p.command) : 'Not installed'}</small></button>`).join('');
+    newBtn.title = newType ? `Open a new terminal with ${(settings.presets.find(p => p.id === newType) || {}).label}` : 'Choose an agent first';
+    newBtn.disabled = !newType;
+  }
+  function setNewMenu(open) {
+    if (open) setEditor(false);
+    newMenu.hidden = !open; newMore.setAttribute('aria-expanded', String(open));
+    if (open) loadSettings().then(() => { renderNewMenu(); const f = newMenu.querySelector('button[data-type]:not([disabled])'); if (f && !newMenu.hidden) f.focus({ preventScroll: true }); });
+  }
+  async function newAgent(type, topic) {
+    const st = hud.querySelector('.oh-status');
+    if (newBtn.disabled) return;
+    await loadSettings();
+    type = type || newType; topic = topic || newTopic;
+    if (!settings || !type) { st.textContent = 'No agent is installed yet. Open the menu and choose Edit.'; return; }
+    setNewMenu(false);
+    const label = ((settings.presets.find(p => p.id === type) || {}).label || 'Agent') + ' in ' + ((settings.topics.find(t => t.id === topic) || {}).label || 'Home');
+    newBtn.disabled = newMore.disabled = true; st.textContent = `Opening a new terminal: ${label}…`;
+    try {
+      const res = demo ? { ok: true, json: async () => ({}) } : await fetchT('/api/office/new', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type, topic }) }, 20000);
+      const body = await res.json().catch(() => ({}));
+      st.textContent = res.ok ? `${label} starting · it takes a seat in a few seconds` : body.error || 'The terminal did not open.';
+    } catch (e) { st.textContent = 'The terminal did not open: the GoldWare server did not answer.'; }
+    setTimeout(() => { newMore.disabled = false; renderNewMenu(); renderHud(); }, 5000);
+  }
+  newBtn.addEventListener('click', () => newAgent());
+  newMore.addEventListener('click', () => { if (!editor.hidden) { draft = null; setEditor(false); } else setNewMenu(newMenu.hidden); });
+  topicsBox.addEventListener('click', e => {
+    const b = e.target.closest('[data-topic]'); if (!b) return;
+    newTopic = b.dataset.topic;
+    topicsBox.querySelectorAll('[data-topic]').forEach(x => x.setAttribute('aria-checked', String(x === b)));
+  });
+  newMenu.addEventListener('click', e => {
+    if (e.target.closest('[data-edit]')) { openEditor(); return; }
+    const b = e.target.closest('[data-type]');
+    if (b && !b.disabled) { newType = b.dataset.type; newAgent(b.dataset.type, newTopic); }
+  });
+  document.addEventListener('pointerdown', e => { if (!e.target.closest('.oh-new-wrap')) { if (!newMenu.hidden) setNewMenu(false); if (!editor.hidden) setEditor(false); } });
+  newMenu.addEventListener('keydown', e => {
+    const items = [...newMenu.querySelectorAll('button[data-type]:not([disabled]), [data-edit]')], i = items.indexOf(document.activeElement);
+    if (e.key === 'Escape') { e.stopPropagation(); setNewMenu(false); newMore.focus(); }
+    else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); items[(i + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length].focus(); }
+  });
+
+  // The editor: your topics (name and folder) and agents (name and command), in a small panel.
+  let draft = null;
+  function setEditor(open) {
+    editor.hidden = !open;
+    if (open) { newMenu.hidden = true; newMore.setAttribute('aria-expanded', 'true'); }
+    else if (newMenu.hidden) newMore.setAttribute('aria-expanded', 'false');
+  }
+  async function openEditor() {
+    await loadSettings(true);
+    if (!settings) { renderNewMenu(); return; }
+    draft = { topics: settings.topics.map(t => ({ label: t.label, dir: t.dir })), presets: settings.presets.map(p => ({ label: p.label, command: p.command })), msg: '', bad: false, busy: false };
+    setEditor(true);
+    renderEditor();
+    const f = editor.querySelector('input'); if (f) f.focus({ preventScroll: true });
+  }
+  function renderEditor() {
+    if (!draft) return;
+    const lim = (settings && settings.limits) || { items: 20, label: 40, command: 199 };
+    const rows = (kind, second, place) => draft[kind].map((r, i) => `<div class="oe-row" data-kind="${kind}" data-i="${i}">
+        <input data-f="label" maxlength="${lim.label}" value="${esc(r.label)}" placeholder="Name" aria-label="Name">
+        <input data-f="${second}" maxlength="${second === 'dir' ? 500 : lim.command}" value="${esc(r[second])}" placeholder="${place}" aria-label="${second === 'dir' ? 'Folder' : 'Command'}" spellcheck="false">
+        <span class="oe-tools"><button type="button" data-act="up" aria-label="Move up"${i ? '' : ' disabled'}>↑</button><button type="button" data-act="down" aria-label="Move down"${i < draft[kind].length - 1 ? '' : ' disabled'}>↓</button><button type="button" data-act="del" aria-label="Remove"${draft[kind].length > 1 ? '' : ' disabled'}>×</button></span></div>`).join('');
+    editor.innerHTML = `<div class="oe-head"><b>Edit New agent</b><small>Saved in goldware.json on this Mac</small></div>
+      <div class="oe-sec"><h5>Topics</h5><p>A topic is a folder the new agent starts in.</p>${rows('topics', 'dir', '~/projects/my-app')}
+        <button type="button" class="oe-add" data-act="add" data-kind="topics"${draft.topics.length >= lim.items ? ' disabled' : ''}>+ Add topic</button></div>
+      <div class="oe-sec"><h5>Agents</h5><p>The command that starts each agent, run in your terminal.</p>${rows('presets', 'command', 'hermes')}
+        <button type="button" class="oe-add" data-act="add" data-kind="presets"${draft.presets.length >= lim.items ? ' disabled' : ''}>+ Add agent</button></div>
+      <p class="oe-msg${draft.bad ? ' bad' : ''}" role="status">${esc(draft.msg)}</p>
+      <div class="oe-foot"><button type="button" class="oe-btn" data-act="cancel">Cancel</button><button type="button" class="oe-btn gold" data-act="save"${draft.busy ? ' disabled' : ''}>Save</button></div>`;
+  }
+  async function saveEditor() {
+    const clean = a => a.map(r => ({ label: r.label.trim(), dir: (r.dir || '').trim(), command: (r.command || '').trim() }));
+    const body = { topics: clean(draft.topics).map(r => ({ label: r.label, dir: r.dir })), presets: clean(draft.presets).map(r => ({ label: r.label, command: r.command })) };
+    draft.busy = true; draft.msg = 'Saving…'; draft.bad = false; renderEditor();
+    try {
+      if (demo) {
+        settings = { ...settings, topics: body.topics.map((t, i) => ({ id: 't' + i, label: t.label, dir: t.dir, exists: true })), presets: body.presets.map((p, i) => ({ id: 'p' + i, label: p.label, command: p.command, available: true })) };
+      } else {
+        const res = await fetchT('/api/office/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, 8000);
+        const out = await res.json().catch(() => ({}));
+        if (!res.ok) { draft.busy = false; draft.msg = out.error || 'It could not be saved.'; draft.bad = true; renderEditor(); return; }
+        settings = out;
+      }
+    } catch (e) { draft.busy = false; draft.msg = 'The GoldWare server did not answer.'; draft.bad = true; renderEditor(); return; }
+    draft = null; setEditor(false);
+    await loadSettings(); renderNewMenu();
+    hud.querySelector('.oh-status').textContent = 'Saved. Your topics and agents are updated.';
+    setTimeout(renderHud, 4000);
+    newMore.focus({ preventScroll: true });
+  }
+  editor.addEventListener('input', e => {
+    const row = e.target.closest('.oe-row'); if (!row || !draft) return;
+    draft[row.dataset.kind][Number(row.dataset.i)][e.target.dataset.f] = e.target.value;
+  });
+  editor.addEventListener('click', e => {
+    const b = e.target.closest('[data-act]'); if (!b || b.disabled || !draft) return;
+    const row = b.closest('.oe-row'), act = b.dataset.act;
+    if (act === 'cancel') { draft = null; setEditor(false); newMore.focus({ preventScroll: true }); return; }
+    if (act === 'save') { saveEditor(); return; }
+    if (act === 'add') { draft[b.dataset.kind].push(b.dataset.kind === 'topics' ? { label: '', dir: '' } : { label: '', command: '' }); renderEditor(); const rs = editor.querySelectorAll(`.oe-row[data-kind="${b.dataset.kind}"]`); rs[rs.length - 1].querySelector('input').focus(); return; }
+    const list = draft[row.dataset.kind], i = Number(row.dataset.i);
+    if (act === 'del') list.splice(i, 1);
+    else { const j = act === 'up' ? i - 1 : i + 1; [list[i], list[j]] = [list[j], list[i]]; }
+    draft.msg = ''; renderEditor();
+  });
+  editor.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { e.stopPropagation(); draft = null; setEditor(false); newMore.focus({ preventScroll: true }); }
+    else if (e.key === 'Enter' && e.target.matches('input') && !e.isComposing) { e.preventDefault(); saveEditor(); }
+  });
+  loadSettings().then(renderNewMenu);
+  // For checking the look: ?office-demo&office-menu or &office-editor opens them at once.
+  if (demo && (params.has('office-menu') || params.has('office-editor'))) setTimeout(() => (params.has('office-editor') ? openEditor() : setNewMenu(true)), 600);
   hud.querySelector('.oh-full').addEventListener('click', () => setImmersive(!document.body.classList.contains('office-immersive')));
   document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement && document.body.classList.contains('office-immersive')) setImmersive(false); else if (active()) { fit(); draw(); } });
 
@@ -1833,7 +2180,11 @@
         if (!res.ok) throw new Error(res.status);
         next = await res.json();
       }
-      (next.agents || []).forEach(a => { a.color = a.kind === 'claude' ? '#c96442' : a.kind === 'codex' ? '#d9d6cf' : assign(a.id); });
+      // Only a real question walks up to the boss; a finished agent just sits idle at its desk.
+      // A question keeps its place in line until it is answered, however long that takes.
+      (next.agents || []).forEach(a => { a.activity = lineActivity(a); });
+      next.agents = seatOrder(next.agents || []);
+      (next.agents || []).forEach(a => { a.color = monOf(a) ? cast.color(a.name) : a.kind === 'claude' ? '#c96442' : a.kind === 'codex' ? '#d9d6cf' : assign(a.id); });
       tick(seen, next);
       data = next; error = false;
       applyUsage(); updateTrips();
@@ -1882,6 +2233,7 @@
     if (!hit) return;
     if (hit.dataset.helper) { openHelper(hit.dataset.helper); return; }
     if (hit.dataset.board) { setPanel(hit.dataset.board); return; }
+    if (hit.dataset.table != null) { openTable(hit.dataset.table); return; }
     selected = selected === hit.dataset.id ? null : hit.dataset.id;
     lastPlateKey = '';
     renderCard(); renderRoster(); draw();

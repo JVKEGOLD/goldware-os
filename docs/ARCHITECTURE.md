@@ -53,6 +53,11 @@ embed (options.url), html (options.html, rendered in a sandboxed iframe srcdoc).
                           gateway: {running}, rack: {ollama, units}}
   GET /api/office/screen?id=<agent id>   {id, tty, activity, screen} the last 60 lines of its terminal
   GET /api/office/helper?id=<helper id>  {id, owner, owner_title, helper, steps} a helper that is still out
+  GET /api/office/chat?id=<agent id>     {id, turns: [{kind: you|did|said, text}] | null} the latest turns in plain
+                          words (Hermes from state.db, Claude Code from its transcript; null for Codex)
+  GET /api/office/settings  {topics: [{id, label, dir, exists}], presets: [{id, label, command, available}], limits}
+                          what the New agent menu and its editor show (office.topics and office.presets in goldware.json,
+                          else the defaults in goldware.default.json; available = the program is on PATH)
   GET /api/office/board   {project, tasks, ideas, suggestions, runs, progress} (data/office-board.json)
   GET /api/office/usage   {plans: [{id, name, windows, out, back_at, top, error}], hours, checked_at}
   Writes, JSON POST only, and only from the dashboard itself (Origin or Referer must be this server's own
@@ -60,6 +65,16 @@ embed (options.url), html (options.html, rendered in a sandboxed iframe srcdoc).
   POST /api/office/send   {id, text} types one line into that agent's terminal, then Return
   POST /api/office/focus  {id}       brings that agent's terminal tab to the front
   POST /api/office/board  {action: project|add|assign|done|reopen|remove|lab|seen, ...}
+  POST /api/office/new    {type, topic} ids only. The server finds the folder and command in goldware.json and opens
+                          one terminal window (iTerm, else Terminal) running `cd <shlex-quoted folder> && <command>`.
+                          Unknown id 422, missing folder 409, program not installed 422, one window per 5 s (429)
+  POST /api/office/settings  {topics?: [{label, dir}], presets?: [{label, command}]} validates (names 1 to 40 characters,
+                          at most 20 of each, folders absolute or ~/ and existing, commands one line under 200
+                          characters with no control characters), makes slug ids, and writes only office.topics and
+                          office.presets in goldware.json (temp file + rename; other keys kept; created from the
+                          defaults when absent)
+- GET /custom/office.css  the user's own Office CSS from custom/office.css (git-ignored), 404 when absent. Only that
+  one file, never a path under custom/, and a symlink out of custom/ is refused. Loaded after /dashboard/office.css.
   Safety: the tty always comes from a fresh process scan for that request, never from the page. It must look
   like ttysNNN and belong to a detected agent, else 404. The text goes to osascript as an argument, never as
   script source; control characters are stripped, 2000 characters max, one line per 2 seconds per agent.
@@ -67,6 +82,8 @@ embed (options.url), html (options.html, rendered in a sandboxed iframe srcdoc).
   osascript command and runs nothing (tests). GOLDWARE_OFFICE_EMPTY=1 forces an empty office, with no
   agent scan and no network (tests, screenshots). GOLDWARE_HERMES_HOME, CLAUDE_CONFIG_DIR, CODEX_HOME,
   GOLDWARE_OLLAMA_URL (or "off"), GOLDWARE_OFFICE_PS_FILE (a saved ps listing) override where it looks.
+  The new-agent command runs in the user's own terminal and is written by the user; only a same-origin request can
+  change it. GOLDWARE_OFFICE_TERMINAL=iTerm|Terminal forces which terminal opens (tests).
 - Data lives in data/ at the repo root (GOLDWARE_DATA_ROOT overrides, for tests).
 
 ## App rules
@@ -74,10 +91,11 @@ embed (options.url), html (options.html, rendered in a sandboxed iframe srcdoc).
   (GOLDWARE_DATA overrides). Env vars GOLDWARE_*. Port from config (default 4188).
 - The app starts the server with `/usr/bin/env python3 server/goldware_server.py` from the repo root
   when /api/work does not answer, and stops it on quit if it started it.
-- Dashboard window: four tabs, data-tab="dashboard" | "voice" | "vision" | "office", buttons with class
-  "topbar-tab" (DashboardWindow.go(tab:) clicks them).
-- The Office tab is a section of dashboard/index.html plus dashboard/office.js and office.css (served from
-  /dashboard/). You are the boss character at the front desk; there is no mascot.
+- Dashboard window: four tabs in this order, data-tab="office" | "dashboard" | "voice" | "vision", buttons with class
+  "topbar-tab" (DashboardWindow.go(tab:) clicks them). Cmd+1 to 4 follow the same order. The page opens on the
+  Dashboard unless the URL has #office.
+- The Office tab is a section of dashboard/index.html plus dashboard/office.js, office-cast.js (the characters, drawn
+  from small pixel grids, no image files) and office.css (served from /dashboard/). You are the boss character at the front desk; there is no mascot.
 - Nothing personal: no personal names, clients, businesses, emails, or paths.
   `scripts/check_private.sh` must pass.
 - House style: no em dashes in UI strings, docs, or comments. Calm dark UI: house palette
