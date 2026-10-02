@@ -537,8 +537,9 @@ class TestHardening(ServerCase):
         self.assertIn('id="tab-office"', html)
         self.assertIn('"office", "dashboard", "voice", "vision"].indexOf(t)', html)   # the router knows it
         self.assertIn('(location.hash || "#dashboard")', html)  # opening the page still lands on the Dashboard
-        for sel in ('id="office-canvas"', 'id="office-roster"', 'id="office-dock"', 'id="office-stage"'):
+        for sel in ('id="office-canvas"', 'id="office-roster"', 'id="office-stage"'):
             self.assertIn(sel, html)
+        self.assertNotIn('id="office-dock"', html)   # no task board docked under the room
         self.assertIn("/dashboard/office.js", html)
         self.assertIn("/dashboard/office.css", html)
         # your own CSS comes after the built-in one, so it wins and survives updates

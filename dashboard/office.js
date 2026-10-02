@@ -1311,7 +1311,7 @@
   // the masthead when that leaves a usable room, else a window's height under the top bar.
   // The shell takes the rest of the window (no page scroll); the room gets whatever the shell leaves
   // beside the roster, minus the console when one is open, and the layout picks the biggest fit.
-  const shell = document.getElementById('office-shell'), roomEl = document.getElementById('office-room'), dockEl = document.getElementById('office-dock');
+  const shell = document.getElementById('office-shell'), roomEl = document.getElementById('office-room');
   function fit() {
     const sizes = tableSizes((data && data.agents) || []), narrow = innerWidth <= 900;
     shell.style.height = narrow ? '' : Math.max(420, innerHeight - (shell.getBoundingClientRect().top + window.scrollY) - 12) + 'px';
@@ -1324,11 +1324,7 @@
     root.setProperty('--office-top', (narrow ? topbarBottom() + 12 : Math.max(topbarBottom() + 8, r.top)) + 'px');
     root.setProperty('--office-bottom', (narrow ? 12 : Math.max(12, innerHeight - r.bottom)) + 'px');
     const aw = Math.max(280, r.width - (cw ? cw + 16 : 0));
-    dockEl.style.width = Math.round(aw) + 'px';
-    // A short window with the terminal open gives the room the height; the board is a tab away.
-    dockEl.hidden = !!(cw && innerHeight < 820);
-    const dockH = dockEl.childElementCount && !dockEl.hidden ? dockEl.offsetHeight + 10 : 0;
-    const ah = Math.max(220, narrow ? innerHeight * 0.62 : r.height - dockH);
+    const ah = Math.max(220, narrow ? innerHeight * 0.62 : r.height);
     geo = chooseLayout(sizes, aw, ah);
     // Fill the whole space: grow the canvas to its shape and centre the desks in it. Most of the extra
     // height goes to the floor in front, a little to the wall, so the room does not look top-heavy.
@@ -2072,33 +2068,6 @@
       if (c) boardPost({ action: 'add', title: c.title, notes: panel === 'ideas' ? c.why : c.advice + (c.source_url ? ' Source: ' + c.source_url : ''), from: c.id, group: tableSel || homeDir() }).then(() => setPanel('tasks'));
     }
   });
-  // ── The docked task board: agents waiting on you first, then open tasks, then what each is doing. ──
-  let lastDockKey = '';
-  function renderDock() {
-    const agents = ((data && data.agents) || []), b = board || { tasks: [] };
-    const key = JSON.stringify([b.tasks, agents.map(a => [a.id, a.name, a.title, a.activity, a.bed, a.color, a.last_at, a.closing && a.closing.text, a.todos]), innerWidth]);
-    if (key === lastDockKey || dockEl.contains(document.activeElement) && document.activeElement.tagName === 'SELECT') return;
-    lastDockKey = key;
-    const now = Date.now() / 1000, cards = [];
-    const foot = (a, extra) => `<div class="od-foot">${avatarHtml(a, 'sm')}<span>${nameTag(a)} · ${esc(a.title)}</span>${extra || ''}</div>`;
-    agents.filter(a => !a.bed && a.activity === 'your_turn').forEach(a => cards.push(`<button type="button" class="od-card you" data-agent="${esc(a.id)}"><div class="od-top"><b>${esc(a.closing ? a.closing.text : 'Finished, and waiting on you')}</b><span class="od-badge you">! Needs you</span></div>${foot(a, a.last_at ? `<time>${ago(now - a.last_at)} ago</time>` : '')}</button>`));
-    (b.tasks || []).filter(t => t.status !== 'done').forEach(t => cards.push(`<div class="od-card" data-id="${esc(t.id)}"><div class="od-top"><b>${esc(t.title)}</b><span class="od-badge ${t.status}">${t.status === 'assigned' ? 'Assigned' : 'To do'}</span></div>${t.notes ? `<p>${esc(t.notes)}</p>` : ''}
-      ${t.status === 'assigned' ? `<div class="od-foot"><span>With ${esc(t.agent_title || 'an agent')}</span>${t.assigned_at ? `<time>${ago(now - t.assigned_at)} ago</time>` : ''}</div>` : `<div class="od-assign"><select aria-label="Assign to">${agentOptions()}</select><button type="button" class="od-btn gold" data-act="assign">Assign</button></div>`}</div>`));
-    agents.filter(a => !a.bed && a.activity !== 'your_turn').forEach(a => { const d = (a.todos || []).find(x => x.status === 'doing'); if (d) cards.push(`<button type="button" class="od-card" data-agent="${esc(a.id)}"><div class="od-top"><b>${esc(d.text)}</b><span class="od-badge doing">Working</span></div>${foot(a)}</button>`); });
-    const open = (b.tasks || []).filter(t => t.status !== 'done').length, waiting = agents.filter(a => !a.bed && a.activity === 'your_turn').length;
-    const max = Math.max(1, Math.min(3, Math.floor((parseFloat(dockEl.style.width) || 900) / 250)));
-    dockEl.innerHTML = `<header class="od-head"><h3><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 8 3 3 5-6"/></svg>Whiteboards</h3><small>${[waiting ? `${waiting} need${waiting === 1 ? 's' : ''} you` : null, `${open} open`].filter(Boolean).join(' · ')}</small>
-      <button type="button" class="od-btn gold" data-go="tasks">+ <span>Add task</span></button><button type="button" class="od-btn" data-go="ideas">Ideas → <span>Tasks</span></button><button type="button" class="od-btn" data-go="lab"><span>Send</span> researcher…</button></header>
-      <div class="od-cards">${cards.slice(0, max).join('') || '<p class="od-empty">Nothing waiting on you. Add a task to hand work to whoever is free.</p>'}</div>`;
-  }
-  dockEl.addEventListener('click', e => {
-    const go = e.target.closest('[data-go]');
-    if (go) { setPanel(go.dataset.go); if (go.dataset.go === 'tasks') { const i = boardEl.querySelector('input[name="title"]'); if (i) i.focus({ preventScroll: true }); } return; }
-    const as = e.target.closest('[data-act="assign"]');
-    if (as) { const c = as.closest('.od-card'); as.disabled = true; boardPost({ action: 'assign', id: c.dataset.id, agent: c.querySelector('select').value }).then(() => { lastDockKey = ''; renderDock(); }); return; }
-    const ag = e.target.closest('[data-agent]');
-    if (ag) { selected = ag.dataset.agent; lastPlateKey = ''; renderCard(); renderRoster(); draw(); }
-  });
   // New cards on the idea board or in the lab light up their tab.
   function markNew() {
     const tabs = rosterEl.querySelectorAll('.or-tabs button');
@@ -2124,7 +2093,6 @@
       if (demo) usage = demoUsage();
       else if (Date.now() - lastUsageAt > 60000) { lastUsageAt = Date.now(); const r = await fetchT('/api/office/usage', { cache: 'no-store' }, 15000); if (r.ok) usage = await r.json(); }
       applyUsage(); markNew(); renderBoard(); renderHud();
-      const hadDock = dockEl.childElementCount; renderDock(); if (!hadDock && dockEl.childElementCount) { fit(); draw(); }
     } catch (e) { /* the floor still works */ }
   }
 
