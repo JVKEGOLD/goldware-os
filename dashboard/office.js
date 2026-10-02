@@ -1425,13 +1425,13 @@
         </div>
         <form class="oc-send" autocomplete="off">
           <span class="oc-prompt">❯</span>
-          <input class="oc-input" type="text" maxlength="2000" spellcheck="true" placeholder="Message this agent">
+          <textarea class="oc-input" rows="1" maxlength="2000" spellcheck="true" placeholder="Message this agent" aria-label="Message this agent"></textarea>
           <button class="oc-btn oc-go" type="submit">Send</button>
         </form>
         <p class="oc-hint"></p>
         <div class="oc-usage" aria-label="Plan usage"></div>
         <p class="oc-ended" role="status"></p>`;
-      ocView = 'chat'; lastChat = '';
+      ocView = 'chat'; lastChat = ''; sentLine = null;
       paintDismiss();
       const screenEl = consoleEl.querySelector('.oc-screen');
       screenEl.addEventListener('scroll', () => {
@@ -1550,6 +1550,10 @@
   //    transcripts (tool calls counted into one line); Codex has none, so its screen is tidied:
   //    box rules, spinners and status bars dropped, wrapped lines joined. No model is called. ──
   let lastChat = '', chatBusy = false;
+  // What you just sent, shown at once: a busy Hermes agent holds a /queue line until its turn ends,
+  // so the transcript does not have it yet. It goes when the transcript shows the same words.
+  let sentLine = null;
+  const flat = t => String(t || '').replace(/\s+/g, ' ').trim();
   function tidyScreen(text) {
     const RULE = /^[\s─━│┃┌┐└┘├┤┬┴┼╭╮╰╯═║╔╗╚╝╠╣╦╩╬▔▁▏▕·•⋅…\-_=|+]*$/, SPIN = /^[\s⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏✻✳✶✢·*◐◓◑◒⏺⎿]+/;
     const out = [];
@@ -1577,10 +1581,13 @@
   function renderChat(turns, screenText) {
     const box = consoleEl.querySelector('.oc-chat');
     if (!box) return;
-    const html = turns
+    let html = turns
       ? (turns.length ? turns.map(t => t.kind === 'did' ? `<p class="oc-did">${esc(t.text)}</p>`
           : `<div class="oc-msg ${t.kind}"><small>${t.kind === 'you' ? 'You' : 'Agent'}</small>${prose(t.text)}</div>`).join('') : '<p class="oc-empty">Nothing said yet.</p>')
       : `<p class="oc-did">Codex keeps no readable transcript, so this is its screen, tidied.</p>${tidyScreen(screenText).map(p => `<div class="oc-msg said">${prose(p)}</div>`).join('')}`;
+    if (sentLine && turns && turns.some(t => t.kind === 'you' && flat(t.text) === sentLine.text)) sentLine = null;
+    const echo = sentLine && turns ? `<div class="oc-msg you pending"><small>You${sentLine.queued ? ' · queued, runs when this turn ends' : ' · sending'}</small>${prose(sentLine.text)}</div>` : '';
+    html = html.replace('<p class="oc-empty">Nothing said yet.</p>', echo ? '' : '$&') + echo;
     if (html === lastChat) return;
     const pinnedChat = box.scrollHeight - box.scrollTop - box.clientHeight < 40 || !lastChat;
     lastChat = html; box.innerHTML = html;
@@ -1612,19 +1619,29 @@
       if (!r.ok) flash((await r.json().catch(() => ({}))).error || 'Could not open it.', true);
     }
   });
+  // The message box wraps and grows with what you type (up to a few lines, then it scrolls).
+  // Return sends; Shift+Return starts a new line (sent as a space: a terminal takes one line).
+  function fitInput(el) { el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 160) + 'px'; }
+  consoleEl.addEventListener('input', e => { if (e.target.classList.contains('oc-input')) fitInput(e.target); });
+  consoleEl.addEventListener('keydown', e => {
+    if (!e.target.classList.contains('oc-input') || e.key !== 'Enter' || e.shiftKey || e.isComposing) return;
+    e.preventDefault(); e.target.form.requestSubmit();
+  });
   consoleEl.addEventListener('submit', async e => {
     e.preventDefault();
     const input = consoleEl.querySelector('.oc-input'), go = consoleEl.querySelector('.oc-go');
     const text = input.value.trim();
     if (!text || go.disabled) return;
+    const sentFor = consoleFor;
     go.disabled = true;
-    if (demo) { input.value = ''; flash('Demo: nothing was sent.'); setTimeout(() => { go.disabled = false; }, 500); return; }
+    if (demo) { input.value = ''; fitInput(input); flash('Demo: nothing was sent.'); setTimeout(() => { go.disabled = false; }, 500); return; }
     try {
       const res = await fetchT('/api/office/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: consoleFor, text }) });
       const body = await res.json().catch(() => ({}));
       if (res.status === 404) { endConsole(body.error); return; }
       if (!res.ok) throw new Error(body.error || 'Not sent.');
-      input.value = '';
+      input.value = ''; fitInput(input);
+      if (consoleFor === sentFor && !(body.sent && body.sent.startsWith('/') && !body.sent.startsWith('/queue '))) { sentLine = { text: flat(body.sent && body.sent.startsWith('/queue ') ? body.sent.slice(7) : text), queued: !!body.queued }; lastChat = ''; readChat(); }
       flash(body.queued ? 'Queued: it runs when this turn ends.' : 'Sent.');
       pinned = true;
       setTimeout(readScreen, 700); setTimeout(poll, 1200);
