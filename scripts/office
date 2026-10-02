@@ -1,0 +1,193 @@
+#!/usr/bin/env python3
+"""goldware-office: drive the GoldWare Office from a terminal. The boss uses it to run the other
+agents; any agent uses `goldware-office report "..."` to hand its work to the boss.
+
+It only calls the local GoldWare server's Office endpoints (127.0.0.1), the same ones the dashboard
+uses, so it can do nothing the Office page cannot.
+
+  goldware-office agents                         every agent: id, name, kind, status, title, folder
+  goldware-office chat ID                        its recent conversation
+  goldware-office screen ID                      the last lines of its terminal
+  goldware-office send ID "text"                 type one line to it
+  goldware-office presets                        agent types and topics for `new`
+  goldware-office new [--type T] [--topic P] ["task"]   open a new agent, then hand it the task
+  goldware-office dismiss ID                     close an idle agent's terminal
+  goldware-office report ["note"]                report this agent to the boss (run inside an agent)
+  goldware-office boss "text"                    ask the boss something (starts it if needed)
+"""
+import json
+import os
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+
+
+def port():
+    if os.environ.get("GOLDWARE_PORT"):
+        return int(os.environ["GOLDWARE_PORT"])
+    for name in ("goldware.json", "goldware.default.json"):
+        try:
+            with open(os.path.join(ROOT, name), encoding="utf-8") as f:
+                p = json.load(f).get("port")
+            if isinstance(p, int) and not isinstance(p, bool):
+                return p
+        except Exception:
+            continue
+    return 4188
+
+
+BASE = "http://127.0.0.1:%d" % port()
+
+
+def call(path, body=None, timeout=20):
+    data = None if body is None else json.dumps(body).encode()
+    req = urllib.request.Request(BASE + path, data=data, method="GET" if body is None else "POST")
+    if body is not None:
+        # The server only takes Office actions from its own origin.
+        req.add_header("Content-Type", "application/json")
+        req.add_header("Origin", BASE)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as e:
+        try:
+            msg = json.load(e).get("error")
+        except Exception:
+            msg = None
+        sys.exit("goldware-office: %s" % (msg or "the server said %d" % e.code))
+    except urllib.error.URLError:
+        sys.exit("goldware-office: the GoldWare server is not running at %s. Open the GoldWare OS app." % BASE)
+
+
+def agents():
+    return call("/api/office/agents").get("agents", [])
+
+
+STATUS = {"your_turn": "waiting on the user", "idle": "idle", "asleep": "idle (no task)"}
+
+
+def show_agents():
+    rows = agents()
+    if not rows:
+        print("Nobody is in the office.")
+    for a in rows:
+        status = "working" if a.get("working") else STATUS.get(a.get("activity"), a.get("activity") or "?")
+        tag = " (the boss)" if a.get("boss") else ""
+        print("%s  %s%s  [%s, %s]  %s  in %s" % (a["id"], a.get("name") or "?", tag, a.get("kind"), status,
+                                                  a.get("title") or "", a.get("cwd") or "?"))
+        if a.get("closing") and not a.get("working"):
+            print("    last word: %s" % a["closing"]["text"])
+
+
+def my_pids():
+    """This process and its parents: the agent that ran us is one of them."""
+    out, pid = [], os.getpid()
+    for _ in range(30):
+        out.append(pid)
+        try:
+            pid = int(subprocess.run(["ps", "-o", "ppid=", "-p", str(pid)], capture_output=True, text=True, timeout=3).stdout.strip() or 0)
+        except Exception:
+            break
+        if pid <= 1:
+            break
+    return out
+
+
+def me():
+    pids = set(my_pids())
+    return next((a for a in agents() if a.get("pid") in pids and a.get("tty")), None)
+
+
+def new(args):
+    kind = topic = None
+    words = []
+    it = iter(args)
+    for w in it:
+        if w == "--type":
+            kind = next(it, None)
+        elif w == "--topic":
+            topic = next(it, None)
+        else:
+            words.append(w)
+    task = " ".join(words).strip()
+    before = {a["id"] for a in agents()}
+    body = {}
+    if kind:
+        body["type"] = kind
+    if topic:
+        body["topic"] = topic
+    out = call("/api/office/new", body)
+    print("Opened %s in %s." % (out.get("label"), out.get("topic_label")))
+    if not task:
+        return
+    # Hand it the task once it is at a desk (its first chat can take a while to start).
+    for _ in range(60):
+        time.sleep(2)
+        fresh = [a for a in agents() if a["id"] not in before and a.get("tty") and not a.get("boss")]
+        if fresh:
+            a = fresh[0]
+            time.sleep(2)
+            call("/api/office/send", {"id": a["id"], "text": task})
+            print("Gave the task to %s (%s)." % (a.get("name") or "it", a["id"]))
+            return
+    sys.exit("goldware-office: the new agent did not sit down within 2 minutes; send it the task with `send` when it does.")
+
+
+def main(argv):
+    if not argv or argv[0] in ("-h", "--help", "help"):
+        print(__doc__.strip())
+        return
+    cmd, rest = argv[0], argv[1:]
+    need = lambda n, usage: rest[:n] if len(rest) >= n else sys.exit("usage: goldware-office " + usage)
+    if cmd == "agents":
+        show_agents()
+    elif cmd == "chat":
+        (aid,) = need(1, "chat ID")
+        turns = call("/api/office/chat?id=" + urllib.parse.quote(aid)).get("turns")
+        if turns is None:
+            print("This agent keeps no readable transcript; use `screen`.")
+        for t in turns or []:
+            print({"you": "USER", "said": "AGENT", "did": "  (did)"}.get(t["kind"], t["kind"]) + ": " + t["text"] + "\n")
+    elif cmd == "screen":
+        (aid,) = need(1, "screen ID")
+        print(call("/api/office/screen?id=" + urllib.parse.quote(aid)).get("screen", ""))
+    elif cmd == "send":
+        aid = need(2, 'send ID "text"')[0]
+        out = call("/api/office/send", {"id": aid, "text": " ".join(rest[1:])})
+        print("Queued: it runs when its turn ends." if out.get("queued") else "Sent.")
+    elif cmd == "presets":
+        s = call("/api/office/settings")
+        print("Types (--type):")
+        for p in s.get("presets", []):
+            print("  %s  %s  (%s)%s" % (p["id"], p["label"], p["command"], "" if p.get("available") else "  NOT INSTALLED"))
+        print("Topics (--topic):")
+        for t in s.get("topics", []):
+            print("  %s  %s  %s%s" % (t["id"], t["label"], t["dir"], "" if t.get("exists") else "  MISSING"))
+    elif cmd == "new":
+        new(rest)
+    elif cmd == "dismiss":
+        (aid,) = need(1, "dismiss ID")
+        call("/api/office/dismiss", {"id": aid, "step": "check"})
+        call("/api/office/dismiss", {"id": aid, "step": "close"})
+        print("Dismissed.")
+    elif cmd == "report":
+        a = me()
+        if not a:
+            sys.exit("goldware-office: run `report` from inside an agent's terminal (no Office agent is running this command).")
+        out = call("/api/office/report", {"id": a["id"], "text": " ".join(rest)})
+        print("Reported to the boss%s." % ("" if out.get("sent") else ", who is starting up at the front desk"))
+    elif cmd == "boss":
+        need(1, 'boss "text"')
+        out = call("/api/office/boss", {"text": " ".join(rest)})
+        print("Told the boss." if out.get("sent") else "The boss is starting up at the front desk.")
+    else:
+        sys.exit("goldware-office: unknown command %r (try --help)" % cmd)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

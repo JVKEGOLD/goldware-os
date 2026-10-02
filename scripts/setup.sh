@@ -2,7 +2,8 @@
 # GoldWare OS installer. Idempotent: safe to rerun.
 #   scripts/setup.sh [--dry-run] [--yes] [--open] [--agent claude|codex] [--only STEP]
 # Steps (11): platform clt brew packages (whisper-cpp, ollama, iTerm2, JetBrains Mono Nerd Font)
-#   iterm-profile (GoldWare profile for Let's work) memory config agent (Hermes default Claude or Codex; installs and signs in Hermes) pull whisper build install
+#   iterm-profile (GoldWare profile for Let's work) memory config agent (Hermes default Claude or Codex; installs and signs in Hermes)
+#   office (the goldware-office command and the Hermes skill for reporting to the boss) pull whisper build install
 set -uo pipefail
 
 ROOT="${0:A:h:h}"
@@ -348,6 +349,24 @@ step_agent() {
   fi
 }
 
+# The Office boss: `goldware-office` on PATH (a link to scripts/office, so updates reach it), and a
+# small Hermes skill so any agent knows what "report to the boss" means. Both are ours alone.
+step_office() {
+  step "7c/11 goldware-office command and the report-to-the-boss skill"
+  local bin="$HOME/.local/bin/goldware-office" src="$ROOT/scripts/office"
+  local skill="$HOME/.hermes/skills/goldware/goldware-office/SKILL.md" skill_src="$ROOT/app/Resources/hermes-skill/goldware-office.md"
+  if [[ -L "$bin" && "$(readlink "$bin")" == "$src" ]]; then skip "goldware-office already links to $src"
+  elif [[ -e "$bin" && ! -L "$bin" ]]; then skip "$bin exists and is not ours; left it alone"
+  elif (( DRY )); then would "link $bin to $src"
+  else mkdir -p "${bin:h}" && ln -sf "$src" "$bin" && chmod +x "$src" && ok "goldware-office on PATH ($bin)" || fail "Could not link $bin." "Run: ln -sf \"$src\" \"$bin\""
+  fi
+  [[ -d "$HOME/.hermes" ]] || { skip "Hermes is not installed, so no skill to add (the Report to boss button still works)"; return; }
+  if [[ -f "$skill" ]] && cmp -s "$skill_src" "$skill"; then skip "Hermes skill already installed"
+  elif (( DRY )); then would "copy the goldware-office skill to $skill"
+  else mkdir -p "${skill:h}" && cp "$skill_src" "$skill" && ok "Hermes agents know how to report to the boss" || fail "Could not install the Hermes skill." "Copy $skill_src to $skill"
+  fi
+}
+
 step_pull() {
   step "8/11 Pull the language model"
   pick_tier
@@ -435,8 +454,8 @@ TXT
 }
 
 if [[ -n "$ONLY" ]]; then
-  case "$ONLY" in platform|clt|brew|packages|iterm-profile|memory|config|agent|pull|whisper|build|install) ;;
-    *) echo "Unknown step '$ONLY'. Steps: platform clt brew packages iterm-profile memory config agent pull whisper build install"; exit 2 ;;
+  case "$ONLY" in platform|clt|brew|packages|iterm-profile|memory|config|agent|office|pull|whisper|build|install) ;;
+    *) echo "Unknown step '$ONLY'. Steps: platform clt brew packages iterm-profile memory config agent office pull whisper build install"; exit 2 ;;
   esac
   step_platform
   want platform || "step_${ONLY//-/_}"
@@ -445,7 +464,7 @@ if [[ -n "$ONLY" ]]; then
 fi
 
 step_platform; step_clt; step_brew; step_packages; step_iterm_profile; step_memory
-step_config; step_agent; step_pull; step_whisper; step_build; step_install
+step_config; step_agent; step_office; step_pull; step_whisper; step_build; step_install
 if (( DRY )); then print -P "\n%F{green}Dry run complete. Nothing was changed.%f"; exit 0; fi
 print -P "\n%F{green}Setup finished.%f"
 next_steps

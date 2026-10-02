@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.join(REPO, "server"))
 os.environ["GOLDWARE_OFFICE_DRY_RUN"] = "1"   # no test ever runs osascript
 import office  # noqa: E402
 import office_launch  # noqa: E402
+import office_boss  # noqa: E402
 
 NOW = 1_800_000_000.0
 
@@ -32,7 +33,7 @@ garbage line that is not a process
 """
 
 
-def make_hermes(home, pid, sid="sess-1", title="Plan the launch"):
+def make_hermes(home, pid, sid="sess-1", title="Plan the launch", cwd="/tmp/x"):
     os.makedirs(os.path.join(home, "runtime"))
     with open(os.path.join(home, "runtime", "active_sessions.json"), "w") as f:
         json.dump({"entries": [{"pid": pid, "session_id": sid, "started_at": NOW - 600, "surface": "cli"}]}, f)
@@ -46,7 +47,7 @@ def make_hermes(home, pid, sid="sess-1", title="Plan the launch"):
         CREATE TABLE session_turn_leases (conversation_id TEXT, expires_at REAL);
     """)
     con.execute("INSERT INTO sessions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (sid, "cli", title, "claude-opus-5-5", "anthropic", 4, 10, 20, 5, NOW - 600, "/tmp/x", None, None))
+                (sid, "cli", title, "claude-opus-5-5", "anthropic", 4, 10, 20, 5, NOW - 600, cwd, None, None))
     con.execute("INSERT INTO messages (session_id, role, content, timestamp, active) VALUES (?,?,?,?,1)",
                 (sid, "assistant", "All done.\n\nShould I ship it?", NOW - 30))
     con.commit()
@@ -726,6 +727,104 @@ class Dismiss(unittest.TestCase):
         self.assertEqual(naps, [office.DISMISS_GAP] * 3)
 
 
+class Boss(unittest.TestCase):
+    """The boss at the front desk: a Hermes chat in data/boss, started or told only when asked."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.data = os.path.join(self.tmp, "data")
+        del office.DRY_LOG[:]
+        office._SENT.clear()
+        office_launch.reset_throttle()
+        office_boss.reset_starting()
+        self.home = os.path.join(self.tmp, "hermes")
+        self.kw = dict(now=NOW, ps_text=PS_MIXED, chome="/nonexistent", ollama_url="off",
+                       cwd_fn=lambda pid: "/work/shop", gateway=False)
+        self._avail = office_launch.available
+        office_launch.available = lambda cmd: True       # no real hermes needed
+
+    def tearDown(self):
+        office_launch.available = self._avail
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_a_hermes_chat_in_data_boss_is_the_boss_and_takes_no_cast_name(self):
+        make_hermes(self.home, 200, cwd=os.path.join(self.data, "boss"))
+        s = office.snapshot(home=self.home, data_root=self.data, **self.kw)
+        boss = [a for a in s["agents"] if a.get("boss")]
+        self.assertEqual(len(boss), 1)
+        self.assertEqual(boss[0]["name"], "Boss")
+        self.assertEqual(sorted(a["name"] for a in s["agents"] if not a.get("boss")), ["Bolt", "Mocha"])
+
+    def test_ask_with_no_boss_starts_one_in_its_folder_with_the_brief(self):
+        r = office_boss.ask({"text": "Start two agents on the site; say \"hi\" $(x)"}, self.data, REPO,
+                            home=os.path.join(self.tmp, "none"), **self.kw)
+        self.assertTrue(r["started"])
+        name, argv = office.DRY_LOG[-1]
+        self.assertEqual(name, "new")
+        cmd = argv[-1]
+        boss_dir = os.path.join(self.data, "boss")
+        self.assertTrue(cmd.startswith("cd %s && hermes chat -q '" % boss_dir), cmd)
+        self.assertIn("$(x)", cmd)                         # quoted as data, never run
+        self.assertNotIn("\n", cmd)
+        brief = open(os.path.join(boss_dir, "AGENTS.md")).read()
+        self.assertIn("goldware-office", brief)
+        self.assertIn(os.path.join(REPO, "scripts", "office"), brief)
+
+    def test_a_second_ask_while_the_boss_sits_down_does_not_open_another(self):
+        none = os.path.join(self.tmp, "none")
+        office_boss.ask({"text": "first"}, self.data, REPO, home=none, **self.kw)
+        office_launch.reset_throttle()
+        with self.assertRaises(office.OfficeError) as cm:
+            office_boss.ask({"text": "second"}, self.data, REPO, home=none, **self.kw)
+        self.assertEqual(cm.exception.status, 409)
+        self.assertEqual([n for n, _ in office.DRY_LOG], ["new"])
+
+    def test_ask_with_a_boss_at_its_desk_types_to_it(self):
+        make_hermes(self.home, 200, cwd=os.path.join(self.data, "boss"))
+        r = office_boss.ask({"text": "How is everyone doing?"}, self.data, REPO, home=self.home, **self.kw)
+        self.assertTrue(r["sent"])
+        name, argv = office.DRY_LOG[-1]
+        self.assertEqual((name, argv[3], argv[4]), ("send", "/dev/ttys001", "/queue How is everyone doing?"))
+
+    def test_report_names_the_agent_and_goes_to_the_boss(self):
+        make_hermes(self.home, 200, cwd=os.path.join(self.data, "boss"))
+        r = office_boss.report({"id": "claude-300", "text": "Form done; tests pass."}, self.data, REPO, home=self.home, **self.kw)
+        self.assertTrue(r["sent"])
+        line = office.DRY_LOG[-1][1][4]
+        self.assertTrue(line.startswith("/queue Report from "), line)
+        self.assertIn("claude-300", line)
+        self.assertIn("Form done; tests pass.", line)
+        # by tty too (what `goldware-office report` sends from inside an agent)
+        office._SENT.clear()
+        office_boss.report({"tty": "/dev/ttys003"}, self.data, REPO, home=self.home, **self.kw)
+        self.assertIn("codex-310", office.DRY_LOG[-1][1][4])
+
+    def test_report_refuses_unknown_agents_and_the_boss_itself(self):
+        make_hermes(self.home, 200, cwd=os.path.join(self.data, "boss"))
+        with self.assertRaises(office.OfficeError) as cm:
+            office_boss.report({"id": "nobody"}, self.data, REPO, home=self.home, **self.kw)
+        self.assertEqual(cm.exception.status, 404)
+        with self.assertRaises(office.OfficeError) as cm:
+            office_boss.report({"id": "sess-1"}, self.data, REPO, home=self.home, **self.kw)
+        self.assertEqual(cm.exception.status, 409)
+
+    def test_empty_ask_is_refused(self):
+        with self.assertRaises(office.OfficeError):
+            office_boss.ask({"text": "   "}, self.data, REPO, home=self.home, **self.kw)
+        self.assertEqual(office.DRY_LOG, [])
+
+
+class GoldwareOfficeCli(unittest.TestCase):
+    def test_help_and_unknown_command(self):
+        cli = os.path.join(REPO, "scripts", "office")
+        r = subprocess.run([sys.executable, cli, "--help"], capture_output=True, text=True, timeout=10)
+        self.assertEqual(r.returncode, 0)
+        for word in ("agents", "send", "new", "dismiss", "report", "boss"):
+            self.assertIn(word, r.stdout)
+        r = subprocess.run([sys.executable, cli, "fly"], capture_output=True, text=True, timeout=10)
+        self.assertNotEqual(r.returncode, 0)
+
+
 class OfficeHttp(unittest.TestCase):
     """The real server on an empty fixture: JSON everywhere, and POSTs only from the dashboard itself."""
 
@@ -781,7 +880,8 @@ class OfficeHttp(unittest.TestCase):
         self.assertEqual(self.call("/api/office/nothing")[0], 404)
 
     def test_post_without_same_origin_is_rejected(self):
-        for path in ("/api/office/send", "/api/office/focus", "/api/office/board", "/api/office/dismiss"):
+        for path in ("/api/office/send", "/api/office/focus", "/api/office/board", "/api/office/dismiss",
+                     "/api/office/boss", "/api/office/report"):
             code, j = self.call(path, {"id": "claude-1", "text": "hi", "action": "add", "title": "x"})
             self.assertEqual(code, 403, path)           # no Origin or Referer at all
             code, _ = self.call(path, {"id": "x"}, {"Origin": "http://evil.example"})
