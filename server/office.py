@@ -870,7 +870,8 @@ def osa(name, script, *args, timeout=OSA_TIMEOUT):
     argv = ["osascript", "-e", script] + list(args)
     if dry_run():
         DRY_LOG.append((name, argv))
-        canned = {"screen": "dry run screen\n", "send": "sent\n", "focus": "ok\n", "new": "opened\n", "close": "closed\n"}
+        canned = {"screen": "dry run screen\n", "send": "sent\n", "focus": "ok\n", "new": "opened\n", "close": "closed\n",
+                  "choose": os.path.expanduser("~") + "/Projects/Bakery Site/\n"}
         return canned.get(name, ""), "", 0
     try:
         proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,

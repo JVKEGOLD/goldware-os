@@ -307,6 +307,10 @@ class TestHardening(ServerCase):
 
     def test_origin_checked_on_get_and_null_origin_rejected(self):
         self.assertEqual(self.req("/api/notes", headers={"Origin": "http://evil.example"})[0], 403)
+        # Choose folder opens a Finder window, so another site can never trigger it.
+        self.assertEqual(self.req("/api/office/choose-folder", {}, {"Origin": "http://evil.example"})[0], 403)
+        code, out = self.req("/api/office/choose-folder", {}, {"Origin": self.base})[:2]
+        self.assertEqual((code, out.get("name")), (200, "Bakery Site"))   # dry run: the canned pick
         self.assertEqual(self.req("/api/notes", headers={"Origin": "null"})[0], 403)
         self.assertEqual(self.req("/api/notes", {"cardId": "n", "text": "t"}, {"Origin": "null"})[0], 403)
         self.assertEqual(self.req("/api/notes", headers={"Origin": self.base})[0], 200)
@@ -551,7 +555,7 @@ class TestHardening(ServerCase):
             js = f.read()
         for ep in ("/api/office/agents", "/api/office/screen", "/api/office/send", "/api/office/focus",
                    "/api/office/board", "/api/office/usage", "/api/office/helper", "/api/office/new",
-                   "/api/office/settings", "/api/office/chat", "/api/office/dismiss"):
+                   "/api/office/settings", "/api/office/chat", "/api/office/dismiss", "/api/office/choose-folder"):
             self.assertIn(ep, js)
         for needle in ('class="oc-btn oc-dismiss"', "function dismissFlow", "function startLeaving", "function walkOuts",
                        "'Close terminal'", "data-dismiss", "Dismissed", "has left the office"):

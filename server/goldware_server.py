@@ -651,6 +651,8 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/office/settings":
                 with LOCK:
                     return self.send_json(200, office_launch.save(body, default_path(), user_path()))
+            if path == "/api/office/choose-folder":
+                return self.send_json(200, office_launch.choose_folder())
             return self.err(404, "Not found.")
         except office.OfficeError as e:
             return self.err(e.status, str(e))
