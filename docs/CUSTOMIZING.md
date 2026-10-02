@@ -147,14 +147,30 @@ Put CSS in `custom/office.css`. The dashboard loads it after the built-in `dashb
 .oe-editor { width: min(640px, calc(100vw - 32px)); }
 ```
 
-The room itself is drawn on a canvas, so CSS changes the panels, buttons, menus and the text over the room, not the pixel art. Only `/custom/office.css` is served from that folder, nothing else in it.
+The room itself is drawn on a canvas, so CSS changes the panels, buttons, menus and the text over the room, not the pixel art (for the characters, see the next section). Only `/custom/office.css` and `/custom/office-cast.js` are served from that folder, nothing else in it.
+
+## Your own agent characters (custom/office-cast.js)
+
+The characters (Bolt, Mocha, Pixel and the rest) are drawn from small grids in `dashboard/office-cast.js`. To change how any of them look, put a call to `OfficeCast.customize` in `custom/office-cast.js`. Like `office.css`, it is git-ignored, so `make update` keeps it.
+
+```js
+// custom/office-cast.js: a red Bolt and a green-eyed Mocha
+OfficeCast.customize({
+  Bolt:  { color: '#c04040', pal: { b: '#c04040', h: '#e07070', s: '#902828' } },
+  Mocha: { pal: { k: '#2f8f4f' } }
+});
+```
+
+- `color` is the character's signature colour (its name, avatar and swatch). `pal` changes single grid colours and keeps the rest (letters: `o` outline, `b` body, `h` light, `s` shade, `w` white, `k` dark, `a` accent, `c` second accent, `p` cheek). `rows` replaces the whole grid: each row is the left half of the character, mirrored when drawn, and `.` is clear.
+- The dictation pill at the bottom of the screen draws the same characters from the same two files, so your look shows there too. It picks up a saved change within a few seconds; reload the Office tab to see it there.
+- Names that are not in the cast are ignored, and a file with a mistake in it leaves the built-in looks in place.
 
 ## Where data lives
 
 | What | Where |
 |---|---|
 | Your config, including your New agent topics and agents | `goldware.json` (repo root, gitignored) |
-| Your Office CSS | `custom/office.css` (gitignored) |
+| Your Office CSS and character looks | `custom/office.css`, `custom/office-cast.js` (gitignored) |
 | Tasks, notes, drafts | `data/` in the repo root (gitignored). `GOLDWARE_DATA_ROOT` overrides it |
 | Models, app data, history | `~/Library/Application Support/GoldWare OS/` (`GOLDWARE_DATA` overrides it) |
 | Whisper model | `~/Library/Application Support/GoldWare OS/models/` |

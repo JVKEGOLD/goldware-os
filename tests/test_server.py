@@ -544,6 +544,9 @@ class TestHardening(ServerCase):
         # your own CSS comes after the built-in one, so it wins and survives updates
         self.assertLess(html.index("/dashboard/office.css"), html.index("/custom/office.css"))
         self.assertLess(html.index("/dashboard/office-cast.js"), html.index("/dashboard/office.js"))
+        # your own character looks load after the built-in cast and before the Office reads it
+        self.assertLess(html.index("/dashboard/office-cast.js"), html.index("/custom/office-cast.js"))
+        self.assertLess(html.index("/custom/office-cast.js"), html.index("/dashboard/office.js"))
         # New agent: the menu with Topics, Agent presets and Edit, and the editor
         for marker in ('class="oh-new"', 'class="oh-new-more"', 'class="oh-topics"', 'class="oh-presets"', "data-edit", 'class="oe-editor"'):
             self.assertIn(marker, html)

@@ -71,7 +71,10 @@ final class HUD {
             WorkData.focus(tty: "/dev/" + agent.tty)
         }
         agentFeed.onChange = { [weak self] agents in
-            guard let self, agents != self.pillView.agents else { return }
+            guard let self else { return }
+            // A saved custom/office-cast.js shows on the next poll, no restart needed.
+            if AgentPeek.reloadCastIfChanged() { self.pillView.needsDisplay = true }
+            guard agents != self.pillView.agents else { return }
             self.pillView.agents = agents
             if self.isIdle { self.settleIdle() }
         }

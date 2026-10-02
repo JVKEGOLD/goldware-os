@@ -1,4 +1,5 @@
 import AppKit
+import JavaScriptCore
 
 /// The Office's agents shown on the resting indicator as their pixel characters, each with a small
 /// status mark: working (a spinning ring), ready (green dot), or has a question (gold "?" that hops).
@@ -47,47 +48,76 @@ struct AgentPeek: Equatable {
     static let slot: CGFloat = 43
 
     private static var sprites: [String: NSImage] = [:]
-    private static var cast: [String: (pal: [Character: NSColor], rows: [String])]?
+    private static var cast: (names: [String], looks: [String: (pal: [Character: NSColor], rows: [String])])?
+    private static var castStamp = ""
 
-    /// The Office cast, read from `dashboard/office-cast.js` so the pill and the Office always draw
-    /// the same characters: each row is the left half, mirrored to make the full width.
-    static func parseCast(_ js: String) -> [String: (pal: [Character: NSColor], rows: [String])] {
-        var out: [String: (pal: [Character: NSColor], rows: [String])] = [:]
-        let entry = try! NSRegularExpression(pattern: #"(\w+): \{[^\n]*\n\s*color: '#[0-9a-fA-F]{6}',\s*\n\s*pal: \{([^}]*)\},\s*\n\s*rows: \[([^\]]*)\]"#)
-        let pair = try! NSRegularExpression(pattern: #"(\w): '#([0-9a-fA-F]{6})'"#)
-        let row = try! NSRegularExpression(pattern: #"'([^']*)'"#)
-        let ns = js as NSString
-        for m in entry.matches(in: js, range: NSRange(location: 0, length: ns.length)) {
-            let name = ns.substring(with: m.range(at: 1)), palText = ns.substring(with: m.range(at: 2)), rowText = ns.substring(with: m.range(at: 3))
-            var pal: [Character: NSColor] = [:]
-            for p in pair.matches(in: palText, range: NSRange(location: 0, length: (palText as NSString).length)) {
-                let key = (palText as NSString).substring(with: p.range(at: 1)).first!
-                let v = UInt32((palText as NSString).substring(with: p.range(at: 2)), radix: 16) ?? 0
-                pal[key] = NSColor(srgbRed: CGFloat(v >> 16 & 255) / 255, green: CGFloat(v >> 8 & 255) / 255, blue: CGFloat(v & 255) / 255, alpha: 1)
-            }
-            let rows = row.matches(in: rowText, range: NSRange(location: 0, length: (rowText as NSString).length))
-                .map { (rowText as NSString).substring(with: $0.range(at: 1)) }
-            if !rows.isEmpty { out[name] = (pal, rows) }
+    /// The Office cast, run from `dashboard/office-cast.js` and then the user's git-ignored
+    /// `custom/office-cast.js` in JavaScriptCore, so the pill draws exactly what the Office draws,
+    /// customised looks included. Each row is the left half, mirrored to make the full width.
+    static func loadCast(builtIn: String, custom: String?) -> (names: [String], looks: [String: (pal: [Character: NSColor], rows: [String])]) {
+        guard let ctx = JSContext() else { return ([], [:]) }
+        ctx.evaluateScript("var window = this; var document = undefined;")
+        ctx.evaluateScript(builtIn)
+        if let custom, !custom.isEmpty {
+            ctx.evaluateScript(custom)
+            ctx.exception = nil   // a broken custom file keeps the built-in looks, like the Office
         }
-        return out
+        guard let oc = ctx.objectForKeyedSubscript("OfficeCast"), !oc.isUndefined,
+              let names = oc.objectForKeyedSubscript("names")?.toArray() as? [String] else { return ([], [:]) }
+        var looks: [String: (pal: [Character: NSColor], rows: [String])] = [:]
+        for name in names {
+            guard let d = oc.invokeMethod("data", withArguments: [name])?.toDictionary(),
+                  let palText = d["pal"] as? [String: Any], let rows = d["rows"] as? [String], !rows.isEmpty else { continue }
+            var pal: [Character: NSColor] = [:]
+            for (k, v) in palText {
+                guard let key = k.first, let hex = v as? String, let col = color(hex) else { continue }
+                pal[key] = col
+            }
+            looks[name] = (pal, rows)
+        }
+        return (names, looks)
+    }
+
+    /// `#RRGGBB` (or `RRGGBB`) to a colour; anything else is nil.
+    static func color(_ hex: String) -> NSColor? {
+        let h = hex.hasPrefix("#") ? String(hex.dropFirst()) : hex
+        guard h.count == 6, let v = UInt32(h, radix: 16) else { return nil }
+        return NSColor(srgbRed: CGFloat(v >> 16 & 255) / 255, green: CGFloat(v >> 8 & 255) / 255, blue: CGFloat(v & 255) / 255, alpha: 1)
+    }
+
+    private static func castFiles() -> (builtIn: URL, custom: URL)? {
+        guard let root = VaultContext.resolveRoot() else { return nil }
+        return (root.appendingPathComponent("dashboard/office-cast.js"), root.appendingPathComponent("custom/office-cast.js"))
+    }
+
+    /// Re-reads the cast when either file changed since the last read. True when the looks changed,
+    /// so a customisation shows on the pill without restarting the app.
+    @discardableResult
+    static func reloadCastIfChanged() -> Bool {
+        guard let f = castFiles() else { return false }
+        let stamp = [f.builtIn, f.custom].map { u -> String in
+            let a = try? FileManager.default.attributesOfItem(atPath: u.path)
+            return "\((a?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0):\(a?[.size] ?? 0)"
+        }.joined(separator: "|")
+        if cast != nil && stamp == castStamp { return false }
+        castStamp = stamp
+        cast = loadCast(builtIn: (try? String(contentsOf: f.builtIn, encoding: .utf8)) ?? "",
+                        custom: try? String(contentsOf: f.custom, encoding: .utf8))
+        sprites = [:]
+        return true
     }
 
     /// The cast's names in file order (the order the Office hands them out).
     static var castNames: [String] {
-        let url = VaultContext.resolveRoot()?.appendingPathComponent("dashboard/office-cast.js")
-        let js = url.flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
-        let re = try! NSRegularExpression(pattern: #"^    (\w+): \{"#, options: .anchorsMatchLines)
-        return re.matches(in: js, range: NSRange(location: 0, length: (js as NSString).length)).map { (js as NSString).substring(with: $0.range(at: 1)) }
+        reloadCastIfChanged()
+        return cast?.names ?? []
     }
 
     /// The character as a small bitmap, built the same way as office-cast.js builds its canvas.
     static func sprite(_ name: String) -> NSImage? {
+        if cast == nil { reloadCastIfChanged() }
         if let s = sprites[name] { return s }
-        if cast == nil {
-            let url = VaultContext.resolveRoot()?.appendingPathComponent("dashboard/office-cast.js")
-            cast = url.flatMap { try? String(contentsOf: $0, encoding: .utf8) }.map(parseCast) ?? [:]
-        }
-        guard let c = cast?[name] else { return nil }
+        guard let c = cast?.looks[name] else { return nil }
         let half = c.rows.map(\.count).max() ?? 0, w = half * 2, h = c.rows.count
         guard w > 0, let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: w, pixelsHigh: h, bitsPerSample: 8, samplesPerPixel: 4,
                                                 hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)

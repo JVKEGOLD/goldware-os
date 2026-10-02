@@ -1912,6 +1912,16 @@ if args.count >= 2, args[1] == "--test-agent-peek" {
     expect("reads the whole Office cast (\(cast.count) characters)", cast.count >= 10)
     expect("every cast character draws a sprite", !cast.isEmpty && cast.allSatisfy { AgentPeek.sprite($0) != nil })
     expect("a sprite is the mirrored grid (even width)", AgentPeek.sprite(cast.first ?? "").map { Int($0.size.width) % 2 == 0 } ?? false)
+    // custom/office-cast.js restyles the pill exactly as it restyles the Office.
+    let castJS = VaultContext.resolveRoot().flatMap { try? String(contentsOf: $0.appendingPathComponent("dashboard/office-cast.js"), encoding: .utf8) } ?? ""
+    let plain = AgentPeek.loadCast(builtIn: castJS, custom: nil)
+    let mine = AgentPeek.loadCast(builtIn: castJS, custom: "OfficeCast.customize({ Bolt: { pal: { b: '#ff0000' } }, Mocha: { rows: ['bb', 'bb'] }, Nobody: { color: '#000000' } })")
+    expect("the custom file keeps every character", mine.names == plain.names && mine.looks.count == plain.looks.count)
+    expect("a custom palette colour reaches the pill", mine.looks["Bolt"]?.pal["b"] == AgentPeek.color("#ff0000") && plain.looks["Bolt"]?.pal["b"] != AgentPeek.color("#ff0000"))
+    expect("a custom palette merges (other colours kept)", mine.looks["Bolt"]?.pal["o"] == plain.looks["Bolt"]?.pal["o"])
+    expect("custom rows replace the grid", mine.looks["Mocha"]?.rows == ["bb", "bb"])
+    let broken = AgentPeek.loadCast(builtIn: castJS, custom: "this is not javascript {{{")
+    expect("a broken custom file keeps the built-in looks", broken.looks.count == plain.looks.count && broken.looks["Bolt"]?.pal["b"] == plain.looks["Bolt"]?.pal["b"])
     let pill = PillView()
     pill.mode = .mini
     let bare = pill.preferredSize.width
