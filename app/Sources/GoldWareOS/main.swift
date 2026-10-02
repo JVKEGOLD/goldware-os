@@ -1890,6 +1890,78 @@ if args.count >= 3, args[1] == "--orb-sheet" {
 }
 
 // Renders the indicator (history list, idle orb, active pills) to a PNG for review.
+if args.count >= 2, args[1] == "--test-agent-peek" {
+    var failures = 0
+    func expect(_ what: String, _ ok: Bool) { print("\(ok ? "PASS" : "FAIL")  \(what)"); if !ok { failures += 1 } }
+    expect("a lease means working", AgentPeek.state(activity: "your_turn", working: true, tool: nil, question: true) == .working)
+    expect("a busy activity means working", AgentPeek.state(activity: "typing", working: false, tool: nil, question: false) == .working)
+    expect("a closing question means a question", AgentPeek.state(activity: "your_turn", working: false, tool: nil, question: true) == .question)
+    expect("clarify means a question", AgentPeek.state(activity: "asleep", working: false, tool: "clarify", question: false) == .question)
+    expect("finished without a question is ready", AgentPeek.state(activity: "your_turn", working: false, tool: nil, question: false) == .ready)
+    let json = """
+    {"agents":[{"id":"r","name":"Mocha","activity":"idle","working":false,"closing":{"text":"Done.","question":false},"tty":"ttys001"},
+               {"id":"w","name":"Bolt","activity":"reading","working":true,"closing":null,"tty":"ttys002"},
+               {"id":"q","name":"Pixel","activity":"your_turn","working":false,"closing":{"text":"Which one?","question":true},"tty":"ttys003"}]}
+    """
+    let parsed = AgentPeek.parse(Data(json.utf8)) ?? []
+    expect("parses every agent", parsed.count == 3)
+    expect("questions first, then working, then ready", parsed.map(\.id) == ["q", "w", "r"])
+    expect("keeps the tty for focusing", parsed.first?.tty == "ttys003")
+    expect("a broken feed reads as nothing", AgentPeek.parse(Data("oops".utf8)) == nil)
+    let cast = AgentPeek.castNames
+    expect("reads the whole Office cast (\(cast.count) characters)", cast.count >= 10)
+    expect("every cast character draws a sprite", !cast.isEmpty && cast.allSatisfy { AgentPeek.sprite($0) != nil })
+    expect("a sprite is the mirrored grid (even width)", AgentPeek.sprite(cast.first ?? "").map { Int($0.size.width) % 2 == 0 } ?? false)
+    let pill = PillView()
+    pill.mode = .mini
+    let bare = pill.preferredSize.width
+    pill.agents = parsed
+    expect("the resting pill grows to hold the agents", pill.preferredSize.width >= bare + 3 * AgentPeek.slot)
+    pill.frame = NSRect(origin: .zero, size: pill.preferredSize)
+    expect("one click target per agent", pill.agentRects().count == 3)
+    expect("sprites are big enough to read (about 1.8x the first cut)", AgentPeek.slot >= 40 && pill.preferredSize.height >= AgentPeek.slot)
+    pill.agents = (0..<9).map { AgentPeek(id: "\($0)", name: "Bolt", title: "", tty: "", state: .ready) }
+    pill.frame = NSRect(origin: .zero, size: pill.preferredSize)
+    expect("caps the row and counts the rest", pill.agentRects().count == AgentPeek.maxShown)
+    pill.mode = .active(text: "Listening", assistant: false)
+    expect("no agents while dictating", pill.agentRects().isEmpty)
+    // History hover: the highlight glides to the hovered row and settles; leaving fades it out.
+    var g: (y: CGFloat, alpha: CGFloat)? = HistoryView.step(nil, to: (34, 1))
+    expect("first hover fades in on the row itself", g?.y == 34 && (g?.alpha ?? 1) < 1)
+    var frames = 0
+    var mid: CGFloat = 0
+    while frames < 120, !(g?.y == 134 && g?.alpha == 1) {
+        g = HistoryView.step(g, to: (134, 1)); frames += 1
+        if frames == 3 { mid = g?.y ?? 0 }
+    }
+    expect("moving rows glides through the rows between (smooth, not a jump)", mid > 34 && mid < 134)
+    expect("settles in about a quarter second (\(frames) frames at 60 Hz)", frames >= 8 && frames <= 30)
+    var out = 0
+    while g != nil, out < 120 { g = HistoryView.step(g, to: nil); out += 1 }
+    expect("leaving fades it out", g == nil && out <= 30)
+    pill.mode = .mini
+    pill.agents = parsed
+    pill.frame = NSRect(origin: .zero, size: pill.preferredSize)
+    expect("only the orb opens the history, not the agents", pill.orbZone.maxX <= (pill.agentRects().first?.1.minX ?? 0))
+    // Agent hover: the hovered sprite eases up over several frames and back down after.
+    var v: CGFloat = 0, steps = 0, firstStep: CGFloat = 0
+    while v != 1, steps < 120 { v = AgentPeek.easeHover(v, to: 1); steps += 1; if steps == 1 { firstStep = v } }
+    expect("agent hover eases in (no jump)", firstStep > 0 && firstStep < 0.5)
+    expect("agent hover settles in about a quarter second (\(steps) frames)", steps >= 8 && steps <= 30)
+    pill.mode = .mini
+    pill.agents = parsed
+    pill.setHoveredAgent(parsed[1])
+    for _ in 0..<60 { pill.stepLift() }
+    expect("hovered agent fully lifted, others resting", pill.lift[parsed[1].id] == 1 && pill.lift[parsed[0].id] == nil)
+    pill.setHoveredAgent(nil)
+    pill.stepLift()
+    let leaving = pill.lift[parsed[1].id] ?? 0
+    for _ in 0..<60 { pill.stepLift() }
+    expect("leaving glides back down", leaving > 0 && leaving < 1 && pill.lift.isEmpty)
+    print(failures == 0 ? "All agent peek checks passed." : "\(failures) agent peek check(s) FAILED.")
+    exit(failures == 0 ? 0 : 1)
+}
+
 if args.count >= 3, args[1] == "--indicator-sheet" {
     let now = Date()
     func row(_ text: String, _ app: String, _ ago: Double, _ mode: String = "dictate") -> Dictation {
