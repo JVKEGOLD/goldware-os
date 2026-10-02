@@ -400,10 +400,11 @@ body.office-immersive #tab-office { padding-top: 12px; }
 .oc-screen .oc-said { color: var(--text); font-weight: 600; } .oc-screen .oc-status { color: var(--text-muted); }
 .oc-screen .oc-dim { color: var(--text-muted); font-style: italic; }
 .oc-latest { position: absolute; right: 16px; bottom: 12px; height: 28px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--gold-line); background: rgba(20,18,15,.95); color: var(--gold-hi); font: 600 11.5px/1 var(--font); cursor: pointer; }
-.oc-send { display: flex; align-items: center; gap: 10px; margin: 10px 12px 0; padding: 8px 8px 8px 14px; border-radius: 14px; border: 1px solid var(--office-edge); background: rgba(0,0,0,.28); }
+.oc-send { display: flex; align-items: flex-end; gap: 10px; margin: 10px 12px 0; padding: 8px 8px 8px 14px; border-radius: 14px; border: 1px solid var(--office-edge); background: rgba(0,0,0,.28); }
 .oc-send:focus-within { border-color: var(--office-edge-hi); box-shadow: 0 0 0 3px rgba(242,163,74,.1); }
 .oc-prompt { color: var(--gold-hi); font: 600 14px/1 var(--mono); }
-.oc-input { flex: 1; min-width: 0; height: 36px; padding: 0 4px; border-radius: 10px; border: 0; background: transparent; color: var(--text); font: 13px/1 var(--mono); outline: none; transition: border-color var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease); }
+.oc-prompt { align-self: center; }
+.oc-input { flex: 1; min-width: 0; height: 36px; max-height: 160px; padding: 9px 4px; box-sizing: border-box; resize: none; overflow-y: auto; white-space: pre-wrap; overflow-wrap: anywhere; border-radius: 10px; border: 0; background: transparent; color: var(--text); font: 13px/18px var(--mono); outline: none; transition: border-color var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease); }
 .oc-input:focus { box-shadow: none; }
 .oc-go { height: 36px; padding: 0 18px; border-radius: 10px; background: linear-gradient(180deg, #f6cf7a, #d9a552); border-color: var(--gold-hi); color: #1a1208; box-shadow: 0 4px 14px -4px rgba(242,163,74,.5); }
 .oc-go:hover { background: var(--gold-hi); }
@@ -564,6 +565,7 @@ button.od-card { cursor: pointer; } button.od-card:hover { border-color: var(--o
 .oc-msg pre { margin: 0 0 8px; padding: 10px 12px; border-radius: 8px; background: #0b0907; font: 12px/1.45 var(--mono); color: #d6cdbb; overflow-x: auto; white-space: pre; }
 .oc-msg.you { margin-left: 18%; padding: 10px 14px; border-radius: 14px 14px 4px 14px; background: rgba(249,217,118,.1); border: 1px solid var(--gold-line); }
 .oc-msg.you small { color: var(--gold); }
+.oc-msg.you.pending { opacity: .7; border-style: dashed; }
 .oc-msg.said { padding: 2px 2px 2px 14px; border-left: 2px solid var(--office-edge-hi); }
 .oc-msg.said:last-child { border-left-color: var(--gold); }
 .oc-did { margin: 0 0 14px; padding-left: 14px; font: 500 12px/1.4 var(--mono); color: var(--text-muted); } .oc-did::before { content: '\2699  '; }
