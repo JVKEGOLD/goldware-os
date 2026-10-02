@@ -2214,17 +2214,42 @@
     const lim = (settings && settings.limits) || { items: 20, label: 40, command: 199 };
     const rows = (kind, second, place) => draft[kind].map((r, i) => `<div class="oe-row" data-kind="${kind}" data-i="${i}">
         <input data-f="label" maxlength="${lim.label}" value="${esc(r.label)}" placeholder="Name" aria-label="Name">
-        <input data-f="${second}" maxlength="${second === 'dir' ? 500 : lim.command}" value="${esc(r[second])}" placeholder="${place}" aria-label="${second === 'dir' ? 'Folder' : 'Command'}" spellcheck="false">
+        ${second === 'dir' ? `<span class="oe-dir"><input data-f="dir" maxlength="500" value="${esc(r.dir)}" placeholder="${place}" aria-label="Folder" spellcheck="false"><button type="button" class="oe-choose" data-act="choose"${draft.choosing ? ' disabled' : ''} title="Pick the folder in a Finder window">${draft.choosing === i ? 'Choosing…' : 'Choose…'}</button></span>`
+          : `<input data-f="${second}" maxlength="${lim.command}" value="${esc(r[second])}" placeholder="${place}" aria-label="Command" spellcheck="false">`}
         <span class="oe-tools"><button type="button" data-act="up" aria-label="Move up"${i ? '' : ' disabled'}>↑</button><button type="button" data-act="down" aria-label="Move down"${i < draft[kind].length - 1 ? '' : ' disabled'}>↓</button><button type="button" data-act="del" aria-label="Remove"${draft[kind].length > 1 ? '' : ' disabled'}>×</button></span></div>`).join('');
     editor.innerHTML = `<div class="oe-head"><b>Edit New agent</b><small>Saved in goldware.json on this Mac</small></div>
-      <div class="oe-sec"><h5>Topics</h5><p>A topic is a folder the new agent starts in.</p>${rows('topics', 'dir', '~/projects/my-app')}
+      <div class="oe-sec"><h5>Topics</h5><p>A topic is a folder the new agent starts in. Press Choose… to pick it in Finder.</p>${rows('topics', 'dir', '~/projects/my-app')}
         <button type="button" class="oe-add" data-act="add" data-kind="topics"${draft.topics.length >= lim.items ? ' disabled' : ''}>+ Add topic</button></div>
       <div class="oe-sec"><h5>Agents</h5><p>The command that starts each agent, run in your terminal.</p>${rows('presets', 'command', 'hermes')}
         <button type="button" class="oe-add" data-act="add" data-kind="presets"${draft.presets.length >= lim.items ? ' disabled' : ''}>+ Add agent</button></div>
       <p class="oe-msg${draft.bad ? ' bad' : ''}" role="status">${esc(draft.msg)}</p>
       <div class="oe-foot"><button type="button" class="oe-btn" data-act="cancel">Cancel</button><button type="button" class="oe-btn gold" data-act="save"${draft.busy ? ' disabled' : ''}>Save</button></div>`;
   }
+  // Choose…: the Mac folder picker (on the server, since a web page cannot read real folder paths).
+  // The picked folder fills the Folder box, and the Name box too when it is empty. Nothing is saved yet.
+  async function chooseFolder(i) {
+    if (!draft || draft.choosing != null) return;
+    draft.choosing = i; draft.msg = 'A Finder window is open: pick the folder there.'; draft.bad = false; renderEditor();
+    let out;
+    try {
+      if (demo) out = { dir: '~/Projects/Bakery Site', name: 'Bakery Site' };
+      else {
+        const res = await fetchT('/api/office/choose-folder', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }, 610000);
+        out = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(out.error || 'The folder picker did not open.');
+      }
+    } catch (e) { out = { error: e.name === 'AbortError' ? 'The folder picker timed out.' : e.message }; }
+    if (!draft) return;
+    draft.choosing = null;
+    const r = draft.topics[i];
+    if (out.dir && r) { r.dir = out.dir; if (!r.label.trim()) r.label = (out.name || '').slice(0, ((settings && settings.limits) || { label: 40 }).label); draft.msg = 'Folder picked. Press Save to keep it.'; }
+    else draft.msg = out.cancelled ? '' : out.error || '';
+    draft.bad = !!out.error;
+    renderEditor();
+    const box = editor.querySelector(`.oe-row[data-kind="topics"][data-i="${i}"] .oe-choose`); if (box) box.focus({ preventScroll: true });
+  }
   async function saveEditor() {
+    if (draft && draft.choosing != null) return;
     const clean = a => a.map(r => ({ label: r.label.trim(), dir: (r.dir || '').trim(), command: (r.command || '').trim() }));
     const body = { topics: clean(draft.topics).map(r => ({ label: r.label, dir: r.dir })), presets: clean(draft.presets).map(r => ({ label: r.label, command: r.command })) };
     draft.busy = true; draft.msg = 'Saving…'; draft.bad = false; renderEditor();
@@ -2253,6 +2278,7 @@
     const row = b.closest('.oe-row'), act = b.dataset.act;
     if (act === 'cancel') { draft = null; setEditor(false); newMore.focus({ preventScroll: true }); return; }
     if (act === 'save') { saveEditor(); return; }
+    if (act === 'choose') { chooseFolder(Number(row.dataset.i)); return; }
     if (act === 'add') { draft[b.dataset.kind].push(b.dataset.kind === 'topics' ? { label: '', dir: '' } : { label: '', command: '' }); renderEditor(); const rs = editor.querySelectorAll(`.oe-row[data-kind="${b.dataset.kind}"]`); rs[rs.length - 1].querySelector('input').focus(); return; }
     const list = draft[row.dataset.kind], i = Number(row.dataset.i);
     if (act === 'del') list.splice(i, 1);

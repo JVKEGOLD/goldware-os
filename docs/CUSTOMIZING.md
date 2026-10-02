@@ -112,7 +112,7 @@ Each agent gets a character from the cast (Bolt, Mocha, Pixel, Latte, Sprout, Em
 
 ## New agent, topics and agent presets
 
-The Office's **New agent** button opens a terminal window that runs `cd <folder> && <command>`. The arrow beside it picks which topic (folder) and which agent (command). Choose **Edit** there to add, rename, remove or reorder them; Save writes only `office.topics` and `office.presets` into `goldware.json` and keeps everything else. You can also edit the file by hand:
+The Office's **New agent** button opens a terminal window that runs `cd <folder> && <command>`. The arrow beside it picks which topic (folder) and which agent (command). Choose **Edit** there to add, rename, remove or reorder them (each topic has a **Choose…** button that opens a Finder window, so you pick the folder instead of typing its path); Save writes only `office.topics` and `office.presets` into `goldware.json` and keeps everything else. You can also edit the file by hand:
 
 ```json
 "office": {

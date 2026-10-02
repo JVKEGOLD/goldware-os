@@ -78,6 +78,22 @@ on run argv
 end run
 """
 
+# "Choose folder…" in the editor: the Mac's own folder picker. It returns the folder you picked, which
+# the page only puts in the Folder box; nothing is saved or opened until you press Save.
+CHOOSE_FOLDER_SCRIPT = """\
+on run argv
+  tell me to activate
+  try
+    set f to choose folder with prompt (item 1 of argv)
+  on error number -128
+    return "CANCELLED"
+  end try
+  return POSIX path of f
+end run
+"""
+CHOOSE_TIMEOUT = 600         # the picker waits for you; ten minutes, then it gives up
+_CHOOSING = threading.Lock() # one picker at a time
+
 _LOCK = threading.Lock()
 _LAST_NEW = [0.0]
 
@@ -222,6 +238,35 @@ def new_agent(body, default_path, user_path, profile=None, now=None):
         raise TerminalError("The terminal did not open.")
     return {"ok": True, "type": pick["id"], "topic": place["id"], "label": pick.get("label"),
             "topic_label": place.get("label"), "terminal": app}
+
+
+def tilde(path, home=None):
+    """A folder as the editor shows it: ~ for your home folder, no trailing slash."""
+    home = home or os.path.expanduser("~")
+    path = path.rstrip("/") or "/"
+    if path == home:
+        return "~"
+    if path.startswith(home + "/"):
+        return "~" + path[len(home):]
+    return path
+
+
+def choose_folder():
+    """Show the Mac folder picker. Returns {"dir": "~/..."} or {"cancelled": True}."""
+    if not _CHOOSING.acquire(blocking=False):
+        raise OfficeError("A folder picker is already open.", 409)
+    try:
+        out, err, code = office.osa("choose", CHOOSE_FOLDER_SCRIPT, "Choose the folder for this topic", timeout=CHOOSE_TIMEOUT)
+    finally:
+        _CHOOSING.release()
+    if code != 0:
+        raise TerminalError(office.friendly(err))
+    picked = out.strip()
+    if not picked or picked == "CANCELLED":
+        return {"cancelled": True}
+    if _CTRL.search(picked) or len(picked) > MAX_DIR:
+        raise OfficeError("That folder name cannot be used.", 422)
+    return {"dir": tilde(picked), "name": os.path.basename(picked.rstrip("/"))}
 
 
 # ---------- saving ----------

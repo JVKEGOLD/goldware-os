@@ -438,6 +438,41 @@ class Launch(unittest.TestCase):
         self.assertIn("folder for Gone is missing", str(cm.exception))
         self.assertEqual(office.DRY_LOG, [])
 
+    def test_choose_folder_returns_the_picked_folder_with_tilde(self):
+        r = office_launch.choose_folder()
+        self.assertEqual(r, {"dir": "~/Projects/Bakery Site", "name": "Bakery Site"})
+        name, argv = office.DRY_LOG[-1]
+        self.assertEqual(name, "choose")
+        self.assertEqual(argv[2], office_launch.CHOOSE_FOLDER_SCRIPT)
+        self.assertNotIn(os.path.expanduser("~"), argv[2])            # the script holds no path
+        before = open(self.default).read()
+        self.assertFalse(os.path.exists(self.user))                    # picking never saves
+        self.assertEqual(open(self.default).read(), before)
+
+    def test_tilde_and_cancel(self):
+        self.assertEqual(office_launch.tilde("/home/a/", "/home/a"), "~")
+        self.assertEqual(office_launch.tilde("/home/a/x y/", "/home/a"), "~/x y")
+        self.assertEqual(office_launch.tilde("/Volumes/Drive/site/", "/home/a"), "/Volumes/Drive/site")
+        self.assertEqual(office_launch.tilde("/home/ab/c", "/home/a"), "/home/ab/c")   # a lookalike prefix stays whole
+        orig = office.osa
+        try:
+            office.osa = lambda *a, **k: ("CANCELLED\n", "", 0)
+            self.assertEqual(office_launch.choose_folder(), {"cancelled": True})
+            office.osa = lambda *a, **k: ("/x/\x07bad/\n", "", 0)
+            with self.assertRaises(office.OfficeError):
+                office_launch.choose_folder()
+        finally:
+            office.osa = orig
+
+    def test_only_one_picker_at_a_time(self):
+        office_launch._CHOOSING.acquire()
+        try:
+            with self.assertRaises(office.OfficeError) as cm:
+                office_launch.choose_folder()
+            self.assertEqual(cm.exception.status, 409)
+        finally:
+            office_launch._CHOOSING.release()
+
     def test_unavailable_binary_is_refused_and_flagged(self):
         with self.assertRaises(office.OfficeError) as cm:
             self.new({"type": "ghost", "topic": "home"})
