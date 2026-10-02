@@ -529,13 +529,20 @@ class TestHardening(ServerCase):
         with open(os.path.join(REPO, "dashboard", "index.html"), encoding="utf-8") as f:
             html = f.read()
         tabs = re.findall(r'<button class="topbar-tab" data-tab="(\w+)"', html)
-        self.assertEqual(tabs, ["dashboard", "voice", "vision", "office"])  # Office is the fourth tab
+        self.assertEqual(tabs, ["office", "dashboard", "voice", "vision"])  # Office is the first tab
         self.assertIn('id="tab-office"', html)
-        self.assertIn('"office"].indexOf(t)', html)             # the router knows it
+        self.assertIn('"office", "dashboard", "voice", "vision"].indexOf(t)', html)   # the router knows it
+        self.assertIn('(location.hash || "#dashboard")', html)  # opening the page still lands on the Dashboard
         for sel in ('id="office-canvas"', 'id="office-roster"', 'id="office-dock"', 'id="office-stage"'):
             self.assertIn(sel, html)
         self.assertIn("/dashboard/office.js", html)
         self.assertIn("/dashboard/office.css", html)
+        # your own CSS comes after the built-in one, so it wins and survives updates
+        self.assertLess(html.index("/dashboard/office.css"), html.index("/custom/office.css"))
+        self.assertLess(html.index("/dashboard/office-cast.js"), html.index("/dashboard/office.js"))
+        # New agent: the menu with Topics, Agent presets and Edit, and the editor
+        for marker in ('class="oh-new"', 'class="oh-new-more"', 'class="oh-topics"', 'class="oh-presets"', "data-edit", 'class="oe-editor"'):
+            self.assertIn(marker, html)
         for path, ctype in (("/dashboard/office.js", "javascript"), ("/dashboard/office.css", "text/css")):
             code, body, h = self.req(path)
             self.assertEqual(code, 200, path)
@@ -543,12 +550,31 @@ class TestHardening(ServerCase):
         with open(os.path.join(REPO, "dashboard", "office.js"), encoding="utf-8") as f:
             js = f.read()
         for ep in ("/api/office/agents", "/api/office/screen", "/api/office/send", "/api/office/focus",
-                   "/api/office/board", "/api/office/usage", "/api/office/helper"):
+                   "/api/office/board", "/api/office/usage", "/api/office/helper", "/api/office/new",
+                   "/api/office/settings", "/api/office/chat"):
             self.assertIn(ep, js)
+        # no desk plates: the boss plate is the only one; an agent is the click target at its desk
+        self.assertNotIn('class="office-plate open"', js)
+        self.assertNotIn("op-top\"><i class=\"op-dot", js)
+        self.assertNotIn("op-more", js)
+        self.assertEqual(js.count('class="office-plate '), 1)
+        with open(os.path.join(REPO, "dashboard", "office.css"), encoding="utf-8") as f:
+            css = f.read()
+        self.assertNotIn(".op-more", css)
+        self.assertNotIn(".office-plate[data-id]:not(.boss)", css)
+        # the New agent editor sends ids-free lists to the settings endpoint and the page sends only ids to /new
+        self.assertIn("JSON.stringify({ type, topic })", js)
+        # Edit is a real entry of the menu, and the character set has at least 8 distinct characters
+        with open(os.path.join(REPO, "dashboard", "office-cast.js"), encoding="utf-8") as f:
+            cast = f.read()
+        import re as _re
+        names = _re.findall(r"^    (\w+): \{ //", cast, _re.M)
+        self.assertGreaterEqual(len(set(names)), 8)
         # nothing from the old private world, and no mascot art (words split so this file stays clean)
         banned = "(?i)" + "|".join(["al" + "len", "masc" + "ot", "bean" + "ie", "kine" + "tic", "mat" + "rix", "vau" + "lt",
-                                    "/api/clients", "/api/document", "\u2014"])
-        for name in ("office.js", "office.css"):
+                                    "/api/clients", "/api/document", "\u2014", "poke" + "mon", "nint" + "endo", "pika" + "chu",
+                                    "charm" + "ander", "bulba" + "saur", "/Users/", "/assets/"])
+        for name in ("office.js", "office.css", "office-cast.js"):
             with open(os.path.join(REPO, "dashboard", name), encoding="utf-8") as f:
                 text = f.read()
             self.assertNotRegex(text, banned, name)

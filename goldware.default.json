@@ -5,6 +5,16 @@
   "accentColor": "#C9A24A",
   "letsWork": { "command": "hermes", "terminal": "iTerm", "profile": "GoldWare" },
   "port": 4188,
+  "office": {
+    "topics": [
+      { "id": "home", "label": "Home", "dir": "~" }
+    ],
+    "presets": [
+      { "id": "hermes", "label": "Hermes", "command": "hermes" },
+      { "id": "claude-code", "label": "Claude Code", "command": "claude" },
+      { "id": "codex", "label": "Codex", "command": "codex" }
+    ]
+  },
   "models": {
     "local": "gemma4:e4b",
     "keepAlive": "5m",

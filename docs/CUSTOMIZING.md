@@ -23,6 +23,8 @@ Then `make check` for the full gate. Back up first: `cp goldware.json goldware.j
 | `models.local` | Ollama model tag | `"gemma4:e4b"` |
 | `models.keepAlive` | How long Ollama keeps the language model in RAM after use (`"5m"`, `"0"` to unload at once, `"-1"` to keep loaded). Keep it short on a 16 GB Mac | `"5m"` |
 | `models.whisper` | Speech model file name under `~/Library/Application Support/GoldWare OS/models/` | `"ggml-small.en-q5_1.bin"` |
+| `office.topics` | The folders New agent can start in: a list of `{id, label, dir}`. `dir` is absolute or starts with `~/`. Easiest to change with Edit in the New agent menu | `[{"id": "home", "label": "Home", "dir": "~"}]` |
+| `office.presets` | The agents New agent can start: a list of `{id, label, command}`. `command` is one line you run in a terminal, for example `hermes`, `claude` or `codex` | `[{"id": "codex", "label": "Codex", "command": "codex"}]` |
 | `dashboard.layout` | A label only: it must be text but nothing reads it. Card order in `dashboard.cards` is what is displayed | `"starter"` |
 | `dashboard.cards` | Ordered list of cards | see below |
 
@@ -106,13 +108,53 @@ The Office tab shows one desk per agent running in a terminal on this Mac. Every
 - **Hermes**: the chats in `~/.hermes/runtime/active_sessions.json` whose process is still alive, with the title, model, and whether a turn is running read from `~/.hermes/state.db` (opened read only). Without Hermes installed this part is simply empty.
 - **Ollama**: loaded models from its local API (`http://127.0.0.1:11434`), shown with the rest of the rack. Ollama runs no terminal, so it has no desk.
 
-Each agent gets a short first name that sticks while it stays. Set `GOLDWARE_HERMES_HOME`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, or `GOLDWARE_OLLAMA_URL` before starting the server if your tools keep their files elsewhere. The board (tasks, ideas, lab) is saved in `data/office-board.json`. Plan usage uses the sign-ins Claude Code and Codex already keep on this Mac and never refreshes them. Talking to a terminal works with iTerm and Terminal and needs the Automation permission the first time.
+Each agent gets a character from the cast (Bolt, Mocha, Pixel, Latte, Sprout, Ember, Beans, Frost, Wisp, Biscuit) and keeps it while it stays; past ten it is "Agent 11" and so on. Agents group into tables by the folder they work in, and each table has a whiteboard for its tasks. Set `GOLDWARE_HERMES_HOME`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, or `GOLDWARE_OLLAMA_URL` before starting the server if your tools keep their files elsewhere. The board (tasks, ideas, lab) is saved in `data/office-board.json`. Plan usage uses the sign-ins Claude Code and Codex already keep on this Mac and never refreshes them. Talking to a terminal works with iTerm and Terminal and needs the Automation permission the first time.
+
+## New agent, topics and agent presets
+
+The Office's **New agent** button opens a terminal window that runs `cd <folder> && <command>`. The arrow beside it picks which topic (folder) and which agent (command). Choose **Edit** there to add, rename, remove or reorder them; Save writes only `office.topics` and `office.presets` into `goldware.json` and keeps everything else. You can also edit the file by hand:
+
+```json
+"office": {
+  "topics": [
+    { "id": "home", "label": "Home", "dir": "~" },
+    { "id": "site", "label": "My website", "dir": "~/code/site" }
+  ],
+  "presets": [
+    { "id": "hermes", "label": "Hermes on Claude", "command": "hermes" },
+    { "id": "claude-code", "label": "Claude Code", "command": "claude" },
+    { "id": "codex", "label": "Codex", "command": "codex" }
+  ]
+}
+```
+
+- A name is 1 to 40 characters, at most 20 topics and 20 agents. A folder must exist and be absolute or start with `~/`. A command is one line under 200 characters with no control characters.
+- `id` is made from the name when you save in Edit; if you edit by hand, use a lowercase slug (letters, digits, dashes).
+- An agent whose program is not on your PATH shows greyed out with "Not installed". A topic whose folder is gone shows with a dashed outline.
+- The page sends only the ids of the topic and agent. The folder and the command always come from `goldware.json`, so nothing a web page sends can run something else. The command is yours: it runs in your own terminal, and only the dashboard itself can change it.
+- `goldware.json` is git-ignored, so `make update` never touches your lists. If the file does not exist, Edit creates it from `goldware.default.json`.
+- The new window opens in iTerm (profile from `letsWork.profile`), or Terminal if iTerm is not installed.
+
+## Your own Office look (custom/office.css)
+
+Put CSS in `custom/office.css`. The dashboard loads it after the built-in `dashboard/office.css`, so your rules win, and the whole `custom/` folder is git-ignored, so `make update` never overwrites it. Create the folder and file if they are missing, then reload the Office tab. There is no file by default and the page works fine without one.
+
+```css
+/* custom/office.css: a cooler room and bigger agent names */
+#tab-office, .office-console { --office-edge: rgba(120, 180, 255, .30); --office-edge-hi: rgba(150, 200, 255, .6); }
+.oh-brand b { color: #9fd0ff; }
+.office-hit.qb .qb-ask { font-size: 13px; }
+.oe-editor { width: min(640px, calc(100vw - 32px)); }
+```
+
+The room itself is drawn on a canvas, so CSS changes the panels, buttons, menus and the text over the room, not the pixel art. Only `/custom/office.css` is served from that folder, nothing else in it.
 
 ## Where data lives
 
 | What | Where |
 |---|---|
-| Your config | `goldware.json` (repo root, gitignored) |
+| Your config, including your New agent topics and agents | `goldware.json` (repo root, gitignored) |
+| Your Office CSS | `custom/office.css` (gitignored) |
 | Tasks, notes, drafts | `data/` in the repo root (gitignored). `GOLDWARE_DATA_ROOT` overrides it |
 | Models, app data, history | `~/Library/Application Support/GoldWare OS/` (`GOLDWARE_DATA` overrides it) |
 | Whisper model | `~/Library/Application Support/GoldWare OS/models/` |

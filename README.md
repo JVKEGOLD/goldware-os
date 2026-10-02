@@ -6,7 +6,10 @@ Your Mac, voice, vision, and a dashboard you reshape with your own AI. Everythin
 
 - **Voice**: push-to-talk dictation and a voice assistant (whisper.cpp for speech, a local Ollama model for cleanup and understanding).
 - **Vision**: Mac camera hand tracking (Apple Vision framework): hand mirror, pointer control, document scan.
-- **Office**: every Hermes, Claude Code, Codex and Ollama running on this Mac, each at a pixel-art desk with a short name and its chat title. Click one to read its terminal and type to it, see what it needs from you, keep a task board, and watch your plan usage. Empty if you run none of them.
+- **Office** (the first tab): every Hermes, Claude Code and Codex running on this Mac, each a small pixel character at a desk in a coffee shop, with the chat title in a hover card and the Floor list. You are the boss at the front desk. Click an agent at its desk to read its terminal, see its chat, and type to it; one with a question walks up to you. Whiteboards, an ideas board, a lab, and your plan usage sit around it. Empty if you run none of them.
+  - **New agent**: the button opens a terminal window running an agent in a folder you picked. The arrow next to it picks the **Topic** (a folder) and the **Agent** (a command). **Edit** in that menu changes both lists.
+  - **Topics and agents are yours.** They live in `goldware.json` under `office.topics` and `office.presets`, which `make update` never touches. Defaults: Home (`~`) and Hermes, Claude Code, Codex (an agent whose program is not installed shows greyed out).
+  - **Your own look**: put CSS in `custom/office.css` and it loads after the built-in Office styles. The `custom/` folder is git-ignored, so updates keep it. See [docs/CUSTOMIZING.md](docs/CUSTOMIZING.md).
 - **Dashboard**: a local page at http://127.0.0.1:4188 that you customize by asking your AI agent.
 
 ## What you need
@@ -164,7 +167,7 @@ make doctor
 
 ## Privacy
 
-Nothing leaves your Mac. Speech, language models, camera frames, tasks, and notes are all processed and stored locally. The plan usage card reads local CLI credentials only to show your own limits. The Office tab only types into a terminal when you press Send, Assign or Talk, and only into a terminal that belongs to an agent it found; the server refuses those requests from any other web page.
+Nothing leaves your Mac. Speech, language models, camera frames, tasks, and notes are all processed and stored locally. The plan usage card reads local CLI credentials only to show your own limits. The Office tab only types into a terminal when you press Send or Assign, and only into a terminal that belongs to an agent it found. New agent opens a window running a command you wrote yourself in Edit, from `goldware.json` on your Mac; the page only sends the ids of your topic and agent, never a folder or command. The server refuses all of these requests from any other web page.
 
 ## Vision and voice shortcuts
 

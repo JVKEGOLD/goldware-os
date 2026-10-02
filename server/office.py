@@ -55,8 +55,9 @@ ACTIVITIES = {
     "asking": ["clarify"],
 }
 
-NAMES = ("Ada Bo Cleo Dex Echo Finn Gus Hana Iggy Juno Kai Lumi Milo Nova Otto Pip Quinn Remy Sage "
-         "Tao Uma Vik Wren Yuki Zed Bix Coco Dash Ezra Fig Gigi Hux Ivy Jett Kit Lark Moss Nell Opal Pax").split()
+# The cast of the Office (dashboard/office-cast.js), in the order agents sit down. Past the list
+# an agent is "Agent N" and is drawn as a plain blob.
+NAMES = "Bolt Mocha Pixel Latte Sprout Ember Beans Frost Wisp Biscuit".split()
 
 
 class TerminalError(Exception):
@@ -272,6 +273,13 @@ def closing(text):
 STATUSES = {"completed": "done", "in_progress": "doing", "pending": "todo", "cancelled": "dropped"}
 
 
+def ask_line(text):
+    """Your last message as one line: the /queue prefix and markdown stripped, capped at 220."""
+    t = re.sub(r"\*\*|__|`", "", re.sub(r"^\s*/queue\s+", "", str(text or "")))
+    t = one_line(t, 220)
+    return t or None
+
+
 def parse_todos(raw):
     try:
         data = json.loads(raw) if isinstance(raw, str) else raw
@@ -333,6 +341,12 @@ def hermes_agents(home, by_pid, now):
                  row_number() OVER (PARTITION BY session_id ORDER BY id DESC) AS rn
           FROM messages WHERE session_id IN (%s) AND role = 'assistant' AND active = 1
                 AND length(trim(coalesce(content, ''))) > 0) WHERE rn = 1""" % q, ids)}
+    asks = {r["session_id"]: ask_line(r["content"]) for r in sqlite_rows(db, """
+        SELECT session_id, content FROM (
+          SELECT session_id, substr(content, 1, 600) AS content,
+                 row_number() OVER (PARTITION BY session_id ORDER BY id DESC) AS rn
+          FROM messages WHERE session_id IN (%s) AND role = 'user' AND active = 1
+                AND length(trim(coalesce(content, ''))) > 0) WHERE rn = 1""" % q, ids)}
     todo_lists = {r["session_id"]: parse_todos(r["content"]) for r in sqlite_rows(db, """
         SELECT session_id, content FROM (
           SELECT session_id, substr(content, 1, 12000) AS content,
@@ -374,7 +388,7 @@ def hermes_agents(home, by_pid, now):
             "started_at": float(s.get("started_at") or entry.get("started_at") or 0),
             "last_at": float(l["timestamp"]) if l and l.get("timestamp") is not None else float(entry.get("started_at") or 0),
             "tty": None if proc["tty"] == "??" else proc["tty"], "cwd": s.get("cwd"), "pid": proc["pid"],
-            "helpers": helpers, "todos": todo_lists.get(sid, []), "closing": replies.get(sid)})
+            "helpers": helpers, "todos": todo_lists.get(sid, []), "closing": replies.get(sid), "ask": asks.get(sid)})
     out.sort(key=lambda a: a["started_at"])
     return out
 
@@ -609,7 +623,9 @@ def cli_agents(procs, now, chome=None, cwd_fn=cwd_of):
             "started_at": now - p["seconds"], "last_at": now if busy else None, "tty": p["tty"], "cwd": d,
             "pid": p["pid"], "helpers": helpers.get(p["pid"], []),
             "todos": claude_todo_list(lines) if lines else [],
-            "closing": closing(claude_last_text(lines)) if lines else None})
+            "closing": closing(claude_last_text(lines)) if lines else None,
+            "ask": ask_line(next((r["text"] for r in reversed(claude_chat_rows(lines)) if r["role"] == "user"), "")) if lines else None,
+            "transcript": sessions[p["pid"]] + ".jsonl" if p["pid"] in sessions else None})
     return out
 
 
@@ -647,7 +663,7 @@ def gateway_running(procs):
 
 def empty_snapshot(now):
     return {"generated_at": datetime.datetime.utcfromtimestamp(now).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "agents": [], "gateway": {"running": False}, "rack": {"ollama": False, "units": []}}
+            "home": os.path.expanduser("~"), "agents": [], "gateway": {"running": False}, "rack": {"ollama": False, "units": []}}
 
 
 def snapshot(now=None, home=None, ps_text=None, chome=None, ollama_url=None, data_root=None, cwd_fn=cwd_of,
@@ -663,7 +679,7 @@ def snapshot(now=None, home=None, ps_text=None, chome=None, ollama_url=None, dat
         for a in agents:
             a["name"] = names.get(a["id"])
     return {"generated_at": datetime.datetime.utcfromtimestamp(now).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "agents": agents,
+            "home": os.path.expanduser("~"), "agents": agents,
             "gateway": {"running": bool(gateway and agents and gateway_running(procs))},
             "rack": rack(procs, ollama_url)}
 
@@ -849,7 +865,7 @@ def osa(name, script, *args, timeout=OSA_TIMEOUT):
     argv = ["osascript", "-e", script] + list(args)
     if dry_run():
         DRY_LOG.append((name, argv))
-        canned = {"screen": "dry run screen\n", "send": "sent\n", "focus": "ok\n"}
+        canned = {"screen": "dry run screen\n", "send": "sent\n", "focus": "ok\n", "new": "opened\n"}
         return canned.get(name, ""), "", 0
     try:
         proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -959,6 +975,123 @@ def screen_of_agent(agent_id, **kw):
     return {"id": agent["id"], "tty": agent["tty"], "activity": agent["activity"], "screen": text}
 
 
+# ---------- the Chat view: the latest turns in plain words ----------
+
+CHAT_VERBS = {
+    "typing": ("Ran", "command", "commands"), "writing": ("Edited", "file", "files"),
+    "reading": ("Read or searched", "time", "times"), "browsing": ("Used the web", "time", "times"),
+    "looking": ("Looked at", "image", "images"), "delegating": ("Sent out", "helper", "helpers"),
+    "working": ("Used", "other tool", "other tools"),
+}
+PLAN_TOOLS = ("todo_list", "TodoWrite")
+
+
+def chat_kind(name):
+    if name in PLAN_TOOLS:
+        return "planning"
+    for act, names in CLAUDE_TOOLS.items():
+        if name in names:
+            return act
+    return tool_activity(name)
+
+
+def tools_summary(names):
+    counts = {}
+    for n in names:
+        k = chat_kind(n)
+        if k != "asking":
+            counts[k] = counts.get(k, 0) + 1
+    parts = []
+    for k, c in counts.items():
+        if k == "planning":
+            parts.append("updated its plan")
+            continue
+        verb, one, many = CHAT_VERBS.get(k, CHAT_VERBS["working"])
+        parts.append("%s %d %s" % (verb.lower(), c, one if c == 1 else many))
+    if not parts:
+        return None
+    text = ", ".join(parts)
+    return text[0].upper() + text[1:]
+
+
+def chat_turns(rows, limit=16):
+    """rows: [{role: user|assistant, text, tools: [names]}], oldest first.
+    Returns the last `limit` of {kind: you|did|said, text}; tool calls fold into one "did" line."""
+    out, pending = [], []
+
+    def flush():
+        line = tools_summary(pending)
+        if line:
+            out.append({"kind": "did", "text": line})
+        del pending[:]
+
+    for r in rows:
+        text = str(r.get("text") or "").strip()
+        if r.get("role") == "user":
+            flush()
+            if text:
+                out.append({"kind": "you", "text": text[:1500]})
+        else:
+            pending.extend(r.get("tools") or [])
+            if not text:
+                continue
+            flush()
+            out.append({"kind": "said", "text": text[:6000]})
+    flush()
+    return out[-limit:]
+
+
+def hermes_chat_rows(sid, home=None):
+    db = os.path.join(home or hermes_home(), "state.db")
+    rows = sqlite_rows(db, """
+        SELECT role, substr(coalesce(content, ''), 1, 6000) AS content, substr(coalesce(tool_calls, ''), 1, 4000) AS tool_calls
+        FROM messages WHERE session_id = ? AND active = 1 AND role IN ('user', 'assistant') ORDER BY id DESC LIMIT 80""", (sid,))
+    return [{"role": r["role"], "text": r["content"],
+             "tools": re.findall(r'(?<!\\)"name":\s*"([^"\\]+)"', r["tool_calls"] or "")} for r in reversed(rows)]
+
+
+def claude_chat_rows(lines):
+    out = []
+    for l in lines:
+        try:
+            e = json.loads(l)
+        except ValueError:
+            continue
+        if not isinstance(e, dict) or e.get("type") not in ("user", "assistant"):
+            continue
+        content = (e.get("message") or {}).get("content")
+        if e["type"] == "user":
+            if isinstance(content, str):
+                text = content
+            else:
+                text = "\n".join(c.get("text", "") for c in (content or []) if isinstance(c, dict) and c.get("type") == "text")
+            if not text.strip() or text.startswith(("<command-", "<local-command", "Caveat:")):
+                continue
+            out.append({"role": "user", "text": text})
+        else:
+            parts = [c for c in (content if isinstance(content, list) else []) if isinstance(c, dict)]
+            out.append({"role": "assistant",
+                        "text": "\n\n".join(c.get("text", "") for c in parts if c.get("type") == "text"),
+                        "tools": [c.get("name") for c in parts if c.get("type") == "tool_use"]})
+    return out
+
+
+def chat_view(agent, home=None):
+    """The turns for one agent, or None when it keeps no readable transcript (Codex)."""
+    if agent.get("kind") == "hermes":
+        return chat_turns(hermes_chat_rows(agent["id"], home))
+    if agent.get("kind") == "claude" and agent.get("transcript"):
+        return chat_turns(claude_chat_rows(tail_lines(agent["transcript"], 400000)))
+    return None
+
+
+def chat_of_agent(agent_id, **kw):
+    agent = find_agent(agent_id, **kw)
+    if not agent:
+        raise OfficeError("That agent is not at a terminal any more.", 404)
+    return {"id": agent["id"], "turns": chat_view(agent, kw.get("home"))}
+
+
 # ---------- the board: names, project, tasks, ideas, the lab ----------
 
 BOARD_MAX = {"tasks": 200, "ideas": 40, "suggestions": 30}
@@ -1006,28 +1139,28 @@ def clean(text, max_len):
 
 
 def name_agents(data_root, ids):
-    """Every agent gets a short first name the moment it sits down, kept while it stays. A name freed
-    by an agent that left goes to the back of the line so it is not reused at once."""
+    """Every agent gets a name from the cast the moment it sits down, kept while it stays. A name
+    freed by an agent that left goes to the next one that sits down."""
     with BOARD_LOCK:
         before = load_board(data_root)
         s = json.loads(json.dumps(before))
+        s.pop("retired", None)
         names = s.setdefault("names", {})
-        retired = s.setdefault("retired", [])
         for i in list(names):
-            if i not in ids:
-                retired.append(names.pop(i))
-        retired[:] = list(dict.fromkeys(retired))
+            if i not in ids or not (names[i] in NAMES or str(names[i]).startswith("Agent ")):
+                names.pop(i)
         taken = list(names.values())
         for i in ids:
             if i in names:
                 continue
-            pick = next((n for n in NAMES if n not in taken and n not in retired), None) \
-                or next((n for n in retired if n not in taken), None) or "Agent %d" % (len(taken) + 1)
-            if pick in retired:
-                retired.remove(pick)
+            pick = next((n for n in NAMES if n not in taken), None)
+            if pick is None:
+                k = len(NAMES) + 1
+                while "Agent %d" % k in taken:
+                    k += 1
+                pick = "Agent %d" % k
             names[i] = pick
             taken.append(pick)
-        s["retired"] = retired[-len(NAMES):]
         if s != before and (ids or before.get("names")):
             try:
                 save_board(data_root, s)
@@ -1228,6 +1361,9 @@ def board_action(data_root, body, **kw):
             result = {"id": "t" + uuid.uuid4().hex[:10], "title": title, "notes": clean(body.get("notes"), 600),
                       "status": "todo", "agent": None, "agent_title": None,
                       "from": frm if isinstance(frm, str) and len(frm) <= 40 else None, "created_at": now}
+            group = clean(body.get("group"), 400)
+            if group:
+                result["group"] = group
             s["tasks"].append(result)
             save_board(data_root, s)
     elif action == "assign":
@@ -1267,16 +1403,24 @@ def board_action(data_root, body, **kw):
     return {"ok": True, "result": result, "board": board_view(data_root)}
 
 
+def table_agents(agents, task):
+    """The agents at a task's table. Desks group by working folder; a task with no table belongs to
+    the home folder's table (tasks from before the tables)."""
+    home = os.path.expanduser("~")
+    want = task.get("group") or home
+    return [a for a in agents if (a.get("cwd") or home) == want]
+
+
 def _assign(data_root, body, agents=None, sender=None, **kw):
     s = load_board(data_root)
     task = _find(s, "tasks", body.get("id"))
     if agents is None:
         agents = snapshot(**kw)["agents"]
     want = str(body.get("agent") or "auto")
-    agent = pick_agent(agents, s["tasks"]) if want == "auto" else next(
+    agent = pick_agent(table_agents(agents, task), s["tasks"]) if want == "auto" else next(
         (a for a in agents if a["id"] == want and a.get("tty")), None)
     if not agent:
-        raise OfficeError("Nobody is at a terminal to take it.")
+        raise OfficeError("Nobody at this table is at a terminal to take it." if want == "auto" else "Nobody is at a terminal to take it.")
     line = prepare_text(task_message(task, s["project"]), agent["kind"])
     if not (sender or send_text)(agent["tty"], line):
         raise OfficeError("Its terminal window is closed.")

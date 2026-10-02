@@ -9,3 +9,6 @@ goldware.json.bak
 *.bak
 __pycache__/
 *.pyc
+# Your own Office look (custom/office.css); see custom/README.md. Never touched by updates.
+/custom/*
+!/custom/README.md

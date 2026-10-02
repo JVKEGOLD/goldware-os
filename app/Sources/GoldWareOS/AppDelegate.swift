@@ -206,7 +206,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
         let menu = NSMenu()
-        for (title, tab) in [("Dashboard", "dashboard"), ("Voice", "voice"), ("Vision", "vision"), ("Office", "office")] {
+        for (title, tab) in [("Office", "office"), ("Dashboard", "dashboard"), ("Voice", "voice"), ("Vision", "vision")] {
             let mi = item(title, #selector(openTab(_:)))
             mi.representedObject = tab
             menu.addItem(mi)
@@ -271,8 +271,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let back = item("Back", #selector(dashboardBack), key: "[")
         let forward = item("Forward", #selector(dashboardForward), key: "]")
         var tabs: [NSMenuItem] = []
-        for (i, (title, tab)) in [("Dashboard", "dashboard"), ("Voice", "voice"), ("Vision", "vision"), ("Office", "office")].enumerated() {
-            let mi = item(title, #selector(openTab(_:)), key: "\(i + 1)")   // Cmd+1 to 4
+        for (i, (title, tab)) in [("Office", "office"), ("Dashboard", "dashboard"), ("Voice", "voice"), ("Vision", "vision")].enumerated() {
+            let mi = item(title, #selector(openTab(_:)), key: "\(i + 1)")   // Cmd+1 to 4, in the order of the tab bar (Office first)
             mi.representedObject = tab
             tabs.append(mi)
         }

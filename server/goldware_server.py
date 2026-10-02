@@ -18,6 +18,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import office  # noqa: E402  (the Office tab: agents at desks, console, board, usage)
+import office_launch  # noqa: E402  (the New agent button and its topics and presets)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.environ.get("GOLDWARE_ROOT") or os.path.dirname(HERE))
@@ -116,6 +117,9 @@ def validate_config(cfg):
         ka = models.get("keepAlive")
         if ka is not None and (not isinstance(ka, str) or not re.match(r"^-?[0-9]+[smh]?$", ka)):
             return "models.keepAlive must be text like \"5m\", \"0\" or \"-1\"."
+    oerr = office_launch.validate_shape(cfg.get("office"))
+    if oerr:
+        return oerr
     dash = cfg.get("dashboard")
     if dash is not None:
         if not isinstance(dash, dict):
@@ -590,12 +594,25 @@ class Handler(BaseHTTPRequestHandler):
         ref = self.headers.get("Referer")
         return bool(ref) and any(ref == o or ref.startswith(o + "/") for o in own)
 
+    def terminal_profile(self):
+        try:
+            cfg, _source, _error = load_config()
+            prof = (cfg.get("letsWork") or {}).get("profile")
+            return prof if isinstance(prof, str) and prof else None
+        except Exception:
+            return None
+
     def office_get(self, path, query):
         """Read-only Office endpoints. Nothing here types into a terminal."""
         q = lambda k: (query.get(k) or [""])[0]
         try:
             if path == "/api/office/agents":
-                return self.send_json(200, office.snapshot(data_root=DATA_ROOT))
+                snap = office.snapshot(data_root=DATA_ROOT)
+                # Table names: a table in one of your topic folders is named after the topic.
+                topics, _presets = office_launch.effective(default_path(), user_path())
+                snap["topics"] = [{"label": str(t.get("label", "")), "path": os.path.realpath(os.path.expanduser(str(t.get("dir", ""))))}
+                                  for t in topics]
+                return self.send_json(200, snap)
             if path == "/api/office/screen":
                 return self.send_json(200, office.screen_of_agent(q("id")))
             if path == "/api/office/helper":
@@ -607,6 +624,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(200, office.board_view(DATA_ROOT))
             if path == "/api/office/usage":
                 return self.send_json(200, office.usage_snapshot())
+            if path == "/api/office/chat":
+                return self.send_json(200, office.chat_of_agent(q("id")))
+            if path == "/api/office/settings":
+                return self.send_json(200, office_launch.view(default_path(), user_path()))
             return self.err(404, "Not found.")
         except office.OfficeError as e:
             return self.err(e.status, str(e))
@@ -623,6 +644,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(200, office.focus_agent(body))
             if path == "/api/office/board":
                 return self.send_json(200, office.board_action(DATA_ROOT, body))
+            if path == "/api/office/new":
+                return self.send_json(200, office_launch.new_agent(body, default_path(), user_path(), self.terminal_profile()))
+            if path == "/api/office/settings":
+                with LOCK:
+                    return self.send_json(200, office_launch.save(body, default_path(), user_path()))
             return self.err(404, "Not found.")
         except office.OfficeError as e:
             return self.err(e.status, str(e))
@@ -661,6 +687,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self.office_get(path, parse_qs(urlparse(self.path).query))
             if path.startswith("/api/"):
                 return self.err(404, "Not found.")
+            if path == "/custom/office.css":
+                # Your own look for the Office. Lives in custom/ (git-ignored), so updates keep it.
+                full = safe_join(os.path.join(ROOT, "custom"), "office.css")
+                if full is None or not os.path.isfile(full):
+                    return self.send(404, b"", CONTENT_TYPES[".css"])
+                with open(full, "rb") as f:
+                    return self.send(200, f.read(), CONTENT_TYPES[".css"], True)
             if path.startswith("/dashboard/"):
                 return self.serve_file(os.path.join(CODE_ROOT, "dashboard"), path[len("/dashboard/"):])
             if path.startswith("/fonts/"):
