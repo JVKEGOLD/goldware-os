@@ -680,9 +680,15 @@ def snapshot(now=None, home=None, ps_text=None, chome=None, ollama_url=None, dat
     by_pid = {p["pid"]: p for p in procs}
     agents = hermes_agents(home or hermes_home(), by_pid, now) + cli_agents(procs, now, chome, cwd_fn)
     if data_root:
-        names = name_agents(data_root, [a["id"] for a in agents])
+        # The boss (server/office_boss.py) is the Hermes chat working in data/boss: it sits at the
+        # front desk, not at a desk, and does not take a name from the cast.
+        boss_home = os.path.realpath(os.path.join(data_root, "boss"))
         for a in agents:
-            a["name"] = names.get(a["id"])
+            if a["kind"] == "hermes" and a.get("cwd") and os.path.realpath(a["cwd"]) == boss_home:
+                a["boss"] = True
+        names = name_agents(data_root, [a["id"] for a in agents if not a.get("boss")])
+        for a in agents:
+            a["name"] = "Boss" if a.get("boss") else names.get(a["id"])
     return {"generated_at": datetime.datetime.utcfromtimestamp(now).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "home": os.path.expanduser("~"), "agents": agents,
             "gateway": {"running": bool(gateway and agents and gateway_running(procs))},

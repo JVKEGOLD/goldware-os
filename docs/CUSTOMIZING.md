@@ -110,6 +110,28 @@ The Office tab shows one desk per agent running in a terminal on this Mac. Every
 
 Each agent gets a character from the cast (Bolt, Mocha, Pixel, Latte, Sprout, Ember, Beans, Frost, Wisp, Biscuit) and keeps it while it stays; past ten it is "Agent 11" and so on. Agents group into tables by the folder they work in, and each table has a whiteboard for its tasks. Set `GOLDWARE_HERMES_HOME`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, or `GOLDWARE_OLLAMA_URL` before starting the server if your tools keep their files elsewhere. The board (tasks, ideas, lab) is saved in `data/office-board.json`. Plan usage uses the sign-ins Claude Code and Codex already keep on this Mac and never refreshes them. Talking to a terminal works with iTerm and Terminal and needs the Automation permission the first time.
 
+## The boss
+
+The boss at the front desk can run the other agents for you. It only acts when asked; nothing runs on a timer.
+
+- **Ask it**: click the front desk, type what you want ("put two agents on the Sunrise site, one for copy and one for the form"), and press Ask. The first request opens the boss: a Hermes chat in its own terminal, working in `data/boss`. After that, clicking the front desk opens the boss's console, like any agent's, and you type to it there. Dismiss it like any agent; the next request opens a new one.
+- **Report to it**: the **Report to boss** button on any agent's console sends that agent to the boss, which reads its chat and decides the next step. Or tell the agent "report to the boss": setup installs a small Hermes skill (`~/.hermes/skills/goldware/goldware-office`) so it runs `goldware-office report "..."` itself. A report starts the boss if it is not in.
+- **What it can do**: the boss uses the `goldware-office` command (setup links it into `~/.local/bin`; it is `scripts/office`). It only calls this server's Office endpoints, so it can do what the Office page can and nothing more:
+
+  | Command | What it does |
+  |---|---|
+  | `goldware-office agents` | every agent: id, name, kind, status, title, folder |
+  | `goldware-office chat ID` / `screen ID` | read an agent's conversation or terminal |
+  | `goldware-office send ID "text"` | type one line to an agent |
+  | `goldware-office presets` | your New agent types and topics |
+  | `goldware-office new --type T --topic P "task"` | open a new agent and hand it the task |
+  | `goldware-office dismiss ID` | close an idle agent (refused while it works) |
+  | `goldware-office report "note"` | report the agent you are in to the boss |
+  | `goldware-office boss "text"` | ask the boss from any terminal |
+
+- Its brief is `data/boss/AGENTS.md`, rewritten each time it starts: act only on your requests and on reports, read before acting, start at most three agents without asking, never dismiss unless you said so, and end each turn with a short summary.
+- It runs on your Hermes default model. It needs Hermes; without it the front desk says so.
+
 ## New agent, topics and agent presets
 
 The Office's **New agent** button opens a terminal window that runs `cd <folder> && <command>`. The arrow beside it picks which topic (folder) and which agent (command). Choose **Edit** there to add, rename, remove or reorder them (each topic has a **Choose…** button that opens a Finder window, so you pick the folder instead of typing its path); Save writes only `office.topics` and `office.presets` into `goldware.json` and keeps everything else. You can also edit the file by hand:
@@ -171,7 +193,7 @@ OfficeCast.customize({
 |---|---|
 | Your config, including your New agent topics and agents | `goldware.json` (repo root, gitignored) |
 | Your Office CSS and character looks | `custom/office.css`, `custom/office-cast.js` (gitignored) |
-| Tasks, notes, drafts | `data/` in the repo root (gitignored). `GOLDWARE_DATA_ROOT` overrides it |
+| Tasks, notes, drafts, the boss's folder (`data/boss`) | `data/` in the repo root (gitignored). `GOLDWARE_DATA_ROOT` overrides it |
 | Models, app data, history | `~/Library/Application Support/GoldWare OS/` (`GOLDWARE_DATA` overrides it) |
 | Whisper model | `~/Library/Application Support/GoldWare OS/models/` |
 | Language models | managed by Ollama (`ollama list`) |

@@ -1223,11 +1223,12 @@
   let lastPlateKey = '';
   function placeDesks(spots, agents) {
     const mins = Math.floor(Date.now() / 60000);
-    const key = JSON.stringify([W, H, mins, selected, helperSel, [...atBoss], [...trips.keys()], [...leaving.keys()], tables, board, running('brainstorm'), running('research'), spots.length, bossState(agents), agents.map(a => [a.id, a.name, a.title, a.activity, a.bed, a.model, a.color, a.tty, a.closing && a.closing.text, (a.helpers || []).map(h => h.id + h.activity)])]);
+    const key = JSON.stringify([W, H, mins, selected, helperSel, [...atBoss], [...trips.keys()], [...leaving.keys()], tables, board, running('brainstorm'), running('research'), spots.length, bossState(agents), data && data.boss && [data.boss.id, data.boss.working, data.boss.activity], agents.map(a => [a.id, a.name, a.title, a.activity, a.bed, a.model, a.color, a.tty, a.closing && a.closing.text, (a.helpers || []).map(h => h.id + h.activity)])]);
     if (key === lastPlateKey) return;
     lastPlateKey = key;
     const st = bossState(agents);
-    const bossWords = { your_turn: 'Someone is waiting on you', watching: `Watching ${agents.length} agent${agents.length === 1 ? '' : 's'}`, asleep: 'Asleep', idle: agents.length ? 'Everyone is resting' : 'Waiting for work' }[st];
+    const bossAg = data && data.boss;
+    const bossWords = bossAg && (bossAg.working || BUSY.has(bossAg.activity)) ? 'Orchestrating' : { your_turn: 'Someone is waiting on you', watching: `Watching ${agents.length} agent${agents.length === 1 ? '' : 's'}`, asleep: 'Asleep', idle: agents.length ? 'Everyone is resting' : 'Waiting for work' }[st];
     const aLeft = (bossSpot.x / W * 100).toFixed(3);
     const bossHTML = `<button class="office-hit${selected === 'boss' ? ' on' : ''}" data-id="boss" style="left:${aLeft}%;top:${((bossSpot.y - 44) / H * 100).toFixed(3)}%;height:${(70 / H * 100).toFixed(3)}%;width:${(104 / W * 100).toFixed(3)}%" aria-label="The boss, ${esc(bossWords)}"></button>
       <div class="office-plate boss ${st === 'your_turn' ? 'you' : st === 'watching' ? 'busy' : st}" data-id="boss" style="left:${aLeft}%;top:${((bossSpot.y + 27) / H * 100).toFixed(3)}%"><div class="op-top"><b>Boss</b>${goBtn('boss')}</div><span><i></i>${esc(bossWords)}</span></div>`;
@@ -1262,6 +1263,7 @@
   }
 
   function renderCard() {
+    if (selected === 'boss' && data && data.boss && data.boss.tty) return renderConsole(data.boss);
     if (selected === 'boss' && data) {
       const ag = data.agents || [], busy = ag.filter(x => BUSY.has(x.activity)).length, you = ag.filter(x => x.activity === 'your_turn');
       const rows = [['Reporting to you', `${ag.length} agent${ag.length === 1 ? '' : 's'}`], ['Working', String(busy)],
@@ -1269,8 +1271,16 @@
         ['Hermes gateway', (data.gateway || {}).running ? 'On' : 'Off']];
       closeConsole();
       card.hidden = false;
-      card.innerHTML = `<div class="office-card-head"><span class="office-card-kind">The front desk</span><button class="office-card-close" aria-label="Close">✕</button></div>
-        <h3>You, the boss</h3><dl>${rows.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl>`;
+      // Built once, then only the numbers change, so a poll never wipes what you are typing to the boss.
+      if (!card.querySelector('.ob-ask')) {
+        card.innerHTML = `<div class="office-card-head"><span class="office-card-kind">The front desk</span><button class="office-card-close" aria-label="Close">✕</button></div>
+        <h3>You, the boss</h3><dl></dl>
+        <form class="ob-ask" autocomplete="off"><label for="ob-ask-text">Ask the boss to run the office</label>
+          <textarea id="ob-ask-text" rows="3" maxlength="1800" placeholder="Start two agents on the Sunrise site, one for copy and one for the form"></textarea>
+          <div class="ob-ask-row"><small>Opens a Hermes boss at the front desk. It acts only when you ask, or when an agent reports to it.</small><button type="submit" class="oc-btn oc-go">Ask</button></div>
+          <p class="ob-ask-msg" role="status"></p></form>`;
+      }
+      card.querySelector('dl').innerHTML = rows.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('');
       return;
     }
     const a = data && (data.agents || []).find(x => x.id === selected);
@@ -1353,6 +1363,7 @@
     const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), ms);
     try { return await fetch(url, { ...opts, signal: ctl.signal }); } finally { clearTimeout(t); }
   }
+  const agentById = id => data && ((data.boss && data.boss.id === id) ? data.boss : (data.agents || []).find(x => x.id === id));
   const stateWords = a => a.activity === 'your_turn' ? 'Waiting on you' : BUSY.has(a.activity) ? (WORDS[a.activity] || 'Working') : (WORDS[a.activity] || a.activity);
 
   // The agent left (its terminal closed or the chat ended): keep the last screen, say so, stop polling.
@@ -1403,6 +1414,7 @@
             <div class="oc-who-text"><div class="oc-name-row"><h3 class="oc-title"></h3><span class="oc-state"><i></i><b></b></span></div><p class="oc-sub"><span class="oc-full-title"></span> <span class="oc-kind-text"></span></p></div>
           </div>
           <div class="oc-tools">
+            <button class="oc-btn oc-report" title="Hand this agent to the boss, who decides the next step">Report to boss</button>
             <button class="oc-btn oc-jump" title="Bring its iTerm tab to the front">Open in iTerm</button>
             <button class="oc-btn oc-dismiss" title="Ask if there is anything else, then close its terminal">Dismiss</button>
             <button class="oc-btn oc-close" aria-label="Close">✕</button>
@@ -1463,6 +1475,7 @@
       : `<p class="oc-empty">No plan yet. It shows up here when ${esc(nameOf(a))} lists its steps.</p>`;
     setOcView(ocView);
     paintDismiss();
+    $('.oc-report').hidden = !!a.boss;
     const plans = ((usage && usage.plans) || []).filter(p => p.top != null);
     $('.oc-usage').innerHTML = plans.map(p => `<div class="${p.top >= 90 ? 'hot' : ''}"><b>${esc(p.name)}</b><span>${Math.round(p.top)}%</span><em><i style="width:${Math.min(100, p.top)}%"></i></em></div>`).join('');
     $('.oc-state').className = 'oc-state ' + state;
@@ -1496,7 +1509,7 @@
       if (!res.ok) { flash(body.error || 'Its screen could not be read just now.', true); return; }
       if (body.screen === lastScreen) return;
       lastScreen = body.screen;
-      const ag = data && data.agents.find(x => x.id === id);
+      const ag = agentById(id);
       pre.innerHTML = paint(body.screen, ag && ag.closing && ag.closing.text);
       if (pinned) pre.scrollTop = pre.scrollHeight;
     } catch (e) {
@@ -1591,7 +1604,7 @@
   }
   async function readChat() {
     if (!consoleFor || chatBusy || ocView !== 'chat') return;
-    const id = consoleFor, a = data && data.agents.find(x => x.id === id);
+    const id = consoleFor, a = agentById(id);
     if (demo) { renderChat([{ kind: 'you', text: 'Add the referral field to the waitlist form.' }, { kind: 'did', text: 'Read or searched 4 times, edited 2 files, ran 3 commands' },
       { kind: 'said', text: (a && a.closing && a.closing.text) || 'Done: the **waitlist form** now has a referral field.\n\n- Saved in `forms/waitlist.tsx`\n- Tests pass' }]); return; }
     if (a && a.kind === 'codex') { if (lastScreen) renderChat(null, lastScreen); return; }
@@ -1609,6 +1622,7 @@
     if (e.target.closest('.oc-close')) { selected = null; lastPlateKey = ''; renderCard(); draw(); return; }
     if (e.target.closest('.oc-latest')) { const pre = consoleEl.querySelector('.oc-screen'); pinned = true; pre.scrollTop = pre.scrollHeight; e.target.hidden = true; return; }
     if (e.target.closest('.oc-dismiss')) { dismissAgent(); return; }
+    if (e.target.closest('.oc-report')) { reportToBoss(e.target.closest('.oc-report')); return; }
     if (e.target.closest('.oc-jump')) {
       if (demo) { flash('Demo: nothing to open.'); return; }
       const r = await fetchT('/api/office/focus', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: consoleFor }) });
@@ -1648,7 +1662,22 @@
     const hint = consoleEl.querySelector('.oc-hint');
     if (!hint) return;
     hint.textContent = text; hint.classList.toggle('bad', !!bad); hint.classList.add('flash');
-    setTimeout(() => { hint.classList.remove('flash', 'bad'); const a = data && data.agents.find(x => x.id === consoleFor); if (a) renderConsole(a); }, 3200);
+    setTimeout(() => { hint.classList.remove('flash', 'bad'); const a = agentById(consoleFor); if (a) renderConsole(a); }, 3200);
+  }
+
+  // Report to boss: the boss (started if needed) reads this agent's chat and takes it from there.
+  async function reportToBoss(b) {
+    if (b.disabled || !consoleFor) return;
+    b.disabled = true;
+    try {
+      if (demo) { flash('Demo: nothing was sent.'); return; }
+      const res = await fetchT('/api/office/report', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: consoleFor }) }, 20000);
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || 'Not reported.');
+      flash(body.started ? 'Reported. The boss is sitting down at the front desk to take it from here.' : 'Reported to the boss.');
+      setTimeout(poll, 1500);
+    } catch (err) { flash(err.name === 'AbortError' ? 'The terminal did not answer.' : err.message, true); }
+    finally { setTimeout(() => { b.disabled = false; }, 2000); }
   }
 
   // Dismiss, two steps: ask "anything else?" in its terminal, read the reply, then close the terminal.
@@ -1670,7 +1699,7 @@
   // One flow for the console and the Floor list. Step 1 asks; step 2 checks it is not working, walks
   // it out of the room, then closes its terminal.
   async function dismissFlow(id, say) {
-    const a = data && data.agents.find(x => x.id === id), who = a ? nameOf(a) : 'It';
+    const a = agentById(id), who = a ? nameOf(a) : 'It';
     if (!dismissAsked.has(id)) {
       const r = await dismissPost(id, 'ask');
       if (!r.ok) return say(r.body.error || 'Not asked.', true, r.status);
@@ -2294,6 +2323,10 @@
       }
       // Only a real question walks up to the boss; a finished agent just sits idle at its desk.
       // A question keeps its place in line until it is answered, however long that takes.
+      // The boss (a Hermes chat at the front desk, see server/office_boss.py) is not at a desk.
+      next.boss = (next.agents || []).find(a => a.boss) || null;
+      next.agents = (next.agents || []).filter(a => !a.boss);
+      if (next.boss) next.boss.color = '#d9a441';
       (next.agents || []).forEach(a => { a.activity = lineActivity(a); });
       next.agents = seatOrder(next.agents || []);
       [...leaving.keys()].forEach(id => { if (!next.agents.some(a => a.id === id)) leaving.delete(id); });
@@ -2354,6 +2387,26 @@
   desksLayer.addEventListener('pointerdown', e => { if (e.button === 0 && e.isPrimary) { e.preventDefault(); pickTarget(e); } });
   desksLayer.addEventListener('click', e => { if (e.detail === 0) pickTarget(e); });
   card.addEventListener('click', e => { if (e.target.closest('.office-card-close')) { selected = null; lastPlateKey = ''; renderCard(); draw(); } });
+  // Ask the boss: the first request starts it (a Hermes chat in its own terminal); later ones go to its console.
+  card.addEventListener('keydown', e => { if (e.target.id === 'ob-ask-text' && e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); e.target.form.requestSubmit(); } });
+  card.addEventListener('submit', async e => {
+    if (!e.target.classList.contains('ob-ask')) return;
+    e.preventDefault();
+    const box = e.target.querySelector('textarea'), go = e.target.querySelector('button'), msg = e.target.querySelector('.ob-ask-msg');
+    const text = box.value.trim();
+    if (!text || go.disabled) return;
+    go.disabled = true; msg.classList.remove('bad'); msg.textContent = 'Asking…';
+    try {
+      if (demo) { msg.textContent = 'Demo: nothing was sent.'; return; }
+      const res = await fetchT('/api/office/boss', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) }, 20000);
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || 'The boss did not get it.');
+      box.value = '';
+      msg.textContent = body.started ? 'The boss is sitting down at the front desk. Its console opens here when it is in.' : 'Sent to the boss.';
+      setTimeout(poll, 1500);
+    } catch (err) { msg.textContent = err.name === 'AbortError' ? 'The terminal did not answer.' : err.message; msg.classList.add('bad'); }
+    finally { setTimeout(() => { go.disabled = false; }, 1500); }
+  });
   document.addEventListener('keydown', e => {
     if (!active()) return;
     if (e.key === 'Escape' && !shell.classList.contains('roster-folded')) { setFolded(true); return; }
