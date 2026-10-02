@@ -13,12 +13,17 @@ Safety rules, the same ones the dashboard relies on:
     capped, and one line per 2 seconds is allowed per agent.
   * GOLDWARE_OFFICE_DRY_RUN=1 builds the osascript command and records it in DRY_LOG
     without running it. Tests use only that mode.
+  * Dismiss (close an agent's terminal) acts only on the tty of an agent found in a fresh
+    snapshot, never signals pid 1, this server, its parent or a login process, never runs
+    while the agent works, and in dry-run mode records the planned signals in DISMISS_LOG
+    instead of sending them.
 """
 import datetime
 import json
 import os
 import re
 import shutil
+import signal
 import sqlite3
 import subprocess
 import threading
@@ -865,7 +870,7 @@ def osa(name, script, *args, timeout=OSA_TIMEOUT):
     argv = ["osascript", "-e", script] + list(args)
     if dry_run():
         DRY_LOG.append((name, argv))
-        canned = {"screen": "dry run screen\n", "send": "sent\n", "focus": "ok\n", "new": "opened\n"}
+        canned = {"screen": "dry run screen\n", "send": "sent\n", "focus": "ok\n", "new": "opened\n", "close": "closed\n"}
         return canned.get(name, ""), "", 0
     try:
         proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -954,6 +959,152 @@ def send_to_agent(body, **kw):
     if not send_text(agent["tty"], line):
         raise OfficeError("Its terminal window is closed.", 404)
     return {"ok": True, "sent": line, "queued": line.startswith("/queue ") and bool(agent.get("working"))}
+
+
+# ---------- dismiss: ask, then close the terminal ----------
+
+DISMISS_ASK = "Anything else before we dismiss you? If not, just say you're all set."
+DISMISS_BUSY = ("typing", "writing", "reading", "browsing", "looking", "delegating", "thinking", "working", "helpers")
+DISMISS_CPU = 3.0                # a claude or codex on the tty at this much CPU is working
+DISMISS_GAP = 0.8                # seconds between HUP, TERM and KILL
+
+# Closes only the iTerm session or Terminal window whose tty matches. Never quits the app.
+CLOSE_SCRIPT = """on run argv
+  set target to item 1 of argv
+  if application "iTerm" is running then
+    tell application "iTerm"
+      repeat with w in windows
+        repeat with t in tabs of w
+          repeat with s in sessions of t
+            if tty of s is target then
+              try
+                close s
+              end try
+              return "closed"
+            end if
+          end repeat
+        end repeat
+      end repeat
+    end tell
+  end if
+  if application "Terminal" is running then
+    tell application "Terminal"
+      repeat with w in windows
+        repeat with t in tabs of w
+          if tty of t is target then
+            try
+              close w
+            end try
+            return "closed"
+          end if
+        end repeat
+      end repeat
+    end tell
+  end if
+  return "notfound"
+end run
+"""
+
+DISMISS_LOG = []      # dry run: {"tty", "signal", "pids"} for each planned signal, newest last
+
+
+def tty_procs(tty, ps_text=None):
+    """The processes on one tty, from a fresh `ps` (or the test fixture)."""
+    text = ps_text if ps_text is not None else read_ps()
+    return [p for p in parse_ps(text) if p["tty"] == tty]
+
+
+def dismiss_blocker(agent, ps_rows):
+    """Why this agent cannot be closed right now, or None. ps_rows: 'pcpu comm' lines for its tty."""
+    if not agent or not agent.get("tty"):
+        return "It is not at a terminal."
+    name = agent.get("name") or "It"
+    if agent.get("working") or agent.get("activity") in DISMISS_BUSY:
+        return "%s is working. Wait for it to finish, then close." % name
+    if agent.get("helpers"):
+        return "%s still has helpers out." % name
+    for line in str(ps_rows or "").splitlines():
+        parts = line.strip().split(None, 1)
+        if len(parts) == 2 and re.search(r"(^|/)(claude|codex)$", parts[1]):
+            try:
+                if float(parts[0]) >= DISMISS_CPU:
+                    return "%s is working. Wait for it to finish, then close." % name
+            except ValueError:
+                pass
+    return None
+
+
+def blocker_for(agent, ps_text=None):
+    rows = "\n".join("%s %s" % (p["cpu"], p["name"]) for p in tty_procs(agent.get("tty"), ps_text)) if agent and agent.get("tty") else ""
+    return dismiss_blocker(agent, rows)
+
+
+def signal_targets(tty, ps_text=None):
+    """Pids on the tty that may be signalled: never pid 1, this server, its parent, or a login."""
+    skip = {0, 1, os.getpid(), os.getppid()}
+    return [p["pid"] for p in tty_procs(tty, ps_text) if p["pid"] not in skip and not p["name"].endswith("login")]
+
+
+def dismiss(agent, sleep=time.sleep, **kw):
+    """Hang up what runs on the agent's tty (HUP, TERM, KILL), then close just that session.
+    The agent is checked against a fresh snapshot. Returns True when the session was closed."""
+    tty = agent.get("tty") if isinstance(agent, dict) else None
+    device_path(tty)              # raises unless it looks like ttysNNN
+    fresh = find_agent(agent.get("id"), **kw)
+    if not fresh or fresh.get("tty") != tty:
+        raise OfficeError("That agent is not at a terminal any more.", 404)
+    ps_text = kw.get("ps_text")
+    if os.environ.get("GOLDWARE_OFFICE_PS_FILE") and not dry_run():
+        raise TerminalError("A process fixture is in use, so nothing was closed.")
+    reason = blocker_for(fresh, ps_text)
+    if reason:
+        raise OfficeError(reason, 409)
+    for sig in ("HUP", "TERM", "KILL"):
+        pids = signal_targets(tty, ps_text)
+        if not pids:
+            break
+        if dry_run():
+            DISMISS_LOG.append({"tty": tty, "signal": sig, "pids": pids})
+            continue
+        for pid in pids:
+            try:
+                os.kill(pid, getattr(signal, "SIG" + sig))
+            except (ProcessLookupError, PermissionError):
+                pass
+        sleep(DISMISS_GAP)
+    out, err, code = osa("close", CLOSE_SCRIPT, device_path(tty))
+    if code != 0:
+        raise TerminalError(friendly(err))
+    return out.strip() == "closed"
+
+
+def dismiss_agent(body, **kw):
+    """POST /api/office/dismiss: step check, ask (types the question) or close (re-checks, then closes)."""
+    if not isinstance(body, dict):
+        raise OfficeError("Body must be a JSON object.")
+    agent = find_agent(body.get("id"), **kw)
+    if not agent:
+        raise OfficeError("That agent is not at a terminal any more.", 404)
+    step = body.get("step")
+    if step == "check":
+        reason = blocker_for(agent, kw.get("ps_text"))
+        if reason:
+            raise OfficeError(reason, 409)
+        return {"ok": True}
+    if step == "ask":
+        line = prepare_text(DISMISS_ASK, agent["kind"])
+        if throttle(agent["id"]) > 0:
+            raise OfficeError("One line every 2 seconds.", 429)
+        if not send_text(agent["tty"], line):
+            raise OfficeError("Its terminal window is closed.", 404)
+        return {"ok": True, "asked": True, "queued": line.startswith("/queue ") and bool(agent.get("working"))}
+    if step == "close":
+        reason = blocker_for(agent, kw.get("ps_text"))
+        if reason:
+            raise OfficeError(reason, 409)
+        dismiss(agent, **kw)
+        return {"ok": True, "closed": True}
+    raise OfficeError("Say ask or close.")
 
 
 def focus_agent(body, **kw):

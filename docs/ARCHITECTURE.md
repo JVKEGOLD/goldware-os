@@ -64,6 +64,12 @@ embed (options.url), html (options.html, rendered in a sandboxed iframe srcdoc).
   127.0.0.1 or localhost address, no cross-site Sec-Fetch-Site; otherwise 403):
   POST /api/office/send   {id, text} types one line into that agent's terminal, then Return
   POST /api/office/focus  {id}       brings that agent's terminal tab to the front
+  POST /api/office/dismiss {id, step: check|ask|close} check: 409 with the reason while it works or has helpers out.
+                          ask: types "Anything else before we dismiss you?" through the send path. close: re-checks
+                          (409), sends HUP, TERM, KILL (0.8 s apart) to that tty's processes except login, pid 1,
+                          this server and its parent, then closes only that iTerm session or Terminal window
+                          (the tty is an osascript argument; the app is never quit). Bad step 422, gone 404.
+                          With GOLDWARE_OFFICE_DRY_RUN=1 the signals are only recorded in office.DISMISS_LOG.
   POST /api/office/board  {action: project|add|assign|done|reopen|remove|lab|seen, ...}
   POST /api/office/new    {type, topic} ids only. The server finds the folder and command in goldware.json and opens
                           one terminal window (iTerm, else Terminal) running `cd <shlex-quoted folder> && <command>`.

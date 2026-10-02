@@ -414,7 +414,7 @@ body.office-immersive #tab-office { padding-top: 12px; }
 .oc-ended b { color: var(--red); font-weight: 600; margin-right: 6px; }
 .office-console.ended .oc-ended { display: block; }
 .office-console.ended .oc-screen { opacity: .55; }
-.office-console.ended .oc-send, .office-console.ended .oc-hint, .office-console.ended .oc-jump { display: none; }
+.office-console.ended .oc-send, .office-console.ended .oc-hint, .office-console.ended .oc-jump, .office-console.ended .oc-dismiss { display: none; }
 .oc-state.ended { color: var(--red); border-color: rgba(240,128,107,.35); } .oc-state.ended i { background: var(--red); }
 @media (max-height: 640px) { .oc-head { padding: 10px 14px 6px; } .oc-title { font-size: 19px; margin-top: 4px; } .oc-meta { padding: 0 14px 8px; } .oc-hint { display: none; } }
 @media (max-width: 900px) { .office-console { z-index: 110; width: auto; left: 12px; } .oc-jump { display: none; } }
@@ -601,3 +601,10 @@ button.od-card { cursor: pointer; } button.od-card:hover { border-color: var(--o
 .oe-msg.bad { color: var(--red); }
 .oe-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
 @media (max-width: 640px) { .oe-row { grid-template-columns: minmax(0, 1fr) auto; } .oe-row input[data-f="label"] { grid-column: 1 / -1; } }
+
+/* Dismiss: the console button, and the row under each agent in the Floor list */
+.oc-dismiss.armed { border-color: rgba(240,128,107,.55); color: var(--red); } .oc-dismiss:disabled { opacity: .5; cursor: progress; }
+.or-dismiss-row { display: flex; align-items: center; gap: 8px; padding: 0 10px 8px 30px; }
+.or-dismiss { height: 24px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--office-edge); background: rgba(0,0,0,.2); color: var(--text-dim); font: 600 11px/1 var(--font); cursor: pointer; }
+.or-dismiss:hover { border-color: var(--gold-line); color: var(--text); } .or-dismiss.armed { border-color: rgba(240,128,107,.55); color: var(--red); } .or-dismiss:disabled { opacity: .5; cursor: progress; }
+.or-dismiss-msg { font-size: 11px; color: var(--green); } .or-dismiss-msg.bad { color: var(--red); }

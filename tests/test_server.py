@@ -551,8 +551,13 @@ class TestHardening(ServerCase):
             js = f.read()
         for ep in ("/api/office/agents", "/api/office/screen", "/api/office/send", "/api/office/focus",
                    "/api/office/board", "/api/office/usage", "/api/office/helper", "/api/office/new",
-                   "/api/office/settings", "/api/office/chat"):
+                   "/api/office/settings", "/api/office/chat", "/api/office/dismiss"):
             self.assertIn(ep, js)
+        for needle in ('class="oc-btn oc-dismiss"', "function dismissFlow", "function startLeaving", "function walkOuts",
+                       "'Close terminal'", "data-dismiss", "Dismissed", "has left the office"):
+            self.assertIn(needle, js)
+        with open(os.path.join(REPO, "dashboard", "office.css"), encoding="utf-8") as f:
+            self.assertIn(".or-dismiss-row", f.read())
         # no desk plates: the boss plate is the only one; an agent is the click target at its desk
         self.assertNotIn('class="office-plate open"', js)
         self.assertNotIn("op-top\"><i class=\"op-dot", js)

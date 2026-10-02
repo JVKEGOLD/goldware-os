@@ -695,14 +695,15 @@
     // An agent whose plan is out of usage is not at its desk: it is in a bunk (or walking there).
     tables.forEach(whiteboard);
     spots.forEach((s, i) => {
-      const away = agents[i] && (agents[i].bed || walking.has(agents[i].id) || awayToBoss(agents[i].id));
+      const away = agents[i] && (agents[i].bed || walking.has(agents[i].id) || awayToBoss(agents[i].id) || leaving.has(agents[i].id));
       desk(s, away ? undefined : agents[i], t + i * 3, phase);
     });
     bossDesk(agents, t, phase);
     bossQueue(agents, spots, t);
+    walkOuts(agents, spots, t);
     cafeFront(t);
     bunks(agents, spots, t);
-    night(phase, spots, agents.map(a => (a.bed || awayToBoss(a.id) ? null : a)));
+    night(phase, spots, agents.map(a => (a.bed || awayToBoss(a.id) || leaving.has(a.id) ? null : a)));
     particles(t);
     if (error) { ctx.fillStyle = 'rgba(6,6,8,.55)'; ctx.fillRect(0, 0, W, H); }
     placeDesks(spots, agents);
@@ -952,6 +953,40 @@
       }
     });
   }
+  // Dismissed: the agent gets up and walks out the front of the room (to the aisle left of the front
+  // desk, then down off the floor); the terminal closes once it is out of sight.
+  const EXIT = 30;                  // frames (2.5 s at 12 fps)
+  const leaving = new Map();        // id -> { at: frame, from }
+  function walkOuts(agents, spots, t) {
+    leaving.forEach((lv, id) => {
+      const i = agents.findIndex(a => a.id === id);
+      if (i < 0 || still) return;
+      const a = agents[i], s = spots[i];
+      const p = Math.min(1, (frame - lv.at) / EXIT);
+      if (p >= 1) return;
+      const start = lv.from || (s ? { x: s.x + 2, y: s.y - 16 } : { x: bossSpot.x, y: bossSpot.y });
+      const aisle = { x: Math.max(8, bossSpot.x - 92), y: bossSpot.y - 6 }, out = { x: aisle.x, y: H + 24 };
+      const l1 = Math.max(1, Math.hypot(aisle.x - start.x, aisle.y - start.y)), l2 = out.y - aisle.y, d = p * (l1 + l2);
+      const x = Math.round(d < l1 ? start.x + (aisle.x - start.x) * d / l1 : aisle.x);
+      const y = Math.round(d < l1 ? start.y + (aisle.y - start.y) * d / l1 : aisle.y + (d - l1)) - (frame % 4 < 2 ? 1 : 0);
+      const st = Math.floor(frame / 3) % 2;
+      ctx.globalAlpha = 0.3; ctx.fillStyle = '#000'; ctx.beginPath(); ctx.ellipse(x + 7, y + 17, 8, 2, 0, 0, 7); ctx.fill(); ctx.globalAlpha = 1;
+      if (mon(a, x + 7, y + 16 - st, t, { activity: 'idle' }) === null) {
+        px(x + 2, y + 15 - st, 4, 2, '#0a0908'); px(x + 8, y + 14 + st, 4, 2, '#0a0908');
+        blob(x, y, { ...a, activity: 'idle' }, t);
+      }
+    });
+  }
+  // Starts the walk; resolves when the agent is out of sight (at once with reduced motion).
+  function startLeaving(id) {
+    const agents = (data && data.agents) || [], k = queueLine(agents).findIndex(a => a.id === id);
+    const q = k >= 0 && atBoss.has(id) ? queueSpot(k) : null;
+    leaving.set(id, { at: frame, from: q });
+    atBoss.delete(id); trips.delete(id);
+    if (selected === id) { selected = null; renderCard(); }
+    lastPlateKey = ''; lastRosterKey = ''; draw(); renderRoster();
+    return new Promise(r => setTimeout(r, still ? 0 : EXIT * 1000 / FPS + 150));
+  }
   // Who stands in line: only an agent with a real question (its reply ends in one, or it is asking
   // through clarify), and it keeps its place until answered. A finished agent sits idle at its desk.
   // At rest, the difference matters: an agent that finished a task (its last reply is a statement)
@@ -1182,13 +1217,13 @@
   // terminal, see its card, or close what is open).
   const goBtn = (id, a) => {
     const open = selected === id;
-    const word = open ? 'Close' : id === 'boss' ? 'Open' : a && a.tty && !demo ? 'Talk' : 'Open';
+    const word = open ? 'Close' : id === 'boss' ? 'Open' : a && a.tty ? 'Talk' : 'Open';
     return `<b class="office-go${open ? ' on' : ''}" aria-hidden="true">${word}${open ? '' : '<em>›</em>'}</b>`;
   };
   let lastPlateKey = '';
   function placeDesks(spots, agents) {
     const mins = Math.floor(Date.now() / 60000);
-    const key = JSON.stringify([W, H, mins, selected, helperSel, [...atBoss], [...trips.keys()], tables, board, running('brainstorm'), running('research'), spots.length, bossState(agents), agents.map(a => [a.id, a.name, a.title, a.activity, a.bed, a.model, a.color, a.tty, a.closing && a.closing.text, (a.helpers || []).map(h => h.id + h.activity)])]);
+    const key = JSON.stringify([W, H, mins, selected, helperSel, [...atBoss], [...trips.keys()], [...leaving.keys()], tables, board, running('brainstorm'), running('research'), spots.length, bossState(agents), agents.map(a => [a.id, a.name, a.title, a.activity, a.bed, a.model, a.color, a.tty, a.closing && a.closing.text, (a.helpers || []).map(h => h.id + h.activity)])]);
     if (key === lastPlateKey) return;
     lastPlateKey = key;
     const st = bossState(agents);
@@ -1200,7 +1235,7 @@
     const boardHits = Object.entries(wallBoards).filter(([, b]) => b.x != null).map(([k, b]) =>
       `<button class="office-hit board" data-board="${k}" style="left:${((b.x + b.w / 2) / W * 100).toFixed(3)}%;top:${(b.y / H * 100).toFixed(3)}%;width:${(b.w / W * 100).toFixed(3)}%;height:${(b.h / H * 100).toFixed(3)}%" title="Open the ${boardNames[k].toLowerCase()}" aria-label="${boardNames[k]}">${boardWriting(k)}</button>`).join('');
     // The ones standing at the front desk are clickable where they stand, their name under their feet.
-    const askers = queueLine(agents).filter(a => !trips.has(a.id)).map((a, k) => {
+    const askers = queueLine(agents).filter(a => !trips.has(a.id) && !leaving.has(a.id)).map((a, k) => {
       const at = queueLine(agents).indexOf(a), q = queueSpot(at);
       const ask = a.closing && a.closing.question ? a.closing.text : 'Has a question for you';
       return `<button class="office-hit qb" data-id="${esc(a.id)}" style="left:${((q.x - QB / 2 - 4) / W * 100).toFixed(3)}%;top:${((q.y - 24) / H * 100).toFixed(3)}%;width:${(QB / W * 100).toFixed(3)}%" title="${esc(nameOf(a))}: ${esc(a.title)}\n${esc(ask)}" aria-label="Number ${at + 1} in line, ${esc(nameOf(a))}: ${esc(a.title)}"><i>${at + 1}</i><b style="color:${esc(nameColor(a.color))}">${esc(nameOf(a))}</b><span class="qb-what">${esc(a.title)}</span><span class="qb-ask">${esc(ask)}</span></button>` +
@@ -1213,7 +1248,7 @@
     desksLayer.innerHTML = bossHTML + boardHits + boardsHTML + askers + spots.map((s, i) => {
       const a = agents[i];
       const left = (s.x / W * 100).toFixed(3), top = ((s.y - 36) / H * 100).toFixed(3);
-      if (!a) return '';
+      if (!a || leaving.has(a.id)) return '';
       // Each helper drawn on the desk is its own click target (over the agent's).
       const helperHits = (a.helpers || []).slice(0, HELPER_SPOTS.length).map((h, k) => {
         const hx = s.x - 32 + HELPER_SPOTS[k] + 3.5, hy = s.y - 9;
@@ -1244,7 +1279,7 @@
       if (selected && consoleFor === selected) endConsole('It left the office: its terminal closed.'); else closeConsole();
       return;
     }
-    if (a.tty && !demo) return renderConsole(a);
+    if (a.tty) return renderConsole(a);
     closeConsole();
     const now = Date.now() / 1000;
     const rows = [
@@ -1373,6 +1408,7 @@
           </div>
           <div class="oc-tools">
             <button class="oc-btn oc-jump" title="Bring its iTerm tab to the front">Open in iTerm</button>
+            <button class="oc-btn oc-dismiss" title="Ask if there is anything else, then close its terminal">Dismiss</button>
             <button class="oc-btn oc-close" aria-label="Close">✕</button>
           </div>
           <div class="oc-subject" aria-live="polite"><small>Subject</small><b class="oc-subject-text"></b><p class="oc-now"><span class="oc-now-label"></span> <span class="oc-now-text"></span></p></div>
@@ -1396,6 +1432,7 @@
         <div class="oc-usage" aria-label="Plan usage"></div>
         <p class="oc-ended" role="status"></p>`;
       ocView = 'chat'; lastChat = '';
+      paintDismiss();
       const screenEl = consoleEl.querySelector('.oc-screen');
       screenEl.addEventListener('scroll', () => {
         pinned = screenEl.scrollHeight - screenEl.scrollTop - screenEl.clientHeight < 24;
@@ -1429,6 +1466,7 @@
     $('.oc-plan').innerHTML = steps.length ? `<ol>${steps.map(x => `<li class="${x.status}"><i>${x.status === 'done' ? '✓' : ''}</i><span>${esc(x.text)}</span></li>`).join('')}</ol>`
       : `<p class="oc-empty">No plan yet. It shows up here when ${esc(nameOf(a))} lists its steps.</p>`;
     setOcView(ocView);
+    paintDismiss();
     const plans = ((usage && usage.plans) || []).filter(p => p.top != null);
     $('.oc-usage').innerHTML = plans.map(p => `<div class="${p.top >= 90 ? 'hot' : ''}"><b>${esc(p.name)}</b><span>${Math.round(p.top)}%</span><em><i style="width:${Math.min(100, p.top)}%"></i></em></div>`).join('');
     $('.oc-state').className = 'oc-state ' + state;
@@ -1452,6 +1490,7 @@
     if (!consoleFor || screenBusy || !active()) return;
     screenBusy = true;
     const id = consoleFor;
+    if (demo) { screenBusy = false; const pre0 = consoleEl.querySelector('.oc-screen'); if (!lastScreen) { lastScreen = 'demo'; pre0.textContent = 'Demo terminal. Nothing here is real.'; } return; }
     try {
       const res = await fetchT('/api/office/screen?id=' + encodeURIComponent(id), { cache: 'no-store' }, 5000);
       const body = await res.json().catch(() => ({}));
@@ -1566,7 +1605,9 @@
     if (tabBtn) { setOcView(tabBtn.dataset.view); if (tabBtn.dataset.view === 'chat') readChat(); return; }
     if (e.target.closest('.oc-close')) { selected = null; lastPlateKey = ''; renderCard(); draw(); return; }
     if (e.target.closest('.oc-latest')) { const pre = consoleEl.querySelector('.oc-screen'); pinned = true; pre.scrollTop = pre.scrollHeight; e.target.hidden = true; return; }
+    if (e.target.closest('.oc-dismiss')) { dismissAgent(); return; }
     if (e.target.closest('.oc-jump')) {
+      if (demo) { flash('Demo: nothing to open.'); return; }
       const r = await fetchT('/api/office/focus', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: consoleFor }) });
       if (!r.ok) flash((await r.json().catch(() => ({}))).error || 'Could not open it.', true);
     }
@@ -1577,6 +1618,7 @@
     const text = input.value.trim();
     if (!text || go.disabled) return;
     go.disabled = true;
+    if (demo) { input.value = ''; flash('Demo: nothing was sent.'); setTimeout(() => { go.disabled = false; }, 500); return; }
     try {
       const res = await fetchT('/api/office/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: consoleFor, text }) });
       const body = await res.json().catch(() => ({}));
@@ -1594,6 +1636,55 @@
     if (!hint) return;
     hint.textContent = text; hint.classList.toggle('bad', !!bad); hint.classList.add('flash');
     setTimeout(() => { hint.classList.remove('flash', 'bad'); const a = data && data.agents.find(x => x.id === consoleFor); if (a) renderConsole(a); }, 3200);
+  }
+
+  // Dismiss, two steps: ask "anything else?" in its terminal, read the reply, then close the terminal.
+  // The server refuses to close an agent that is working or has helpers out.
+  const dismissAsked = new Set(), demoGone = new Set();
+  function paintDismiss() {
+    const b = consoleEl.querySelector('.oc-dismiss');
+    if (!b) return;
+    const armed = dismissAsked.has(consoleFor);
+    b.textContent = armed ? 'Close terminal' : 'Dismiss';
+    b.classList.toggle('armed', armed);
+    b.title = armed ? 'Hang up and close its terminal' : 'Ask if there is anything else, then close its terminal';
+  }
+  async function dismissPost(id, step) {
+    if (demo) return { ok: true, status: 200, body: {} };   // demo agents are fake: nothing is sent
+    const res = await fetchT('/api/office/dismiss', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, step }) }, 12000);
+    return { ok: res.ok, status: res.status, body: await res.json().catch(() => ({})) };
+  }
+  // One flow for the console and the Floor list. Step 1 asks; step 2 checks it is not working, walks
+  // it out of the room, then closes its terminal.
+  async function dismissFlow(id, say) {
+    const a = data && data.agents.find(x => x.id === id), who = a ? nameOf(a) : 'It';
+    if (!dismissAsked.has(id)) {
+      const r = await dismissPost(id, 'ask');
+      if (!r.ok) return say(r.body.error || 'Not asked.', true, r.status);
+      dismissAsked.add(id);
+      say(r.body.queued ? `Asked ${who} (after this turn ends). Read the reply, then Close terminal.` : `Asked ${who} if there is anything else. Read the reply, then Close terminal.`);
+      return 'asked';
+    }
+    const c = await dismissPost(id, 'check');
+    if (!c.ok) return say(c.body.error || 'It cannot be closed right now.', true, c.status);
+    await startLeaving(id);
+    const r = await dismissPost(id, 'close');
+    dismissAsked.delete(id);
+    if (!r.ok) { leaving.delete(id); lastPlateKey = ''; lastRosterKey = ''; draw(); renderRoster(); toast('Not dismissed', r.body.error || 'Its terminal did not close.'); return say(r.body.error || 'Not closed.', true, r.status); }
+    if (demo) demoGone.add(id);
+    toast('Dismissed', `${who} has left the office`);
+    setTimeout(poll, demo ? 50 : 600);
+    return 'closed';
+  }
+  async function dismissAgent() {
+    const b = consoleEl.querySelector('.oc-dismiss'), id = consoleFor;
+    if (!b || b.disabled || !id) return;
+    b.disabled = true;
+    try {
+      const out = await dismissFlow(id, (text, bad, status) => { if (status === 404) endConsole(text); else if (consoleFor === id) flash(text, bad); });
+      if (out === 'asked' && consoleFor === id) { paintDismiss(); pinned = true; setTimeout(readScreen, 700); setTimeout(poll, 1200); }
+    } catch (err) { flash(err.name === 'AbortError' ? 'iTerm did not answer. Check the screen.' : err.message, true); }
+    finally { b.disabled = false; }
   }
 
   function tick(prev, next) {
@@ -1648,7 +1739,7 @@
       messages: 10 * i, helpers: a === 'delegating' ? [
         { id: 'h-r' + i, title: 'Research', activity: 'browsing', depth: 1 }, { id: 'h-d' + i, title: 'Draft', activity: 'writing', depth: 1 },
         { id: 'h-f' + i, title: 'Fact check', activity: 'reading', depth: 2 }, { id: 'h-t' + i, title: 'Tests', activity: 'typing', depth: 1 }]
-        : a === 'typing' ? [{ id: 'h-x' + i, title: 'Review', activity: 'thinking', depth: 1 }] : [] })),
+        : a === 'typing' ? [{ id: 'h-x' + i, title: 'Review', activity: 'thinking', depth: 1 }] : [] })).filter(x => !demoGone.has(x.id)),
       home: '/home/demo', rack: { ollama: true, units: [{ name: 'gemma4:26b', kind: 'ollama' }, { name: 'whisper', kind: 'whisper' }] } };
   }
 
@@ -1699,7 +1790,7 @@
 
   function renderRoster() {
     const agents = (data && data.agents) || [];
-    const key = JSON.stringify([selected, helperSel, agents.map(a => [a.id, a.name, a.title, a.activity, a.tty, a.bed, a.color, a.closing && a.closing.text, (a.helpers || []).map(h => [h.id, h.title, h.activity, h.tool])])]);
+    const key = JSON.stringify([selected, helperSel, [...dismissAsked], [...leaving.keys()], agents.map(a => [a.id, a.name, a.title, a.activity, a.tty, a.bed, a.color, a.closing && a.closing.text, (a.helpers || []).map(h => [h.id, h.title, h.activity, h.tool])])]);
     if (key === lastRosterKey) return;
     lastRosterKey = key;
     if (!agents.length) { rosterList.innerHTML = '<p class="or-empty">Nobody is in yet. Start Hermes, Claude Code or Codex in a terminal and it takes a desk.</p>'; return; }
@@ -1708,14 +1799,24 @@
           <em class="office-swatch" style="background:${esc(assign(h.id))}"></em><span class="or-name">${esc(h.title || 'Helper')}</span>
           <span class="or-state ${stateClass(h.activity)}"><i></i>${esc(WORDS[h.activity] || h.activity || '')}${h.tool ? ' · ' + esc(toolName(h.tool)) : ''}</span></button>`).join('');
       return `<div class="or-agent${selected === a.id ? ' on' : ''}"><button class="or-row" data-id="${esc(a.id)}">
-          <em class="office-swatch" style="background:${esc(a.color)}"></em><span class="or-name">${nameTag(a)}</span><span class="or-go">${selected === a.id ? 'Open' : a.tty && !demo ? 'Talk ›' : 'Open ›'}</span>
+          <em class="office-swatch" style="background:${esc(a.color)}"></em><span class="or-name">${nameTag(a)}</span><span class="or-go">${selected === a.id ? 'Open' : a.tty ? 'Talk ›' : 'Open ›'}</span>
           <span class="or-title">${esc(a.title)}</span>${a.closing && !BUSY.has(a.activity) ? `<span class="or-close${a.closing.question ? ' ask' : ''}">${esc(a.closing.text)}</span>` : ''}
-          <span class="or-state ${a.bed ? 'rest' : stateClass(a.activity)}"><i></i>${esc(plateWords(a))}${(a.helpers || []).length ? ` · ${a.helpers.length} helper${a.helpers.length === 1 ? '' : 's'}` : ''}</span></button>${helpers}
-          </div>`;
+          <span class="or-state ${a.bed ? 'rest' : stateClass(a.activity)}"><i></i>${leaving.has(a.id) ? 'Leaving the office' : esc(plateWords(a))}${(a.helpers || []).length ? ` · ${a.helpers.length} helper${a.helpers.length === 1 ? '' : 's'}` : ''}</span></button>${helpers}
+          ${a.tty && !leaving.has(a.id) ? `<div class="or-dismiss-row"><button type="button" class="or-dismiss${dismissAsked.has(a.id) ? ' armed' : ''}" data-dismiss="${esc(a.id)}">${dismissAsked.has(a.id) ? 'Close terminal' : 'Dismiss'}</button><span class="or-dismiss-msg"></span></div>` : ''}</div>`;
     }).join('');
   }
-  document.getElementById('office-roster').addEventListener('click', e => {
-        const h = e.target.closest('[data-helper]');
+  document.getElementById('office-roster').addEventListener('click', async e => {
+    const d = e.target.closest('[data-dismiss]');
+    if (d) {
+      if (d.disabled) return;
+      d.disabled = true;
+      const msg = d.parentElement.querySelector('.or-dismiss-msg');
+      try { if (await dismissFlow(d.dataset.dismiss, (text, bad) => { msg.textContent = text; msg.classList.toggle('bad', !!bad); }) === 'asked') { d.textContent = 'Close terminal'; d.classList.add('armed'); } }
+      catch (err) { msg.textContent = err.name === 'AbortError' ? 'iTerm did not answer.' : err.message; msg.classList.add('bad'); }
+      finally { d.disabled = false; setTimeout(() => { lastRosterKey = ''; renderRoster(); }, 2500); }
+      return;
+    }
+    const h = e.target.closest('[data-helper]');
     if (h) { openHelper(h.dataset.helper); return; }
     if (e.target.closest('.or-back')) { closeHelper(); return; }
     const row = e.target.closest('.or-row, [data-agent]');
@@ -2184,6 +2285,7 @@
       // A question keeps its place in line until it is answered, however long that takes.
       (next.agents || []).forEach(a => { a.activity = lineActivity(a); });
       next.agents = seatOrder(next.agents || []);
+      [...leaving.keys()].forEach(id => { if (!next.agents.some(a => a.id === id)) leaving.delete(id); });
       (next.agents || []).forEach(a => { a.color = monOf(a) ? cast.color(a.name) : a.kind === 'claude' ? '#c96442' : a.kind === 'codex' ? '#d9d6cf' : assign(a.id); });
       tick(seen, next);
       data = next; error = false;

@@ -642,6 +642,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(200, office.send_to_agent(body))
             if path == "/api/office/focus":
                 return self.send_json(200, office.focus_agent(body))
+            if path == "/api/office/dismiss":
+                return self.send_json(200, office.dismiss_agent(body))
             if path == "/api/office/board":
                 return self.send_json(200, office.board_action(DATA_ROOT, body))
             if path == "/api/office/new":
