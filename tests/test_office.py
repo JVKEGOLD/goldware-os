@@ -550,6 +550,147 @@ class Launch(unittest.TestCase):
         self.assertEqual(office.DRY_LOG[-1][1][4], "cd %s && echo hello" % self.plain)
 
 
+PS_DISMISS = """\
+  500   450 ttys005    0.2       05:00 /opt/homebrew/bin/codex
+  501   500 ttys005    0.0       05:00 /bin/zsh
+  502     1 ttys005    0.0       05:00 /usr/bin/login
+  503   502 ttys005    0.0       05:00 -zsh
+  600   450 ttys006    0.1       05:00 /opt/homebrew/bin/codex
+  601   600 ttys006    0.0       05:00 /bin/zsh
+"""
+
+
+class Dismiss(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        del office.DRY_LOG[:]
+        del office.DISMISS_LOG[:]
+        office._SENT.clear()
+        self.kw = dict(now=NOW, home=os.path.join(self.tmp, "no-hermes"), ps_text=PS_DISMISS, chome="/nonexistent",
+                       ollama_url="off", cwd_fn=lambda pid: "/work/shop", gateway=False)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    idle = {"tty": "ttys005", "working": False, "activity": "idle", "helpers": [], "name": "Bolt"}
+
+    def test_blocker_cases(self):
+        b = office.dismiss_blocker
+        self.assertIsNone(b(self.idle, " 0.0 -zsh\n 0.1 hermes\n"))
+        self.assertIn("not at a terminal", b(dict(self.idle, tty=None), ""))
+        self.assertIn("not at a terminal", b(None, ""))
+        self.assertIn("working", b(dict(self.idle, working=True), ""))
+        for act in office.DISMISS_BUSY:
+            self.assertIn("working", b(dict(self.idle, activity=act), ""), act)
+        for act in ("idle", "asleep", "your_turn", "done"):
+            self.assertIsNone(b(dict(self.idle, activity=act), ""), act)
+        self.assertIn("helpers", b(dict(self.idle, helpers=[{"id": "h"}]), ""))
+        self.assertIn("working", b(self.idle, " 4.2 /opt/bin/claude\n"))
+        self.assertIn("working", b(self.idle, " 3.0 codex\n"))
+        self.assertIsNone(b(self.idle, " 1.0 claude\n 2.9 /x/codex\n"))
+
+    def test_bad_tty_refused(self):
+        for bad in ("ttys005; rm -rf", "../etc", "/dev/ttys005", "tty", None, "ttys"):
+            with self.assertRaises(office.OfficeError):
+                office.dismiss({"id": "codex-500", "tty": bad}, **self.kw)
+        self.assertEqual(office.DRY_LOG, [])
+        self.assertEqual(office.DISMISS_LOG, [])
+
+    def test_unknown_agent_404_and_not_an_agent_tty(self):
+        with self.assertRaises(office.OfficeError) as cm:
+            office.dismiss_agent({"id": "codex-999", "step": "check"}, **self.kw)
+        self.assertEqual(cm.exception.status, 404)
+        with self.assertRaises(office.OfficeError) as cm:
+            office.dismiss({"id": "ttys005", "tty": "ttys005"}, **self.kw)     # a tty is not an agent id
+        self.assertEqual(cm.exception.status, 404)
+        # a forged agent dict with a real-looking tty but an id that is not detected
+        with self.assertRaises(office.OfficeError):
+            office.dismiss({"id": "claude-1", "tty": "ttys005"}, **self.kw)
+        self.assertEqual(office.DISMISS_LOG, [])
+
+    def test_bad_step_422(self):
+        for step in (None, "", "nope", "ASK", 5):
+            with self.assertRaises(office.OfficeError) as cm:
+                office.dismiss_agent({"id": "codex-500", "step": step}, **self.kw)
+            self.assertEqual(cm.exception.status, 422)
+        with self.assertRaises(office.OfficeError) as cm:
+            office.dismiss_agent("x", **self.kw)
+        self.assertEqual(cm.exception.status, 422)
+
+    def test_check_step(self):
+        self.assertEqual(office.dismiss_agent({"id": "codex-500", "step": "check"}, **self.kw), {"ok": True})
+        busy = "  700   450 ttys007   12.0       05:00 /opt/homebrew/bin/codex\n"
+        kw = dict(self.kw, ps_text=PS_DISMISS + busy)
+        with self.assertRaises(office.OfficeError) as cm:
+            office.dismiss_agent({"id": "codex-700", "step": "check"}, **kw)
+        self.assertEqual(cm.exception.status, 409)
+        with self.assertRaises(office.OfficeError) as cm:
+            office.dismiss_agent({"id": "codex-700", "step": "close"}, **kw)
+        self.assertEqual(cm.exception.status, 409)
+        self.assertEqual(office.DISMISS_LOG, [])
+
+    def test_ask_uses_the_send_path(self):
+        r = office.dismiss_agent({"id": "codex-500", "step": "ask"}, **self.kw)
+        self.assertEqual(r, {"ok": True, "asked": True, "queued": False})
+        name, argv = office.DRY_LOG[-1]
+        self.assertEqual(name, "send")
+        self.assertEqual(argv[2], office.SEND_SCRIPT)
+        self.assertEqual(argv[3:], ["/dev/ttys005", office.DISMISS_ASK])
+        self.assertEqual(office.DISMISS_LOG, [])
+
+    def test_close_plans_signals_for_that_tty_only(self):
+        r = office.dismiss_agent({"id": "codex-500", "step": "close"}, **self.kw)
+        self.assertEqual(r, {"ok": True, "closed": True})
+        self.assertEqual([(e["signal"], e["tty"]) for e in office.DISMISS_LOG],
+                         [("HUP", "ttys005"), ("TERM", "ttys005"), ("KILL", "ttys005")])
+        for e in office.DISMISS_LOG:
+            self.assertEqual(sorted(e["pids"]), [500, 501, 503])        # not 502 (login), not ttys006
+        name, argv = office.DRY_LOG[-1]
+        self.assertEqual(name, "close")
+        self.assertEqual(argv[:2], ["osascript", "-e"])
+        self.assertEqual(argv[2], office.CLOSE_SCRIPT)
+        self.assertEqual(argv[3:], ["/dev/ttys005"])
+        self.assertNotIn("ttys005", argv[2])
+
+    def test_never_signals_pid_one_self_or_parent(self):
+        me, parent = os.getpid(), os.getppid()
+        ps = PS_DISMISS + "    1     0 ttys005    0.0       05:00 /sbin/launchd\n%5d %5d ttys005    0.0 05:00 /bin/zsh\n%5d     1 ttys005    0.0 05:00 /bin/zsh\n" % (me, 1, parent)
+        pids = office.signal_targets("ttys005", ps)
+        for bad in (1, me, parent, 502):
+            self.assertNotIn(bad, pids)
+        self.assertIn(500, pids)
+
+    def test_dry_run_sends_no_signal(self):
+        calls = []
+        real = os.kill
+        os.kill = lambda *a: calls.append(a)
+        try:
+            office.dismiss_agent({"id": "codex-500", "step": "close"}, **self.kw)
+        finally:
+            os.kill = real
+        self.assertEqual(calls, [])
+
+    def test_live_mode_signals_in_order_with_a_fake_kill(self):
+        # A fake os.kill and sleep: the real send path with nothing real behind it.
+        sent, naps = [], []
+        real_kill, real_dry = os.kill, os.environ.get("GOLDWARE_OFFICE_DRY_RUN")
+        real_osa = office.osa
+        os.environ["GOLDWARE_OFFICE_DRY_RUN"] = "0"
+        os.kill = lambda pid, sig: sent.append((pid, sig))
+        office.osa = lambda name, script, *a, **k: ("closed\n", "", 0)
+        try:
+            agent = office.find_agent("codex-500", **self.kw)
+            self.assertTrue(office.dismiss(agent, sleep=naps.append, **self.kw))
+        finally:
+            os.kill = real_kill
+            office.osa = real_osa
+            os.environ["GOLDWARE_OFFICE_DRY_RUN"] = real_dry or "1"
+        import signal
+        self.assertEqual([s for _, s in sent[::3]], [signal.SIGHUP, signal.SIGTERM, signal.SIGKILL])
+        self.assertEqual({p for p, _ in sent}, {500, 501, 503})
+        self.assertEqual(naps, [office.DISMISS_GAP] * 3)
+
+
 class OfficeHttp(unittest.TestCase):
     """The real server on an empty fixture: JSON everywhere, and POSTs only from the dashboard itself."""
 
@@ -605,7 +746,7 @@ class OfficeHttp(unittest.TestCase):
         self.assertEqual(self.call("/api/office/nothing")[0], 404)
 
     def test_post_without_same_origin_is_rejected(self):
-        for path in ("/api/office/send", "/api/office/focus", "/api/office/board"):
+        for path in ("/api/office/send", "/api/office/focus", "/api/office/board", "/api/office/dismiss"):
             code, j = self.call(path, {"id": "claude-1", "text": "hi", "action": "add", "title": "x"})
             self.assertEqual(code, 403, path)           # no Origin or Referer at all
             code, _ = self.call(path, {"id": "x"}, {"Origin": "http://evil.example"})
@@ -629,6 +770,10 @@ class OfficeHttp(unittest.TestCase):
         self.assertEqual(code, 404)           # allowed through, then: no such agent
         code, j = self.call("/api/office/focus", {"id": "claude-1"}, {"Referer": self.base + "/"})
         self.assertEqual(code, 404)
+        code, j = self.call("/api/office/dismiss", {"id": "claude-1", "step": "check"}, origin)
+        self.assertEqual(code, 404)
+        code, j = self.call("/api/office/dismiss", {"id": "claude-1", "step": "bogus"}, origin)
+        self.assertEqual(code, 404)           # the agent is looked up first
         code, j = self.call("/api/office/board", {"action": "add", "title": "Hello"}, origin)
         self.assertEqual((code, j["board"]["tasks"][0]["title"]), (200, "Hello"))
         code, j = self.call("/api/office/board", {"action": "bogus"}, origin)
