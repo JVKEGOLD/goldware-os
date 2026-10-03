@@ -11,6 +11,9 @@ data/                   gitignored user data: tasks.json, notes.json, drafts/
 app/                    Swift app (SwiftPM target GoldWareOS). build.sh -> app/build/GoldWareOS.app
 server/goldware_server.py   local server, Python 3.9 stdlib only (macOS Command Line Tools python3)
 dashboard/index.html    the dashboard page (single file, vanilla JS/CSS, no build step, no CDN)
+dashboard/gestures.js   animated demos of every Vision gesture (GoldWareGestures.list/render), with
+                        gestures.css and the gallery gestures.html. Its catalog generates docs/GESTURES.md
+                        (scripts/gestures_doc.py); tests/test_gestures.py checks it against the Swift gestures
 docs/CUSTOMIZING.md     map of every setting, for humans and their AI agents
 scripts/setup.sh        one-shot installer; scripts/check_private.sh privacy gate
 tests/                  python unittest for the server and config
