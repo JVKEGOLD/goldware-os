@@ -70,7 +70,8 @@ embed (options.url), html (options.html, rendered in a sandboxed iframe srcdoc).
                           this server and its parent, then closes only that iTerm session or Terminal window
                           (the tty is an osascript argument; the app is never quit). Bad step 422, gone 404.
                           With GOLDWARE_OFFICE_DRY_RUN=1 the signals are only recorded in office.DISMISS_LOG.
-  POST /api/office/board  {action: project|add|assign|done|reopen|remove|lab|seen, ...}
+  POST /api/office/board  {action: project|add|assign|done|reopen|remove|lab|seen|regroup|ungroup, ...}
+                           (regroup {table}: one button-only model run; the board keeps groupings[table])
   POST /api/office/new    {type, topic} ids only. The server finds the folder and command in goldware.json and opens
                           one terminal window (iTerm, else Terminal) running `cd <shlex-quoted folder> && <command>`.
                           Unknown id 422, missing folder 409, program not installed 422, one window per 5 s (429)

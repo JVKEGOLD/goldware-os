@@ -82,8 +82,9 @@
   //    so rows stay balanced). Rows step toward you; Your desk is always at the front. ──
   const FRONT = 96;   // Your row at the front of the room
   // Desks sit at tables, one table per project folder (an agent's working directory); each table
-  // starts a new row and has its own roll-around whiteboard (WB wide) on its left.
-  const WB = 44;
+  // starts a new row and has its own roll-around whiteboard (WB wide) on its left. The board is a
+  // landscape WB - 8 by WBH, so a task's title reads further before it is cut.
+  const WB = 84, WBH = 44;
   function roomSize(sizes, cols) {
     const rows = sizes.reduce((r, n) => r + Math.ceil(n / Math.max(1, cols)), 0), area = Math.max(4, cols) * SLOT + (sizes.length ? WB : 0);
     const bossY = rows ? 130 + (rows - 1) * ROW + FRONT : 150;
@@ -134,7 +135,7 @@
         const r = Math.floor(k / cols), c = k % cols, inRow = Math.min(cols, n - r * cols);
         const offset = WB + (area - WB - inRow * SLOT) / 2;
         spots.push({ x: Math.round(ox + 6 + offset + SLOT * c + SLOT / 2), y: oy + 130 + (row + r) * ROW, slot: SLOT });
-        if (k === 0) tables.push({ key, x: Math.round(ox + 6 + offset - WB + 4), y: oy + 130 + row * ROW - 48, h: 44, n });
+        if (k === 0) tables.push({ key, x: Math.round(ox + 6 + offset - WB + 4), y: oy + 130 + row * ROW - 14 - WBH, h: WBH + 10, n });
       }
       row += rows; i += n;
     }
@@ -143,7 +144,7 @@
   // A roll-around whiteboard: white surface in an aluminium frame, legs, a marker tray and casters.
   // The writing (the table's name and its open tasks) is HTML in its button.
   function whiteboard(tb) {
-    const { x, y } = tb, w = WB - 8, h = 34;
+    const { x, y } = tb, w = WB - 8, h = WBH;
     px(x - 1, y - 1, w + 2, h + 2, '#9a968c'); px(x, y, w, h, '#ece9e0'); px(x + 1, y + 1, w - 2, 1, '#ffffff');
     px(x + 2, y + h + 1, w - 4, 2, '#8a867c'); px(x + 5, y + h, 3, 1, '#d24a3a'); px(x + 9, y + h, 3, 1, '#3a6ad2');
     px(x + 3, y + h + 1, 2, 12, '#7d796f'); px(x + w - 5, y + h + 1, 2, 12, '#7d796f'); px(x + 1, y + h + 12, w - 2, 2, '#6d695f');
@@ -216,7 +217,9 @@
     // the clock, more windows while they fit, the plant. The rack stands at the right end.
     // The boards are written on, so they take the wall's spare width (46 to 104 px each).
     const BW = Math.max(46, Math.min(104, Math.floor((W - 19 - 64 - 72 - 40 - 34 - 30) / 3)));
-    const wallPlan = [['win', 62, 'a'], ['ideas', BW + 4], ['lab', BW + 4], ['portrait', 30], ['clock', 24], ['win', 62, 'b']];
+    // The usage board (Claude and Codex limits) hangs after the clock while the wall has room for it.
+    const UW = 60;
+    const wallPlan = [['win', 62, 'a'], ['ideas', BW + 4], ['lab', BW + 4], ['portrait', 30], ['clock', 24], ['usage', UW + 4], ['win', 62, 'b']];
     for (let k = 0; k < 6; k++) wallPlan.push(['win', 62, 'c']);
     wallPlan.push(['plant', 12]);
     const placed = {}, wins = [];
@@ -228,7 +231,7 @@
       if (kind === 'win') wins.push([cur + 3, id]); else placed[kind] = cur;
       cur += w + 10;
     });
-    wallBoards = { tasks: {}, ideas: { x: placed.ideas, y: 9, w: BW, h: 54 }, lab: { x: placed.lab, y: 9, w: BW, h: 50 } };
+    wallBoards = { tasks: {}, ideas: { x: placed.ideas, y: 9, w: BW, h: 54 }, lab: { x: placed.lab, y: 9, w: BW, h: 50 }, usage: { x: placed.usage, y: 14, w: UW, h: 40 } };
     wallClock = placed.clock != null ? placed.clock + 12 : null;
     wins.forEach(([wx, id]) => {
       const ww = 56, wh = 44, wy = 16;
@@ -710,12 +713,17 @@
   }
 
   // ── The boards on the wall, the lab staff in front of them, and the bunk beds ──
-  let wallBoards = { tasks: {}, ideas: {}, lab: {} }, wallClock = null;
+  let wallBoards = { tasks: {}, ideas: {}, lab: {}, usage: {} }, wallClock = null;
   let board = null, usage = null;
   const walking = new Map();   // agent id -> { dir: 'in'|'out', at: frame }
   const WALK = 30;
   function wallArt() {
-    const T = wallBoards.tasks, I = wallBoards.ideas, L = wallBoards.lab;
+    const T = wallBoards.tasks, I = wallBoards.ideas, L = wallBoards.lab, U = wallBoards.usage;
+    // Usage: a dark slate in a thin brass frame; the bars are written on in HTML.
+    if (U.x != null) {
+      px(U.x - 1, U.y - 1, U.w + 2, U.h + 2, '#8a6a34'); px(U.x, U.y, U.w, U.h, '#15120e'); px(U.x + 1, U.y + 1, U.w - 2, 1, '#2a241b');
+      px(U.x + U.w / 2 - 1, U.y - 5, 2, 4, '#8a6a34');
+    }
     // Task board: cork in a wood frame, with a header strip; the cards are written on in HTML.
     if (T.x != null) {
       px(T.x, T.y, T.w, T.h, '#6b4a2b'); px(T.x + 2, T.y + 2, T.w - 4, T.h - 4, '#1f2622');
@@ -788,6 +796,11 @@
     }
     const body = b.suggestions.length ? b.suggestions.map(x => li(x.new ? 'new' : '', '–', x.title)).join('')
       : `<li class="hint"><span>${running('research') ? 'Researching…' : 'Send the researcher'}</span></li>`;
+    if (kind === 'usage') {
+      const plans = ((usage && usage.plans) || []).filter(p => p.top != null || p.out);
+      const row = p => { const pct = p.out ? 100 : Math.round(p.top); return `<li class="${p.out || pct >= 90 ? 'hot' : pct >= 70 ? 'warm' : ''}"><b>${esc(p.name)}</b><span>${p.out ? 'out' : pct + '%'}</span><em><i style="width:${Math.min(100, pct)}%"></i></em></li>`; };
+      return `<div class="bw bw-usage"><h5>Usage</h5><ul>${plans.length ? plans.map(row).join('') : '<li class="hint"><span>Reading plans…</span></li>'}</ul></div>`;
+    }
     return `<div class="bw bw-lab"><h5>The lab${running('research') ? '<small>researching…</small>' : ''}</h5><ul>${body}</ul></div>`;
   }
   const running = kind => !!(board && board.runs && board.runs[kind] && board.runs[kind].status === 'running');
@@ -1142,7 +1155,10 @@
   }
   function tablePlants() {
     const y = oy + 128;
-    pot(ox + 4, y + 6, true, 5); pot(ox + geo.W - 52, y + 6, true, 6);
+    // The left plant stands outside the first whiteboard (the board fills the table's left edge); with
+    // no room for it there, it is left out rather than drawn over the board.
+    if (!tables.length) pot(ox + 4, y + 6, true, 5); else if (ox >= 22) pot(ox - 18, y + 6, true, 5);
+    pot(ox + geo.W - 52, y + 6, true, 6);
   }
   // In front: big leafy plants in the corners; the lounge and the lab corner when they fit.
   function cafeFront(t) {
@@ -1223,7 +1239,7 @@
   let lastPlateKey = '';
   function placeDesks(spots, agents) {
     const mins = Math.floor(Date.now() / 60000);
-    const key = JSON.stringify([W, H, mins, selected, helperSel, [...atBoss], [...trips.keys()], [...leaving.keys()], tables, board, running('brainstorm'), running('research'), spots.length, bossState(agents), data && data.boss && [data.boss.id, data.boss.working, data.boss.activity], agents.map(a => [a.id, a.name, a.title, a.activity, a.bed, a.model, a.color, a.tty, a.closing && a.closing.text, (a.helpers || []).map(h => h.id + h.activity)])]);
+    const key = JSON.stringify([W, H, mins, selected, helperSel, usage && usage.checked_at, [...atBoss], [...trips.keys()], [...leaving.keys()], tables, board, running('brainstorm'), running('research'), spots.length, bossState(agents), data && data.boss && [data.boss.id, data.boss.working, data.boss.activity], agents.map(a => [a.id, a.name, a.title, a.activity, a.bed, a.model, a.color, a.tty, a.closing && a.closing.text, (a.helpers || []).map(h => h.id + h.activity)])]);
     if (key === lastPlateKey) return;
     lastPlateKey = key;
     const st = bossState(agents);
@@ -1232,7 +1248,7 @@
     const aLeft = (bossSpot.x / W * 100).toFixed(3);
     const bossHTML = `<button class="office-hit${selected === 'boss' ? ' on' : ''}" data-id="boss" style="left:${aLeft}%;top:${((bossSpot.y - 44) / H * 100).toFixed(3)}%;height:${(70 / H * 100).toFixed(3)}%;width:${(104 / W * 100).toFixed(3)}%" aria-label="The boss, ${esc(bossWords)}"></button>
       <div class="office-plate boss ${st === 'your_turn' ? 'you' : st === 'watching' ? 'busy' : st}" data-id="boss" style="left:${aLeft}%;top:${((bossSpot.y + 27) / H * 100).toFixed(3)}%"><div class="op-top"><b>Boss</b>${goBtn('boss')}</div><span><i></i>${esc(bossWords)}</span></div>`;
-    const boardNames = { tasks: 'Task board', ideas: 'Idea board', lab: 'The lab: suggestions' };
+    const boardNames = { tasks: 'Task board', ideas: 'Idea board', lab: 'The lab: suggestions', usage: 'AI usage board' };
     const boardHits = Object.entries(wallBoards).filter(([, b]) => b.x != null).map(([k, b]) =>
       `<button class="office-hit board" data-board="${k}" style="left:${((b.x + b.w / 2) / W * 100).toFixed(3)}%;top:${(b.y / H * 100).toFixed(3)}%;width:${(b.w / W * 100).toFixed(3)}%;height:${(b.h / H * 100).toFixed(3)}%" title="Open the ${boardNames[k].toLowerCase()}" aria-label="${boardNames[k]}">${boardWriting(k)}</button>`).join('');
     // The ones standing at the front desk are clickable where they stand, their name under their feet.
@@ -1244,7 +1260,7 @@
     }).join('');
     const boardsHTML = tables.map(tb => {
       const open = ((board && board.tasks) || []).filter(t => t.status !== 'done' && taskTable(t) === tb.key);
-      return `<button class="office-hit wb" data-table="${esc(tb.key)}" style="left:${((tb.x + (WB - 8) / 2) / W * 100).toFixed(3)}%;top:${(tb.y / H * 100).toFixed(3)}%;width:${((WB - 8) / W * 100).toFixed(3)}%;height:${(34 / H * 100).toFixed(3)}%" title="${esc(tableName(tb.key))} whiteboard: ${open.length} open task${open.length === 1 ? '' : 's'}" aria-label="${esc(tableName(tb.key))} whiteboard"><b>${esc(tableName(tb.key))}</b>${open.slice(0, 3).map(t => `<span>${esc(t.title)}</span>`).join('') || '<em>+ add tasks</em>'}</button>`;
+      return `<button class="office-hit wb" data-table="${esc(tb.key)}" style="left:${((tb.x + (WB - 8) / 2) / W * 100).toFixed(3)}%;top:${(tb.y / H * 100).toFixed(3)}%;width:${((WB - 8) / W * 100).toFixed(3)}%;height:${(WBH / H * 100).toFixed(3)}%" title="${esc(tableName(tb.key))} whiteboard: ${open.length} open task${open.length === 1 ? '' : 's'}" aria-label="${esc(tableName(tb.key))} whiteboard"><b>${esc(tableName(tb.key))}${open.length ? ` <em>${open.length}</em>` : ''}</b>${open.slice(0, 4).map(t => `<span>${esc(t.title)}</span>`).join('') || '<em>+ add tasks</em>'}</button>`;
     }).join('');
     desksLayer.innerHTML = bossHTML + boardHits + boardsHTML + askers + spots.map((s, i) => {
       const a = agents[i];
@@ -1422,7 +1438,6 @@
           <div class="oc-subject" aria-live="polite"><small>Subject</small><b class="oc-subject-text"></b><p class="oc-now"><span class="oc-now-label"></span> <span class="oc-now-text"></span></p></div>
         </header>
         <div class="oc-meta"></div>
-        <div class="oc-closing" hidden><span class="oc-avatar md" aria-hidden="true"></span><div><small></small><p></p></div></div>
         <div class="oc-helpers" aria-label="Its helpers"></div>
         <div class="oc-tabs" role="tablist"><button type="button" role="tab" data-view="chat" aria-selected="true">Chat</button><button type="button" role="tab" data-view="term" aria-selected="false">&gt;_ Terminal</button><button type="button" role="tab" data-view="plan" aria-selected="false">Plan <small></small></button></div>
         <div class="oc-screen-wrap">
@@ -1437,7 +1452,6 @@
           <button class="oc-btn oc-go" type="submit">Send</button>
         </form>
         <p class="oc-hint"></p>
-        <div class="oc-usage" aria-label="Plan usage"></div>
         <p class="oc-ended" role="status"></p>`;
       ocView = 'chat'; lastChat = ''; sentLine = null;
       paintDismiss();
@@ -1476,17 +1490,12 @@
     setOcView(ocView);
     paintDismiss();
     $('.oc-report').hidden = !!a.boss;
-    const plans = ((usage && usage.plans) || []).filter(p => p.top != null);
-    $('.oc-usage').innerHTML = plans.map(p => `<div class="${p.top >= 90 ? 'hot' : ''}"><b>${esc(p.name)}</b><span>${Math.round(p.top)}%</span><em><i style="width:${Math.min(100, p.top)}%"></i></em></div>`).join('');
     $('.oc-state').className = 'oc-state ' + state;
     $('.oc-state b').textContent = stateWords(a);
     const now = Date.now() / 1000;
     $('.oc-meta').textContent = [a.tty, a.messages != null ? a.messages + ' messages' : null,
       a.tool ? 'last tool ' + a.tool.replace(/^mcp__/, '') : null, 'at this desk ' + ago(now - a.started_at),
       (a.helpers || []).length ? a.helpers.length + ' helper' + (a.helpers.length === 1 ? '' : 's') + ' out' : null].filter(Boolean).join('  ·  ');
-    const cl = $('.oc-closing');
-    cl.hidden = !a.closing || BUSY.has(a.activity);
-    if (a.closing) { cl.querySelector('small').textContent = a.closing.question ? `${nameOf(a)} asks` : `${nameOf(a)}'s last word`; cl.querySelector('p').textContent = a.closing.text; cl.classList.toggle('ask', !!a.closing.question); }
     $('.oc-helpers').innerHTML = (a.helpers || []).map(h =>
       `<span><em class="office-swatch" style="background:${esc(assign(h.id))}"></em><b>${esc(h.title || 'Helper')}</b>&nbsp;${esc((WORDS[h.activity] || h.activity || '').toLowerCase())}</span>`).join('');
     $('.oc-hint').textContent = a.kind === 'hermes'
@@ -1812,6 +1821,8 @@
     if (body.action === 'project') b.project = { name: body.name, about: body.about };
     if (body.action === 'seen') b[body.list].forEach(c => delete c.new);
     if (body.action === 'lab') b.runs[body.kind] = { status: 'running', started_at: Date.now() / 1000 };
+    if (body.action === 'regroup') { const open = b.tasks.filter(x => x.status !== 'done' && (x.group || homeDir()) === body.table); (b.groupings = b.groupings || {})[body.table] = { at: Date.now() / 1000, groups: [{ name: 'Demo group', needs_user: false, ids: open.map(x => x.id) }] }; b.runs.regroup = { status: 'done', count: 1, table: body.table }; }
+    if (body.action === 'ungroup' && b.groupings) delete b.groupings[body.table];
     return { ok: true, result, board: demoBoard() };
   }
   function demoUsage() {
@@ -1921,11 +1932,140 @@
       <ol class="or-steps">${steps.length ? steps.map(st => `<li class="${esc(st.kind)}"><time>${esc(time(st.at))}</time><b>${st.kind === 'tool' ? esc(toolName(st.tool)) : st.kind === 'said' ? 'Said' : 'Task'}</b><span>${esc(st.text || '')}</span></li>`).join('') : '<li class="said"><time></time><b>Nothing yet</b><span>It has not made a move.</span></li>'}</ol>`;
   }
 
+  // ── The zoomed whiteboard: the room zooms into the clicked board and every task is written out large,
+  // grouped by what it is about. Groups come from the task text alone (no model call).
+  function groupTasks(tasks) {
+    const DECIDE = /^(decide|approve|call|review|sign|pay)\b/i, WATCH = /^(watch|wait|follow[ -]?up|chase|monitor)\b/i;
+    const head = t => { const m = /^([^:]{2,40}):\s+(.+)$/.exec(t.title || ''); return m && !DECIDE.test(m[1]) && !WATCH.test(m[1]) ? [m[1].trim(), m[2]] : null; };
+    const proj = new Map(), you = [], watch = [], loose = [];
+    tasks.forEach(t => { const h = head(t); if (h) { const k = h[0].toLowerCase(); if (!proj.has(k)) proj.set(k, { name: h[0], items: [] }); proj.get(k).items.push({ task: t, text: h[1] }); } });
+    // A project word with one task still names the group if other tasks mention it ("Call Sam: Shop supplier").
+    const named = [...proj.values()];
+    tasks.forEach(t => {
+      if (head(t)) return;
+      const title = t.title || '', clean = title.replace(/^([^:]{2,40}):\s+/, '$1: ');
+      const hit = named.find(g => title.toLowerCase().includes(g.name.toLowerCase()));
+      if (DECIDE.test(title)) you.push({ task: t, text: clean });
+      else if (WATCH.test(title)) watch.push({ task: t, text: clean });
+      else if (hit) hit.items.push({ task: t, text: title });
+      else loose.push({ task: t, text: title });
+    });
+    const projects = named.filter(g => g.items.length > 1).sort((a, b) => b.items.length - a.items.length);
+    named.filter(g => g.items.length === 1).forEach(g => loose.push({ task: g.items[0].task, text: g.items[0].task.title }));
+    return [
+      you.length && { kind: 'you', name: 'Your call', items: you },
+      ...projects.map(g => ({ kind: 'project', name: g.name, items: g.items })),
+      loose.length && { kind: 'loose', name: projects.length || you.length ? 'Everything else' : 'To do', items: loose },
+      watch.length && { kind: 'watch', name: 'Waiting on others', items: watch },
+    ].filter(Boolean);
+  }
+  // A saved AI grouping (Regroup with AI) wins over the text rules. Tasks added since go to
+  // "New since regroup", and done or removed ones simply drop out, so nothing is lost or doubled.
+  function aiGroups(open, grouping) {
+    if (!grouping || !Array.isArray(grouping.groups)) return null;
+    const byId = new Map(open.map(t => [t.id, t])), used = new Set();
+    const groups = grouping.groups.map(g => ({
+      kind: g.needs_user ? 'you' : 'project', name: g.name,
+      // A title that starts with the group's own name drops it ("Shop: fix the menu" under Shop).
+      items: (g.ids || []).filter(id => byId.has(id) && !used.has(id) && used.add(id)).map(id => { const t = byId.get(id), pre = String(g.name || '').toLowerCase() + ':'; return { task: t, text: String(t.title).toLowerCase().startsWith(pre) ? String(t.title).slice(pre.length).trim() : t.title }; }),
+    })).filter(g => g.items.length);
+    const fresh = open.filter(t => !used.has(t.id)).map(t => ({ task: t, text: t.title }));
+    if (fresh.length) groups.push({ kind: 'loose', name: 'New since regroup', items: fresh });
+    return groups.length ? groups : null;
+  }
+  const wbzEl = document.getElementById('office-wbzoom');
+  const MARKERS = ['#1f5fa8', '#2c7a4b', '#6a3fa0', '#a8641a', '#0f7480', '#8a2f5c'];
+  let wbzTable = null, lastWbzKey = '', wbzTimer = null;
+  function openWbz(key, hit) {
+    if (consoleFor) { selected = null; renderCard(); }
+    setFolded(true);
+    const s = stage.getBoundingClientRect(), r = hit && hit.getBoundingClientRect();
+    const fx = r ? (r.left + r.width / 2 - s.left) / s.width * 100 : 50, fy = r ? (r.top + r.height / 2 - s.top) / s.height * 100 : 50;
+    stage.style.setProperty('--wb-ox', fx.toFixed(2) + '%'); stage.style.setProperty('--wb-oy', fy.toFixed(2) + '%');
+    stage.style.setProperty('--wb-from', (r ? Math.max(0.06, r.width / s.width) : 0.2).toFixed(3));
+    wbzTable = key; lastWbzKey = ''; boardMsg = ['', false];
+    clearTimeout(wbzTimer);
+    renderWbz(true);
+    wbzEl.hidden = false;
+    // Two frames so the closed state paints first and the zoom actually animates.
+    requestAnimationFrame(() => requestAnimationFrame(() => { wbzEl.classList.remove('closed'); stage.classList.add('wb-zooming'); }));
+    const c = wbzEl.querySelector('.wbz-close'); if (c) c.focus({ preventScroll: true });
+  }
+  function closeWbz() {
+    if (wbzEl.hidden || wbzTable == null) return false;
+    const was = wbzTable;
+    wbzTable = null; stage.classList.remove('wb-zooming'); wbzEl.classList.add('closed');
+    wbzTimer = setTimeout(() => { wbzEl.hidden = true; wbzEl.innerHTML = ''; }, still ? 0 : 300);
+    const back = [...desksLayer.querySelectorAll('.office-hit.wb')].find(b => b.dataset.table === was);
+    if (back) back.focus({ preventScroll: true });
+    return true;
+  }
+  function renderWbz(force) {
+    if (wbzTable == null) return;
+    const agents = (data && data.agents) || [], all = (board && board.tasks) || [];
+    const runR = (board && board.runs && board.runs.regroup) || null, grouping = ((board && board.groupings) || {})[wbzTable] || null;
+    const key = JSON.stringify([wbzTable, all, boardMsg, runR, grouping, tables.map(tb => tb.key), agents.map(a => [a.id, a.name, a.title, a.cwd, a.tty])]);
+    if (!force && (key === lastWbzKey || (wbzEl.contains(document.activeElement) && /INPUT|SELECT/.test(document.activeElement.tagName)) ||
+      [...wbzEl.querySelectorAll('input')].some(e => e.value))) return;
+    lastWbzKey = key;
+    const keys = [...new Set([...tables.map(tb => tb.key), ...all.filter(t => t.status !== 'done').map(taskTable)])];
+    const tasks = all.filter(t => taskTable(t) === wbzTable), open = tasks.filter(t => t.status !== 'done'), done = tasks.filter(t => t.status === 'done');
+    const here = agents.filter(a => tableOf(a) === wbzTable && (a.tty || demo));
+    const withN = open.filter(t => t.status === 'assigned').length;
+    const ai = aiGroups(open, grouping), groups = ai || groupTasks(open);
+    const regrouping = !!(runR && runR.status === 'running');
+    if (!regrouping && boardMsg[0].startsWith('Regrouping')) boardMsg = ['', false];
+    const here_ = regrouping && runR.table === wbzTable;
+    const aiBtn = `<button type="button" class="wbz-ai" data-wact="regroup" ${regrouping || open.length < 2 ? 'disabled' : ''} title="Sorts these tasks into groups with one model call. Runs only when you press it.">${here_ ? '<i></i>Regrouping…' : regrouping ? 'Regrouping another board…' : ai ? 'Regroup again' : 'Regroup with AI'}</button>`;
+    const tag = ai ? `<span class="wbz-tag">AI groups · ${ago(Date.now() / 1000 - grouping.at)} ago<button type="button" data-wact="ungroup">Undo</button></span>` : '';
+    const failed = runR && runR.status === 'failed' && runR.table === wbzTable && !boardMsg[0] ? `<p class="wbz-msg bad">${esc(runR.error || 'The regroup did not finish.')}</p>` : '';
+    let hue = 0;
+    const colour = g => g.kind === 'you' ? '#b0302a' : g.kind === 'watch' || g.kind === 'loose' ? '#3b4656' : MARKERS[hue++ % MARKERS.length];
+    const item = (it, mk) => {
+      const t = it.task, who = t.status === 'assigned' ? nameOf(agents.find(a => a.id === t.agent) || { title: t.agent_title || 'an agent' }) : '';
+      const pick = here.length ? `<select data-wact="pick" aria-label="Give it to"><option value="">${who ? 'Send again to…' : 'Give it to…'}</option>${here.map(a => `<option value="${esc(a.id)}">${esc(nameOf(a))}: ${esc(a.title)}</option>`).join('')}</select>` : '';
+      return `<li class="wbz-task" data-id="${esc(t.id)}" style="--mk:${mk}"><button type="button" class="wbz-check" data-wact="done" title="Mark done" aria-label="Mark done: ${esc(t.title)}"></button>
+        <div><b>${esc(it.text)}</b>${t.notes ? `<p>${esc(String(t.notes).replace(/^\|\s*/, ''))}</p>` : ''}</div>
+        ${who || pick ? `<div class="wbz-row">${who ? `<span class="wbz-with">With ${esc(who)}</span>` : ''}${pick}</div>` : ''}</li>`;
+    };
+    wbzEl.innerHTML = `<div class="wbz-board">
+      <header class="wbz-head"><h3>${esc(tableName(wbzTable))}</h3><small>${open.length} open${withN ? ` · ${withN} with an agent` : ''}${done.length ? ` · ${done.length} done` : ''}</small>${tag}
+        <div class="wbz-tables">${aiBtn}${keys.length > 1 ? keys.map(k => `<button type="button" data-wact="table" data-table="${esc(k)}" aria-pressed="${k === wbzTable}">${esc(tableName(k))}</button>`).join('') : ''}<button type="button" class="wbz-close" data-wact="close" aria-label="Close the whiteboard (Esc)">Close</button></div></header>
+      <p class="wbz-msg${boardMsg[1] ? ' bad' : ''}" aria-live="polite">${esc(boardMsg[0])}</p>${failed}
+      <div class="wbz-groups">${groups.map(g => { const mk = colour(g); return `<section class="wbz-group" data-group="${esc(g.kind)}" style="--mk:${mk}"><h4>${esc(g.name)}<small>${g.items.length}</small>${g.kind === 'you' ? '<em>Needs you</em>' : ''}</h4><ul>${g.items.map(it => item(it, mk)).join('')}</ul></section>`; }).join('') || '<p class="wbz-empty">Nothing on this whiteboard yet.</p>'}</div>
+      ${done.length ? `<details class="wbz-done"><summary>Done (${done.length})</summary><ul>${done.slice(-12).map(t => `<li>${esc(t.title)}</li>`).join('')}</ul></details>` : ''}
+      <form class="wbz-add"><input name="title" maxlength="140" placeholder="Add a task to ${esc(tableName(wbzTable))}" required><button type="submit">Add</button></form>
+    </div>`;
+  }
+  wbzEl.addEventListener('pointerdown', e => { if (e.target === wbzEl) { e.preventDefault(); closeWbz(); } });
+  wbzEl.addEventListener('click', e => {
+    const btn = e.target.closest('[data-wact]');
+    if (!btn || btn.disabled || btn.tagName === 'SELECT') return;
+    const act = btn.dataset.wact, li = btn.closest('.wbz-task');
+    if (act === 'close') { closeWbz(); return; }
+    if (act === 'table') { wbzTable = btn.dataset.table; boardMsg = ['', false]; renderWbz(true); return; }
+    if (act === 'done' && li) { btn.disabled = true; boardPost({ action: 'done', id: li.dataset.id }); }
+    if (act === 'regroup') { btn.disabled = true; boardPost({ action: 'regroup', table: wbzTable }); }
+    if (act === 'ungroup') { boardPost({ action: 'ungroup', table: wbzTable }, true); }
+  });
+  wbzEl.addEventListener('change', e => {
+    const sel = e.target.closest('select[data-wact="pick"]');
+    if (!sel || !sel.value) return;
+    sel.disabled = true;
+    boardPost({ action: 'assign', id: sel.closest('.wbz-task').dataset.id, agent: sel.value });
+  });
+  wbzEl.addEventListener('submit', e => {
+    e.preventDefault();
+    const input = e.target.querySelector('input[name="title"]'), title = input.value.trim();
+    if (!title) return;
+    input.value = '';
+    boardPost({ action: 'add', title, notes: '', group: wbzTable || homeDir() });
+  });
+
   // ── Panel tabs: the floor, the three boards, usage ──
   const boardEl = document.getElementById('office-board');
   const rosterEl = document.getElementById('office-roster');
   let panel = 'floor', boardMsg = ['', false], editingProject = false, tableSel = null;
-  function openTable(key) { tableSel = key; setPanel('tasks'); renderBoard(true); }
   function setPanel(name) {
     const changed = panel !== name;
     panel = name;
@@ -1968,11 +2108,11 @@
       }
       board = out.board; lastBoardKey = '';
       if (!quiet) boardMsg = [{ add: 'Added to the board.', assign: `Typed into ${(out.result || {}).agent_title || 'its terminal'}.`, done: 'Done.',
-        lab: body.kind === 'research' ? 'The researcher is in the lab.' : 'The brainstormer is on it.', project: 'Project saved.' }[body.action] || '', false];
+        lab: body.kind === 'research' ? 'The researcher is in the lab.' : 'The brainstormer is on it.', project: 'Project saved.', regroup: 'Regrouping with AI, about half a minute.' }[body.action] || '', false];
       if (body.action === 'done') { toast('Task done', (out.result || {}).title || 'Nice work'); confetti(); }
-      renderBoard(true); markNew(); draw();
+      renderBoard(true); renderWbz(true); markNew(); draw();
       return out;
-    } catch (err) { boardMsg = [err.name === 'AbortError' ? 'It did not answer in time.' : err.message, true]; renderBoard(true); }
+    } catch (err) { boardMsg = [err.name === 'AbortError' ? 'It did not answer in time.' : err.message, true]; renderBoard(true); renderWbz(true); }
   }
 
   let lastBoardKey = '';
@@ -2116,12 +2256,12 @@
       else { const r = await fetchT('/api/office/board', { cache: 'no-store' }, 5000); if (r.ok) board = await r.json(); }
       // A lab run that just finished gets a toast.
       Object.entries((board && board.runs) || {}).forEach(([k, r]) => {
-        if (prevRuns[k] === 'running' && r.status === 'done') toast(k === 'research' ? 'From the lab' : 'New ideas', `${r.count} ${k === 'research' ? 'suggestions' : 'ideas'} on the board`);
+        if (prevRuns[k] === 'running' && r.status === 'done') { if (k === 'regroup') { if (boardMsg[0].startsWith('Regrouping')) boardMsg = ['', false]; toast('Regrouped', `${r.count} groups on the ${tableName(r.table)} whiteboard`); } else toast(k === 'research' ? 'From the lab' : 'New ideas', `${r.count} ${k === 'research' ? 'suggestions' : 'ideas'} on the board`); }
         prevRuns[k] = r.status;
       });
       if (demo) usage = demoUsage();
       else if (Date.now() - lastUsageAt > 60000) { lastUsageAt = Date.now(); const r = await fetchT('/api/office/usage', { cache: 'no-store' }, 15000); if (r.ok) usage = await r.json(); }
-      applyUsage(); markNew(); renderBoard(); renderHud();
+      applyUsage(); markNew(); renderBoard(); renderWbz(); renderHud();
     } catch (e) { /* the floor still works */ }
   }
 
@@ -2367,6 +2507,7 @@
   new MutationObserver(() => {
     if (!tab.classList.contains('active') && document.body.classList.contains('office-immersive')) setImmersive(false);
     if (!active() && consoleFor) { selected = null; renderCard(); }
+    if (!active()) closeWbz();
   }).observe(tab, { attributes: true, attributeFilter: ['class'] });
   new MutationObserver(() => (active() ? start() : stop())).observe(tab, { attributes: true, attributeFilter: ['class'] });
   document.addEventListener('visibilitychange', () => (active() ? start() : stop()));
@@ -2379,7 +2520,7 @@
     if (!hit) return;
     if (hit.dataset.helper) { openHelper(hit.dataset.helper); return; }
     if (hit.dataset.board) { setPanel(hit.dataset.board); return; }
-    if (hit.dataset.table != null) { openTable(hit.dataset.table); return; }
+    if (hit.dataset.table != null) { openWbz(hit.dataset.table, hit); return; }
     selected = selected === hit.dataset.id ? null : hit.dataset.id;
     lastPlateKey = '';
     renderCard(); renderRoster(); draw();
@@ -2409,6 +2550,8 @@
   });
   document.addEventListener('keydown', e => {
     if (!active()) return;
+    if (e.key === 'Escape' && closeWbz()) { e.preventDefault(); return; }
+    if (wbzTable != null) return;
     if (e.key === 'Escape' && !shell.classList.contains('roster-folded')) { setFolded(true); return; }
     if ((e.key === 'f' || e.key === 'F') && !e.metaKey && !e.ctrlKey && !e.altKey && !(e.target.closest && e.target.closest('input, textarea, select, [contenteditable]'))) { e.preventDefault(); setImmersive(!document.body.classList.contains('office-immersive')); return; }
     if (e.key === 'Escape' && selected) { selected = null; lastPlateKey = ''; renderCard(); draw(); return; }

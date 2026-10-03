@@ -1,4 +1,5 @@
 import json
+import json
 import os
 import shutil
 import socket
@@ -301,6 +302,38 @@ class Board(unittest.TestCase):
         b = office.board_view(self.tmp)
         self.assertEqual(b["ideas"][0]["title"], "Loyalty stamps")
         self.assertEqual(b["runs"]["brainstorm"]["status"], "done")
+
+    def test_regroup_sorts_one_whiteboard_and_keeps_every_task(self):
+        home = "/home/a"
+        add = lambda title, group=None: office.board_action(self.tmp, {"action": "add", "title": title, "group": group})["result"]
+        a, b, c = add("Shop: fix menu", "/home/a/proj"), add("Decide: logo", "/home/a/proj"), add("Order beans", "/home/a/proj")
+        other = add("Elsewhere")
+        calls = []
+        reply = json.dumps({"groups": [{"name": "Your call", "needs_user": True, "ids": [b["id"], other["id"], "bogus"]},
+                                       {"name": "Shop", "ids": [a["id"], b["id"]]}, {"name": "Empty", "ids": []}]})
+
+        def spawner(argv, out, err):
+            calls.append(argv)
+            with open(out, "w") as f:
+                f.write("Sure.\n" + reply)
+            return 2 ** 22 + 1
+        office.start_lab(self.tmp, "regroup", spawner=spawner, table="/home/a/proj", home=home)
+        prompt = open([os.path.join(self.tmp, "lab", n) for n in os.listdir(os.path.join(self.tmp, "lab")) if n.endswith(".prompt")][0]).read()
+        self.assertIn(a["id"], prompt)
+        self.assertNotIn("Elsewhere", prompt)
+        self.assertIn("--oneshot", calls[0])
+        b_ = office.board_view(self.tmp)
+        groups = b_["groupings"]["/home/a/proj"]["groups"]
+        self.assertEqual([[g["name"], g["needs_user"], g["ids"]] for g in groups],
+                         [["Your call", True, [b["id"]]], ["Shop", False, [a["id"]]], ["Everything else", False, [c["id"]]]])
+        self.assertEqual(b_["runs"]["regroup"]["status"], "done")
+        office.board_action(self.tmp, {"action": "ungroup", "table": "/home/a/proj"})
+        self.assertNotIn("/home/a/proj", office.board_view(self.tmp)["groupings"])
+        with self.assertRaises(office.OfficeError):
+            office.start_lab(self.tmp, "regroup", spawner=spawner, table="/home/a/empty", home=home)
+        with self.assertRaises(office.OfficeError):
+            office.board_action(self.tmp, {"action": "lab", "kind": "regroup"})
+        self.assertEqual(office.parse_regroup("no json", [a["id"]]), [])
 
     def test_lab_without_hermes_is_a_clear_error(self):
         old = os.environ.get("GOLDWARE_HERMES_BIN")

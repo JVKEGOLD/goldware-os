@@ -1257,6 +1257,7 @@ BOARD_LOCK = threading.RLock()
 LAB = {
     "brainstorm": {"toolsets": "todo", "turns": "2", "budget": "180"},
     "research": {"toolsets": "web", "turns": "16", "budget": "420"},
+    "regroup": {"toolsets": "todo", "turns": "2", "budget": "120"},
 }
 
 
@@ -1265,7 +1266,7 @@ def board_path(data_root):
 
 
 def blank_board():
-    return {"project": {"name": "", "about": ""}, "tasks": [], "ideas": [], "suggestions": [], "runs": {}}
+    return {"project": {"name": "", "about": ""}, "tasks": [], "ideas": [], "suggestions": [], "runs": {}, "groupings": {}}
 
 
 def load_board(data_root):
@@ -1416,7 +1417,63 @@ def spawn_detached(argv, out, err):
     return p.pid
 
 
-def start_lab(data_root, kind, now=None, spawner=None, hermes=None):
+def home_table():
+    return os.path.expanduser("~")
+
+
+def open_at(state, table, home):
+    """Open tasks on one whiteboard (a task with no group belongs to the home table)."""
+    return [t for t in state["tasks"] if t.get("status") != "done" and (t.get("group") or home) == table]
+
+
+def regroup_prompt(state, table, home):
+    lines = []
+    for t in open_at(state, table, home):
+        notes = clean(t.get("notes"), 160)
+        lines.append("- %s: %s%s" % (t["id"], t.get("title", ""), " (%s)" % notes if notes else ""))
+    return (
+        "You sort the user's to-do whiteboard into groups so it is easy to read at a glance.\n"
+        "The tasks, as id: title (notes):\n" + "\n".join(lines) + "\n"
+        "Group them so each group makes sense on its own: by client or project, or by kind of work when\n"
+        "that reads better. Use 3 to 7 groups, each named in 1 to 4 plain words. Put every task in exactly\n"
+        "one group, using its id. Order the groups by what the user should look at first. Mark a group\n"
+        "\"needs_user\": true only when its tasks wait on the user's own decision or action. Do not use any tools.\n"
+        "Reply with only JSON, no prose:\n"
+        '{"groups": [{"name": "...", "needs_user": false, "ids": ["t..."]}]}\n')
+
+
+def parse_regroup(text, open_ids):
+    """Keeps only real open task ids at that table, each once; anything the model left out goes to
+    "Everything else", so no task can vanish from the board."""
+    m = re.search(r"\{.*\}", text or "", re.S)
+    try:
+        data = json.loads(m.group(0)) if m else None
+    except ValueError:
+        data = None
+    if not isinstance(data, dict) or not isinstance(data.get("groups"), list):
+        return []
+    seen, groups = set(), []
+    for g in data["groups"][:8]:
+        if not isinstance(g, dict):
+            continue
+        ids = []
+        for i in g.get("ids") or []:
+            i = str(i)
+            if i in open_ids and i not in seen:
+                seen.add(i)
+                ids.append(i)
+        name = clean(g.get("name"), 40)
+        if ids and name:
+            groups.append({"name": name, "needs_user": g.get("needs_user") is True, "ids": ids})
+    if not groups:
+        return []
+    rest = [i for i in open_ids if i not in seen]
+    if rest:
+        groups.append({"name": "Everything else", "needs_user": False, "ids": rest})
+    return groups
+
+
+def start_lab(data_root, kind, now=None, spawner=None, hermes=None, table=None, home=None):
     cfg = LAB.get(kind)
     if not cfg:
         raise OfficeError("Unknown lab job.")
@@ -1429,17 +1486,24 @@ def start_lab(data_root, kind, now=None, spawner=None, hermes=None):
         run_ = s["runs"].get(kind)
         if run_ and run_.get("status") == "running" and _alive(run_.get("pid")):
             raise OfficeError("Already working on it.")
+        if kind == "regroup":
+            home = home or home_table()
+            table = clean(table, 400) or home
+            if len(open_at(s, table, home)) < 2:
+                raise OfficeError("Add a few tasks to this whiteboard first.")
         lab_dir = os.path.join(data_root, "lab")
         os.makedirs(lab_dir, exist_ok=True)
         base = os.path.join(lab_dir, "%s-%d" % (kind, int(now)))
         with open(base + ".prompt", "w", encoding="utf-8") as f:
-            f.write(lab_prompt(kind, s))
+            f.write(regroup_prompt(s, table, home) if kind == "regroup" else lab_prompt(kind, s))
         extra = os.environ.get("GOLDWARE_LAB_ARGS", "").split()
         argv = [binary or "hermes", "chat", "-Q", "--oneshot", "--source", "tool"] + extra + [
             "-t", cfg["toolsets"], "--max-turns", cfg["turns"], "--run-budget", cfg["budget"],
             "--query-file", base + ".prompt"]
         pid = (spawner or spawn_detached)(argv, base + ".out", base + ".err")
         s["runs"][kind] = {"status": "running", "pid": pid, "started_at": now, "base": base}
+        if kind == "regroup":
+            s["runs"][kind]["table"] = table
         save_board(data_root, s)
         return s["runs"][kind]
 
@@ -1482,6 +1546,17 @@ def settle_runs(state, now):
                 text = f.read()
         except Exception:
             text = ""
+        if kind == "regroup":
+            table = str(run_.get("table") or "")
+            ids = [t["id"] for t in open_at(state, table, home_table())]
+            groups = parse_regroup(text, ids)
+            if not groups:
+                run_.update({"status": "failed", "ended_at": now, "error": "The regroup came back without anything usable."})
+            else:
+                state.setdefault("groupings", {})[table] = {"at": now, "groups": groups}
+                run_.update({"status": "done", "ended_at": now, "count": len(groups)})
+            changed = True
+            continue
         cards = parse_lab(kind, text)
         if not cards:
             run_.update({"status": "failed", "ended_at": now, "error": "It came back without anything usable."})
@@ -1548,7 +1623,16 @@ def board_action(data_root, body, **kw):
             s[lst] = [x for x in s[lst] if x.get("id") != str(body.get("id"))]
             save_board(data_root, s)
     elif action == "lab":
+        if body.get("kind") == "regroup":
+            raise OfficeError("Unknown lab job.")
         result = start_lab(data_root, str(body.get("kind")))
+    elif action == "regroup":
+        result = start_lab(data_root, "regroup", table=str(body.get("table") or ""))
+    elif action == "ungroup":
+        with BOARD_LOCK:
+            s = load_board(data_root)
+            s.setdefault("groupings", {}).pop(clean(body.get("table"), 400), None)
+            save_board(data_root, s)
     elif action == "seen":
         lst = "ideas" if body.get("list") == "ideas" else "suggestions"
         with BOARD_LOCK:
