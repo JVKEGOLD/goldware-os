@@ -97,7 +97,7 @@ cd ~/goldware-os && git pull && make setup
 
 **`make update` and `git pull` are not the same.** `git pull` only downloads the new code: it does not rebuild the app (you still need `make setup`), and it can stop partway if you or your AI changed the same files. `make update` does all of it: it saves your own code changes first, downloads the update and merges it on top, stops without changing anything if the two clash, then runs setup to rebuild.
 
-Your setup survives every update. Your settings (`goldware.json`: name, wake phrase, colors, model, dashboard cards, which agent Let's work opens) and your data (`data/`) are not part of the download, so an update never touches them. Changes you or your AI made to the code are saved as your own commit first, and the update is merged in on top. If an update edits the same lines you changed, nothing is changed and it tells you what to ask your AI. Then setup skips what is already done and rebuilds the app. After an update macOS may forget the app's permissions (see Troubleshooting).
+Your setup survives every update. Your settings (`goldware.json`: name, wake phrase, colors, model, dashboard cards, which agent Let's work opens) and your data (`data/`) are not part of the download, so an update never touches them. Changes you or your AI made to the code are saved as your own commit first, and the update is merged in on top. If an update edits the same lines you changed, nothing is changed and it tells you what to ask your AI. Then setup skips what is already done and rebuilds the app. Every build is signed with the same certificate for this Mac (made once by `app/signing.sh`), so macOS keeps the app's permissions across updates.
 
 ## Uninstalling
 
@@ -109,6 +109,7 @@ Quit GoldWare OS first (menu bar icon, then Quit). If you turned on Open at Logi
 osascript -e 'tell application id "io.goldware.os" to quit'
 tccutil reset All io.goldware.os
 rm -rf "/Applications/GoldWare OS.app"
+security delete-keychain "$HOME/Library/Application Support/GoldWare OS/signing/goldware-signing.keychain-db"
 rm -rf "$HOME/Library/Application Support/GoldWare OS"
 rm -rf "$HOME/Library/Caches/io.goldware.os" "$HOME/Library/WebKit/io.goldware.os" \
        "$HOME/Library/HTTPStorages/io.goldware.os" "$HOME/Library/Saved Application State/io.goldware.os.savedState"
@@ -152,7 +153,7 @@ Run this first. It checks every piece and prints the fix for anything missing:
 make doctor
 ```
 
-- **Voice or camera stopped working after an update.** The app is not signed with an Apple developer certificate, so macOS can forget its permissions after a rebuild. In System Settings > Privacy & Security, open Microphone, Accessibility, Speech Recognition, and Camera, remove GoldWare OS if it is listed (the minus button), and turn it back on.
+- **Voice or camera stopped working after an update.** macOS remembers permissions by the app's signature. Builds are signed with a certificate made once for this Mac (`app/signing.sh`, kept in `~/Library/Application Support/GoldWare OS/signing`), so this should only happen once: the first update that switches from the old ad-hoc signing, or if that folder was deleted. If the build output says "signed ad-hoc", certificate creation failed; rerun `make app` and read the message above it. To re-grant: in System Settings > Privacy & Security, open Microphone, Accessibility, Speech Recognition, and Camera, remove GoldWare OS if it is listed (the minus button), and turn it back on.
 - **"GoldWare OS can't be opened" or "cannot verify the developer".** It is not from the App Store. Right-click the app and choose Open, or go to System Settings > Privacy & Security and click Open Anyway. You only do this once.
 - **You moved or renamed the `goldware-os` folder.** Run `make setup` again from the new location.
 - **A download failed or was interrupted.** Run `make setup` again; downloads resume.

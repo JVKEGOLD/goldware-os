@@ -441,7 +441,7 @@ next_steps() {
   cat <<'TXT'
 
 Next steps
-  1. Open GoldWare OS from /Applications (first launch of an ad-hoc signed app:
+  1. Open GoldWare OS from /Applications (first launch of an app not signed by Apple:
      right-click > Open, or System Settings > Privacy & Security > Open Anyway).
   2. Grant permissions when asked (System Settings > Privacy & Security):
        Microphone          dictation and the assistant

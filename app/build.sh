@@ -49,7 +49,13 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </dict></plist>
 PLIST
 
-IDENTITY=$(security find-identity -v -p codesigning | awk -F'"' '/Apple Development/ {print $2; exit}')
-codesign --force --sign "${IDENTITY:--}" "$APP"
-echo "Built $APP (signed with: ${IDENTITY:-ad-hoc})"
-[[ -n "$IDENTITY" ]] || echo "Note: ad-hoc signed. macOS may forget Microphone/Accessibility/Camera permissions after each rebuild; re-enable them in System Settings > Privacy & Security."
+# Same signature on every build, so macOS keeps the permissions across updates (see signing.sh).
+IFS=$'\t' read -r IDENTITY KEYCHAIN <<< "$(./signing.sh)"
+kcargs=(); [[ -n "$KEYCHAIN" ]] && kcargs=(--keychain "$KEYCHAIN")
+codesign --force --sign "$IDENTITY" "${kcargs[@]}" "$APP"
+if [[ "$IDENTITY" == "-" ]]; then
+  echo "Built $APP (signed ad-hoc)"
+  echo "Note: ad-hoc signed. macOS may forget Microphone/Accessibility/Camera permissions after each rebuild; re-enable them in System Settings > Privacy & Security."
+else
+  echo "Built $APP (signed with: $(codesign -dvv "$APP" 2>&1 | awk -F= '/^Authority=/ {print $2; exit}'))"
+fi
