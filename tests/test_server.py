@@ -566,6 +566,16 @@ class TestHardening(ServerCase):
             self.assertIn(needle, js)
         with open(os.path.join(REPO, "dashboard", "office.css"), encoding="utf-8") as f:
             self.assertIn(".or-dismiss-row", f.read())
+        # a whiteboard click zooms in (no side panel), tasks grouped, Regroup with AI only on a button press
+        for needle in ("function openWbz(key, hit)", "openWbz(hit.dataset.table, hit)", "function groupTasks(tasks)",
+                       "function aiGroups(open, grouping)", 'data-wact="regroup"', "action: 'regroup', table: wbzTable",
+                       "const WB = 84, WBH = 44;", "['usage', UW + 4]", "if (kind === 'usage') {"):
+            self.assertIn(needle, js)
+        self.assertNotIn("function openTable(", js)
+        # the console gives the chat its room: no last-word box, no usage strip (usage hangs on the wall)
+        self.assertNotIn("oc-closing", js)
+        self.assertNotIn("oc-usage", js)
+        self.assertIn('id="office-wbzoom"', html)
         # no desk plates: the boss plate is the only one; an agent is the click target at its desk
         self.assertNotIn('class="office-plate open"', js)
         self.assertNotIn("op-top\"><i class=\"op-dot", js)
