@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GoldWare Vision gestures</title>
+<link rel="icon" type="image/png" href="/logo.png">
+<style>
+@font-face { font-family: "DM Sans"; src: url("/fonts/DMSans.ttf") format("truetype"); font-weight: 100 1000; font-style: normal; font-display: swap; }
+@font-face { font-family: "Instrument Serif"; src: url("/fonts/InstrumentSerif-Regular.ttf") format("truetype"); font-weight: 400; font-style: normal; font-display: swap; }
+:root {
+  --bg: #0d0c0a; --surface: #14120f; --surface2: #1b1914; --border: #29251e; --border-light: #3d372c;
+  --text: #efe7d6; --text-dim: #b5ad9d; --text-muted: #857d6f; --accent: #C9A24A;
+  --font: "DM Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --display: "Instrument Serif", Georgia, serif;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--font); line-height: 1.55; -webkit-font-smoothing: antialiased; }
+main { max-width: 1240px; margin: 0 auto; padding: 40px 28px 80px; }
+h1 { font: 400 44px/1.1 var(--display); margin: 0 0 10px; }
+.lede { color: var(--text-dim); max-width: 760px; margin: 0 0 8px; }
+.keys { color: var(--text-muted); font-size: 13px; margin: 0 0 28px; }
+kbd { font-family: ui-monospace, Menlo, monospace; font-size: .82em; background: var(--surface2); border: 1px solid var(--border-light); border-bottom-width: 2px; padding: 1px 6px; border-radius: 6px; color: var(--text); }
+section { margin: 34px 0 0; }
+h2 { font: 500 11px/1 var(--font); letter-spacing: .22em; text-transform: uppercase; color: var(--accent); margin: 0 0 6px; }
+.sub { color: var(--text-muted); font-size: 13.5px; margin: 0 0 14px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 16px; align-items: start; }
+.grid > div > .gwg { max-width: none; }
+</style>
+<link rel="stylesheet" href="/dashboard/gestures.css">
+</head>
+<body>
+<main>
+  <h1>Vision gestures</h1>
+  <p class="lede">Every hand gesture GoldWare Vision understands, played out on a loop: the hand shape, how it moves, how long to hold it, which mode it works in, and what it does on your Mac.</p>
+  <p class="keys">Each demo: <kbd>Tab</kbd> to it, <kbd>Space</kbd> plays or pauses, <kbd>&larr;</kbd> <kbd>&rarr;</kbd> step through. With reduced motion on, demos show one still per step instead of playing.</p>
+  <div id="gallery"></div>
+</main>
+<script src="/dashboard/gestures.js"></script>
+<script>
+(function () {
+  var groups = [
+    ["Pointer", "Vision Mode's pointer style: move and click with one hand."],
+    ["Quadrants", "Dictate into any corner of the screen."],
+    ["Pointer and Quadrants", "Work in both styles, after a hand dictation."],
+    ["Any style", "Work whenever Vision Mode is on."],
+    ["Locked", "Vision Mode starts locked, so a hand passing by never acts."],
+    ["Mirror scan", "No unlock needed. Open the mirror behind the notch and hold something up."]
+  ];
+  var all = GoldWareGestures.list(), root = document.getElementById("gallery");
+  groups.forEach(function (gr) {
+    var items = all.filter(function (g) { return g.mode === gr[0]; });
+    if (!items.length) return;
+    var s = document.createElement("section");
+    s.setAttribute("aria-label", gr[0]);
+    s.innerHTML = "<h2></h2><p class=sub></p><div class=grid></div>";
+    s.querySelector("h2").textContent = gr[0];
+    s.querySelector(".sub").textContent = gr[1];
+    root.appendChild(s);
+    items.forEach(function (g) {
+      var d = document.createElement("div");
+      s.querySelector(".grid").appendChild(d);
+      GoldWareGestures.render(d, g.id, { loop: true, size: "m" });
+    });
+  });
+})();
+</script>
+</body>
+</html>

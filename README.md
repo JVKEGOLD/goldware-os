@@ -173,15 +173,25 @@ Nothing leaves your Mac. Speech, language models, camera frames, tasks, and note
 
 ## Vision and voice shortcuts
 
-Vision Mode starts locked. Your unlock gesture opens it; praying hands held for under a second lock it again. A thumbs up only files a scan.
+Vision Mode starts locked. Your unlock gesture opens it; praying hands held for 0.8 s lock it again, and it locks by itself after a minute with no hand in view. A thumbs up only files a scan. [docs/GESTURES.md](docs/GESTURES.md) lists every gesture, and `/dashboard/gestures.html` on the dashboard server plays an animated demo of each.
 
-| What | Gesture (pointer style) | Voice |
-|---|---|---|
-| Lock | Praying hands, held | |
-| Send what you just dictated | Open hand, swipe quickly to your left (your left as you face the screen). Also works in Quadrants | |
-| Let's work | Both hands thumb, index, and middle out, thumbs touching, then pull apart | "Let's work" |
-| Lock up | Both hands open, then both fists | "Lock up" |
-| Clear out | Both hands open, then one fist | "Clear out" |
+| What | Gesture | Works in | Voice |
+|---|---|---|---|
+| Move the pointer | Index finger up, move your hand. Thumb wide is fast, thumb close is fine control | Pointer | |
+| Click | Pinch thumb to index and let go within 0.6 s; twice quickly double-clicks | Pointer | |
+| Scroll | Pinch, hold, and move; let go mid-move to fling | Pointer | |
+| Rest | Open hand or fist | Pointer | |
+| Switch to Quadrants | Four fingers up, thumb folded in, held 0.8 s | Pointer | |
+| Back to the pointer | Open hand, thumb spread, held 0.8 s | Quadrants | |
+| Dictate into a corner | Hold up 1 to 4 fingers (1 top left, 2 top right, 3 bottom left, 4 bottom right), talk, lower your hand to paste. A fist rests | Quadrants | |
+| Send what you just dictated | Open hand, swipe quickly to your left (your left as you face the screen) | Pointer and Quadrants | |
+| Clear what you just dictated | Little finger alone, held 0.8 s | Pointer and Quadrants | |
+| Hide or show the mirror | OK sign, held 0.8 s | Any | |
+| Lock | Praying hands, held 0.8 s | Any | |
+| Let's work | Both hands thumb, index, and middle out, thumbs touching, then pull apart | Pointer | "Let's work" |
+| Lock up | Both hands open, then both fists | Pointer | "Lock up" |
+| Clear out | Both hands open, then one fist | Pointer | "Clear out" |
+| File, copy, or discard a scan | Thumbs up (0.7 s), two fingers (0.6 s), or a fist (0.6 s) | Mirror scan | |
 
 Say a voice phrase on its own (optionally after "Hey" or the assistant's name) with Right Command, or after the wake phrase. A task that merely mentions the words stays a task.
 
