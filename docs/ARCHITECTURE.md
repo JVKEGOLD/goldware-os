@@ -7,7 +7,7 @@ Read this before touching any part. It is the interface between the app, the das
 goldware.default.json   tracked defaults. Never edited by users.
 goldware.json           the user's live config (gitignored). Created by setup from the default.
                         Readers: load goldware.json if valid, else goldware.default.json, and report why.
-data/                   gitignored user data: tasks.json, notes.json, drafts/
+data/                   gitignored user data: tasks.json, notes.json, onboarding.json (tour progress), drafts/
 app/                    Swift app (SwiftPM target GoldWareOS). build.sh -> app/build/GoldWareOS.app
 server/goldware_server.py   local server, Python 3.9 stdlib only (macOS Command Line Tools python3)
 dashboard/index.html    the dashboard page (single file, vanilla JS/CSS, no build step, no CDN)
@@ -50,6 +50,13 @@ embed (options.url), html (options.html, rendered in a sandboxed iframe srcdoc).
 - GET/POST /api/notes   {notes: {cardId: text}}; POST {cardId, text}.
 - GET /api/system       {cpu_percent, memory: {used_gb, total_gb}, disk: {free_gb, total_gb}}
 - GET /api/agents       [{name, kind, pid, memory_mb}] for running ollama, whisper-server, hermes, claude, codex.
+- GET /api/onboarding   {state: {status: new|open|done|skipped, chapter, seen: [id], checks: [id], updated},
+                        chapters: [welcome, permissions, voice, vision, office, reshape, help],
+                        permissions: {microphone, accessibility, speech, camera, calendar, automation, updated,
+                        milestones: [id]} | null}. state is data/onboarding.json; permissions is read from the
+                        app's status.json in its data folder (GOLDWARE_DATA), only those fields, null when the
+                        app has not run.
+- POST /api/onboarding  merge {status?, chapter?, seen?, checks?, reset?: true}; ids are short slugs. 400 on bad input.
 - Office (server/office.py, shown by the Office tab). Reads, any same-host request:
   GET /api/office/agents  {generated_at, agents: [{id, name, kind: hermes|claude|codex, title, model, provider,
                           activity, working, tty, cwd, pid, started_at, last_at, helpers, todos, closing}],
@@ -104,6 +111,16 @@ embed (options.url), html (options.html, rendered in a sandboxed iframe srcdoc).
 - Dashboard window: four tabs in this order, data-tab="office" | "dashboard" | "voice" | "vision", buttons with class
   "topbar-tab" (DashboardWindow.go(tab:) clicks them). Cmd+1 to 4 follow the same order. The page opens on the
   Dashboard unless the URL has #office.
+- First-run tour: dashboard/tour.js and tour.css, a dialog over any tab. It opens by itself only while
+  /api/onboarding says status "new", saves every step, and is reopened from the top bar Tour button or the
+  Welcome card. ?tour-demo opens it without saving (screenshots), ?tour=<chapter> opens one chapter. The
+  Vision chapter draws gestures only through GoldWareGestures.list() and .render(el, id, {loop: true,
+  size: 'm'}) from dashboard/gestures.js, placing each in a section by id and mode; any it does not
+  recognise go under "More gestures", so a new gesture always appears. The unlock gesture is private: the
+  tour skips the library's entry for it and shows only its own "set or use your unlock gesture" card.
+- The app writes status.json every 30 s and at once after a first-time milestone (Tour.mark in Tour.swift:
+  dictated, assistant, wake, vision-on, vision-unlocked, quadrants, scan-filed, lets-work, lock-up, clear-out),
+  with the camera, speech, calendar and iTerm Automation states read without prompting.
 - The Office tab is a section of dashboard/index.html plus dashboard/office.js, office-cast.js (the characters, drawn
   from small pixel grids, no image files) and office.css (served from /dashboard/). You are the boss character at the front desk; there is no mascot.
 - Nothing personal: no personal names, clients, businesses, emails, or paths.

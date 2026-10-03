@@ -335,6 +335,7 @@ final class MirrorScan {
                 await MainActor.run {
                     self.busy = false
                     let ok = result.action != "failed"
+                    if ok { Tour.mark("scan-filed") }
                     Sounds.play(ok ? .done : .error)
                     self.setScan(.done(result.summary, ok: ok))
                     self.finishScan(after: ok ? 1.8 : 4)

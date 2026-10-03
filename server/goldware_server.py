@@ -432,6 +432,88 @@ def notes_post(body):
     return 200, {"notes": notes}
 
 
+# ---------- first-run tour ----------
+# Progress lives in data/onboarding.json (git-ignored, so make update keeps it). The permission
+# states come from the app's own status.json in its data folder; the page never sees that file.
+
+TOUR_CHAPTERS = ["welcome", "permissions", "voice", "vision", "office", "reshape", "help"]
+TOUR_STATUSES = ["new", "open", "done", "skipped"]
+PERMISSION_KEYS = ["microphone", "accessibility", "speech", "camera", "calendar", "automation"]
+
+
+def app_data_dir():
+    env = os.environ.get("GOLDWARE_DATA")
+    if env:
+        return os.path.abspath(env)
+    return os.path.join(os.path.expanduser("~"), "Library", "Application Support", "GoldWare OS")
+
+
+def app_permissions():
+    """What the app last reported, or None when it has not run (or wrote something unreadable)."""
+    path = os.path.join(app_data_dir(), "status.json")
+    try:
+        raw = read_json(path)
+    except Exception:
+        return None
+    if not isinstance(raw, dict):
+        return None
+    out = {k: raw[k] for k in PERMISSION_KEYS if isinstance(raw.get(k), str) and len(raw[k]) <= 40}
+    if isinstance(raw.get("updated"), str) and len(raw["updated"]) <= 40:
+        out["updated"] = raw["updated"]
+    ms = raw.get("milestones")
+    out["milestones"] = sorted(k for k in ms if isinstance(k, str) and re.match(r"^[a-z0-9-]{1,40}$", k))[:50] if isinstance(ms, dict) else []
+    return out
+
+
+def tour_state():
+    data = load_data("onboarding.json", {})
+    state = {"status": "new", "chapter": TOUR_CHAPTERS[0], "seen": [], "checks": [], "updated": None}
+    if isinstance(data, dict):
+        if data.get("status") in TOUR_STATUSES:
+            state["status"] = data["status"]
+        if data.get("chapter") in TOUR_CHAPTERS:
+            state["chapter"] = data["chapter"]
+        for k in ("seen", "checks"):
+            v = data.get(k)
+            if isinstance(v, list):
+                state[k] = [x for x in v if isinstance(x, str) and re.match(r"^[a-z0-9-]{1,40}$", x)][:50]
+        if isinstance(data.get("updated"), str):
+            state["updated"] = data["updated"][:40]
+    return state
+
+
+def onboarding_get():
+    return {"state": tour_state(), "chapters": TOUR_CHAPTERS, "permissions": app_permissions()}
+
+
+def onboarding_post(body):
+    """Merge one change: {status?, chapter?, seen?: [id], checks?: [id], reset?: true}."""
+    if not isinstance(body, dict):
+        return 400, {"error": "Body must be a JSON object."}
+    with LOCK:
+        state = {"status": "new", "chapter": TOUR_CHAPTERS[0], "seen": [], "checks": []} if body.get("reset") is True else tour_state()
+        if "status" in body:
+            if body["status"] not in TOUR_STATUSES:
+                return 400, {"error": "status must be one of: " + ", ".join(TOUR_STATUSES) + "."}
+            state["status"] = body["status"]
+        if "chapter" in body:
+            if body["chapter"] not in TOUR_CHAPTERS:
+                return 400, {"error": "chapter must be one of: " + ", ".join(TOUR_CHAPTERS) + "."}
+            state["chapter"] = body["chapter"]
+        for k in ("seen", "checks"):
+            if k in body:
+                v = body[k]
+                if not isinstance(v, list) or len(v) > 50 or not all(isinstance(x, str) and re.match(r"^[a-z0-9-]{1,40}$", x) for x in v):
+                    return 400, {"error": "%s must be a list of short ids (lowercase letters, digits, dashes)." % k}
+                for x in v:
+                    if x not in state[k]:
+                        state[k].append(x)
+                state[k] = state[k][-50:]
+        state["updated"] = datetime.datetime.now().isoformat(timespec="seconds")
+        atomic_write(data_path("onboarding.json"), json.dumps(state, indent=2) + "\n")
+    return 200, {"state": state}
+
+
 # ---------- system and agents ----------
 
 def run(cmd):
@@ -692,6 +774,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(200, system_info())
             if path == "/api/agents":
                 return self.send_json(200, agents_info())
+            if path == "/api/onboarding":
+                return self.send_json(200, onboarding_get())
             if path.startswith("/api/office/"):
                 return self.office_get(path, parse_qs(urlparse(self.path).query))
             if path.startswith("/api/"):
@@ -762,6 +846,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(code, obj)
             if path == "/api/notes":
                 code, obj = notes_post(body)
+                return self.send_json(code, obj)
+            if path == "/api/onboarding":
+                code, obj = onboarding_post(body)
                 return self.send_json(code, obj)
             if path.startswith("/api/office/"):
                 return self.office_post(path, body)
