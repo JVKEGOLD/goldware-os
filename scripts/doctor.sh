@@ -50,6 +50,10 @@ if [[ -d "/Applications/GoldWare OS.app" ]]; then
   STAMP="$(cat "/Applications/GoldWare OS.app/Contents/Resources/goldware-root.txt" 2>/dev/null)"
   if [[ -n "$STAMP" && -f "$STAMP/goldware.default.json" ]]; then row "app finds its checkout" OK "$STAMP"
   else row "app finds its checkout" NO "${STAMP:-no stamp} is gone" "the repo folder was moved or deleted; from the new folder run: make app && make install"; fi
+  # Ad-hoc signatures change every build, so macOS drops the permissions after each update.
+  SIGNER="$(codesign -dvv "/Applications/GoldWare OS.app" 2>&1 | awk -F= '/^Authority=/ {print $2; exit}')"
+  if [[ -n "$SIGNER" ]]; then row "app signature stable" OK "$SIGNER"
+  else row "app signature stable" NO "ad-hoc (permissions reset on every update)" "make app && make install   (creates this Mac's signing certificate)"; fi
 fi
 if curl -fsS --max-time 2 "http://127.0.0.1:$PORT/api/work" >/dev/null 2>&1; then row "server answering" OK "http://127.0.0.1:$PORT"
 else row "server answering" NO "port $PORT" "make run-server   (or open the app, it starts the server)"; fi
