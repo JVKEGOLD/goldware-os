@@ -88,6 +88,7 @@ final class VisionController {
                 return
             }
             if unlocked {
+                Tour.mark("vision-unlocked")
                 Sounds.play(.assistantStart)
                 self.onNotice?("Vision unlocked")
             }
@@ -246,6 +247,8 @@ final class VisionController {
         mirrorHidden = Self.mirrorHidden(on: on, wasOn: HandControl.enabled, hidden: mirrorHidden)
         HandControl.enabled = on
         if on {
+            Tour.mark("vision-on")
+            if HandControl.style == .quadrants { Tour.mark("quadrants") }
             if !AXIsProcessTrusted() { onNotice?("Vision Mode needs Accessibility access to move the pointer") }
             camera.claim("mode")
             if !mirrorHidden { mirror.pin(on: notchScreen) }     // asks for camera access itself if needed

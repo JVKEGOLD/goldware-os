@@ -1889,6 +1889,33 @@ if args.count >= 3, args[1] == "--orb-sheet" {
     exit(0)
 }
 
+// The first-run tour's milestones and permission labels (status.json, read by /api/onboarding).
+if args.count >= 2, args[1] == "--test-tour" {
+    var failures = 0
+    func expect(_ what: String, _ ok: Bool) { print("\(ok ? "PASS" : "FAIL")  \(what)"); if !ok { failures += 1 } }
+    let suite = "io.goldware.os.test-tour"
+    UserDefaults().removePersistentDomain(forName: suite)
+    Tour.defaults = UserDefaults(suiteName: suite)!
+    expect("starts with no milestones", Tour.milestones.isEmpty)
+    Tour.mark("lets-work", now: Date(timeIntervalSince1970: 0))
+    Tour.mark("lets-work", now: Date(timeIntervalSince1970: 999_999))
+    expect("the first time is kept", Tour.milestones["lets-work"] == "1970-01-01T00:00:00Z")
+    Tour.mark("not-a-step")
+    expect("unknown steps are ignored", Tour.milestones.count == 1)
+    for id in Tour.ids { Tour.mark(id) }
+    expect("every tour step can be marked", Set(Tour.milestones.keys) == Set(Tour.ids))
+    expect("the ids are the ones the server accepts (lowercase, dashes)", Tour.ids.allSatisfy { $0.range(of: "^[a-z0-9-]{1,40}$", options: .regularExpression) != nil })
+    let known: Set<String> = ["granted", "denied", "restricted", "not asked yet", "limited", "unknown", "iterm closed"]
+    expect("camera reads as a known label", known.contains(Tour.camera))
+    expect("speech reads as a known label", known.contains(Tour.speech))
+    expect("calendar reads as a known label", known.contains(Tour.calendar))
+    expect("automation reads as a known label without prompting", known.contains(Tour.automation(bundle: "io.goldware.no-such-app")))
+    expect("status labels", Tour.label(.authorized) == "granted" && Tour.label(.denied) == "denied" && Tour.label(.notDetermined) == "not asked yet")
+    UserDefaults().removePersistentDomain(forName: suite)
+    print(failures == 0 ? "ALL PASS" : "\(failures) FAILED")
+    exit(failures == 0 ? 0 : 1)
+}
+
 // Renders the indicator (history list, idle orb, active pills) to a PNG for review.
 if args.count >= 2, args[1] == "--test-agent-peek" {
     var failures = 0

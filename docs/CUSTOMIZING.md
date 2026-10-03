@@ -34,7 +34,7 @@ Each card: `{ "id": "unique-slug", "type": "...", "title": "...", "size": "s" | 
 
 | Type | What it shows | Options |
 |---|---|---|
-| `welcome` | Intro and tips | none |
+| `welcome` | Intro and tips, with the button that resumes or replays the first-run tour | none |
 | `clock` | Date and time | none |
 | `shortcuts` | One-click Let's work, Lock up and Clear out buttons, each showing its voice phrase and gesture (the buttons are fixed, not configurable) | none |
 | `tasks` | Your task list (stored in `data/tasks.json`) | none |
@@ -98,7 +98,7 @@ make app
 scripts/setup.sh --only install --yes
 ```
 
-(`make install` does the same but skips the copy when nobody can answer its question, as when an agent runs it.) Quit and reopen the app; macOS may ask for the permissions again. `make test` runs the Python tests and the hand, quadrants, chord, wake, shelf, Let's work, and terminal-commands self-tests; run others yourself, for example `GOLDWARE_DATA=$TMPDIR/gw app/.build/release/GoldWareOS --test-terminal-commands`.
+(`make install` does the same but skips the copy when nobody can answer its question, as when an agent runs it.) Quit and reopen the app; macOS may ask for the permissions again. `make test` runs the Python tests and the hand, quadrants, chord, wake, shelf, Let's work, terminal-commands, agent-peek and tour self-tests; run others yourself, for example `GOLDWARE_DATA=$TMPDIR/gw app/.build/release/GoldWareOS --test-terminal-commands`.
 
 ## How the Office finds agents
 
@@ -187,13 +187,23 @@ OfficeCast.customize({
 - The dictation pill at the bottom of the screen draws the same characters from the same two files, so your look shows there too. It picks up a saved change within a few seconds; reload the Office tab to see it there.
 - Names that are not in the cast are ignored, and a file with a mistake in it leaves the built-in looks in place.
 
+## The first-run tour
+
+The dashboard opens a short tour the first time it loads: what GoldWare OS is, each permission and why, voice, Vision Mode, the Office, reshaping the dashboard, and where to get help. Each chapter has something to try now, and the tour ticks it off when the app sees it happen (your first dictation, Vision unlocked, "Let's work").
+
+- **Progress** is saved in `data/onboarding.json` (git-ignored), so `make update` keeps it. Delete that file, or `POST /api/onboarding {"reset": true}`, to see the tour again as a new user.
+- **Replay** it from the **Tour** button in the top bar or the Welcome card. `?tour=vision` opens one chapter; `?tour-demo` opens it without saving anything.
+- **Change the text** in `dashboard/tour.js`: each chapter is a function that returns its elements, listed in `CHAPTERS`. A new chapter id must also be added to `TOUR_CHAPTERS` in `server/goldware_server.py`. Its look is `dashboard/tour.css`.
+- **Gestures** in the Vision chapter come from the gesture library (`GoldWareGestures`), so they stay in step with the Vision tab. The unlock gesture is never shown.
+- **Tests**: `tests/test_tour.py` runs in `make test`; `tests/tour_cdp.mjs` drives the tour in headless Chrome (see the comment at its top).
+
 ## Where data lives
 
 | What | Where |
 |---|---|
 | Your config, including your New agent topics and agents | `goldware.json` (repo root, gitignored) |
 | Your Office CSS and character looks | `custom/office.css`, `custom/office-cast.js` (gitignored) |
-| Tasks, notes, drafts, the boss's folder (`data/boss`) | `data/` in the repo root (gitignored). `GOLDWARE_DATA_ROOT` overrides it |
+| Tasks, notes, drafts, tour progress, the boss's folder (`data/boss`) | `data/` in the repo root (gitignored). `GOLDWARE_DATA_ROOT` overrides it |
 | Models, app data, history | `~/Library/Application Support/GoldWare OS/` (`GOLDWARE_DATA` overrides it) |
 | Whisper model | `~/Library/Application Support/GoldWare OS/models/` |
 | Language models | managed by Ollama (`ollama list`) |

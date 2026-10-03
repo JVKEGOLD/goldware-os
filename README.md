@@ -12,6 +12,7 @@ Your Mac, voice, vision, and a dashboard you reshape with your own AI. Everythin
   - **Topics and agents are yours.** They live in `goldware.json` under `office.topics` and `office.presets`, which `make update` never touches. Defaults: Home (`~`) and Hermes, Claude Code, Codex (an agent whose program is not installed shows greyed out).
   - **Your own look**: put CSS in `custom/office.css` and it loads after the built-in Office styles, and restyle the agent characters in `custom/office-cast.js` (the dictation pill shows the same look). The `custom/` folder is git-ignored, so updates keep it. See [docs/CUSTOMIZING.md](docs/CUSTOMIZING.md).
 - **Dashboard**: a local page at http://127.0.0.1:4188 that you customize by asking your AI agent.
+- **First-run tour**: the first time the dashboard opens, a short guided tour walks through the privacy promise, each permission and why it is needed, voice, Vision Mode, the Office, reshaping the dashboard, and where to get help. Each chapter has something to try, and the tour ticks it off when the app sees you do it. Skip it any time; replay it from the **Tour** button or the Welcome card.
 
 ## What you need
 
@@ -46,7 +47,7 @@ If it stops with an error, it tells you what to do. Do that, then paste the step
 
 **3. Say yes to permissions.** At the end, setup offers to open GoldWare OS. When macOS asks to allow the Microphone, Accessibility, Speech Recognition, and Camera, allow each one. For Accessibility, macOS opens System Settings: turn on **GoldWare OS** there.
 
-**Done.** Say **"Hey GoldWare"**. Your dashboard is at http://127.0.0.1:4188.
+**Done.** The dashboard opens with a five-minute tour; it shows which permissions are on and what to try first. The dashboard is at http://127.0.0.1:4188, and the tour is under its **Tour** button whenever you want it again.
 
 Later you can open GoldWare OS from your Applications folder like any other app. Leave the `goldware-os` folder in your home folder: the app reads its settings from it.
 
@@ -59,8 +60,10 @@ Later you can open GoldWare OS from your Applications folder like any other app.
 | Accessibility | pasting text and global hotkeys |
 | Speech Recognition | the "Hey GoldWare" wake phrase |
 | Camera | Vision (hand tracking, document scan) |
+| Automation (iTerm) | Let's work, Lock up, Clear out and the Office; asked the first time you use one |
+| Calendar (optional) | the Today tab in the menu bar control center |
 
-You can change any of them later in System Settings > Privacy & Security.
+The tour's Permissions chapter shows which are on, with a button to each settings pane. You can change any of them later in System Settings > Privacy & Security.
 </details>
 
 <details>
@@ -97,7 +100,7 @@ cd ~/goldware-os && git pull && make setup
 
 **`make update` and `git pull` are not the same.** `git pull` only downloads the new code: it does not rebuild the app (you still need `make setup`), and it can stop partway if you or your AI changed the same files. `make update` does all of it: it saves your own code changes first, downloads the update and merges it on top, stops without changing anything if the two clash, then runs setup to rebuild.
 
-Your setup survives every update. Your settings (`goldware.json`: name, wake phrase, colors, model, dashboard cards, which agent Let's work opens) and your data (`data/`) are not part of the download, so an update never touches them. Changes you or your AI made to the code are saved as your own commit first, and the update is merged in on top. If an update edits the same lines you changed, nothing is changed and it tells you what to ask your AI. Then setup skips what is already done and rebuilds the app. Every build is signed with the same certificate for this Mac (made once by `app/signing.sh`), so macOS keeps the app's permissions across updates.
+Your setup survives every update. Your settings (`goldware.json`: name, wake phrase, colors, model, dashboard cards, which agent Let's work opens) and your data (`data/`, including how far you got in the tour) are not part of the download, so an update never touches them. Changes you or your AI made to the code are saved as your own commit first, and the update is merged in on top. If an update edits the same lines you changed, nothing is changed and it tells you what to ask your AI. Then setup skips what is already done and rebuilds the app. Every build is signed with the same certificate for this Mac (made once by `app/signing.sh`), so macOS keeps the app's permissions across updates.
 
 ## Uninstalling
 

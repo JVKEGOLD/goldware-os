@@ -135,6 +135,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         term.setEventHandler { NSApp.terminate(nil) }
         term.resume()
         termSource = term
+        Tour.onChange = { [weak self] in self?.writeStatus() }
 
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
         _ = AXIsProcessTrustedWithOptions(options)
@@ -337,6 +338,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             "pending_captures": store.pendingOutbox().count,
             "dashboard": dashboardState,
             "server": commandCenter.startedHere ? "started by the app" : "already running",
+            // For the dashboard's first-run tour (read by /api/onboarding). Reading these never prompts.
+            "camera": Tour.camera,
+            "speech": Tour.speech,
+            "calendar": Tour.calendar,
+            "automation": Tour.automation(),
+            "milestones": Tour.milestones,
         ]
         if let data = try? JSONSerialization.data(withJSONObject: status, options: [.prettyPrinted, .sortedKeys]) {
             try? data.write(to: Paths.dataDir.appendingPathComponent("status.json"))
@@ -625,6 +632,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 return
             }
             Paster.paste(text)
+            Tour.mark("dictated")
             self.rememberPaste("the dictation")
             if self.handDictating, let pid = app?.processIdentifier {
                 self.sendable = LastPaste(pid: pid, at: Date(), length: text.count)
@@ -656,6 +664,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let (closed, kept, error) = await Task.detached { TerminalCommands.lockUp() }.value
         await MainActor.run {
             Sounds.play(error == nil ? .done : .error)
+            if error == nil { Tour.mark("lock-up") }
             let keptText = kept == 0 ? "" : ", kept \(kept) working"
             self.hud.show(error ?? "Closed \(closed) terminal\(closed == 1 ? "" : "s")\(keptText)", orb: error == nil ? .breathing : .shaping,
                           tint: .assistant, autoHide: error == nil ? 2.5 : 6)
@@ -668,6 +677,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let (closed, left, error) = await Task.detached { TerminalCommands.clearOut() }.value
         await MainActor.run {
             Sounds.play(error == nil ? .done : .error)
+            if error == nil { Tour.mark("clear-out") }
             let msg = closed == 0 ? "No unused Hermes terminals" : "Closed \(closed) unused terminal\(closed == 1 ? "" : "s"), \(left) left"
             self.hud.show(error ?? msg, orb: error == nil ? .breathing : .shaping, tint: .assistant, autoHide: error == nil ? 2.5 : 6)
         }
@@ -680,6 +690,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let error = await Task.detached { LetsWork.open(script) }.value
         await MainActor.run {
             Sounds.play(error == nil ? .done : .error)
+            if error == nil { Tour.mark("lets-work") }
             self.hud.show(error ?? "Four terminals, one per quadrant", orb: error == nil ? .breathing : .shaping,
                           tint: .assistant, autoHide: error == nil ? 2.5 : 6)
         }
@@ -753,6 +764,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if result.action == "paste" { record.finalText = result.reference }   // keep snippet values out of history
         let saved = record
         let pasteValue = result.pasteValue
+        if result.action != "failed" { Tour.mark("assistant") }
         await MainActor.run {
             if let pasteValue { Paster.paste(pasteValue); self.rememberPaste(result.reference) }
             self.store.insert(saved)
@@ -1183,6 +1195,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self.targetApp = NSWorkspace.shared.frontmostApplication
             self.recordingMode = .assistant
             self.setIcon(recording: true)
+            Tour.mark("wake")
             Sounds.play(.assistantStart)
             self.hud.show("\(GWConfig.name) is listening…", orb: .listening, tint: .assistant)
             self.refreshVault()
