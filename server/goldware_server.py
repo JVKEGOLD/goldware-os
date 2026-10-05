@@ -708,7 +708,7 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/office/usage":
                 return self.send_json(200, office.usage_snapshot())
             if path == "/api/office/chat":
-                return self.send_json(200, office.chat_of_agent(q("id")))
+                return self.send_json(200, office.chat_of_agent(q("id"), data_root=DATA_ROOT))
             if path == "/api/office/settings":
                 return self.send_json(200, office_launch.view(default_path(), user_path()))
             return self.err(404, "Not found.")

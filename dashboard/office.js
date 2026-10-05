@@ -1596,25 +1596,90 @@
       return `<p>${lines.map(l => inline(l.replace(/^#+\s*/, ''))).join('<br>')}</p>`;
     }).join('');
   }
+  // The Chat view is a group chat: you on the right, the boss (or the agent) on the left with its picture,
+  // and when it delegates, each helper (subagent) or office agent it typed to answers as itself, with its own avatar.
+  function chatFace(t, a) {
+    if (t.kind === 'helper' || t.kind === 'handoff') return { color: assign(t.helper), blob: true };
+    if (t.kind === 'agent') {
+      const live = agentById(t.from);
+      if (live) return live;
+      return { name: t.name, color: cast.has(t.name) ? cast.color(t.name) : assign(t.from || t.name || 'agent') };
+    }
+    return a || { color: '#d9a441' };
+  }
+  function avatarSpan(face, faces) {
+    faces.push(face);
+    return `<span class="oc-av" data-av="${faces.length - 1}" aria-hidden="true"></span>`;
+  }
+  // The pictures are painted after the html is set: a character from the cast, else a blob in its colour.
+  function paintChatAvatars(box, faces) {
+    box.querySelectorAll('.oc-av[data-av]').forEach(el => {
+      const f = faces[Number(el.dataset.av)] || {};
+      const url = !f.blob && monOf(f) ? cast.url(f.name) : '';
+      el.style.setProperty('--agent', f.color || '#94b0c2');
+      el.classList.toggle('blob', !url);
+      el.innerHTML = url ? '<i></i>' : '';
+      if (url) el.firstChild.style.setProperty('--mon', `url(${url})`);
+    });
+  }
+  const typingDots = what => `<span class="oc-typing"><i></i><i></i><i></i>${esc(what || 'working')}</span>`;
+  function chatHtml(turns, a, faces) {
+    const me = a ? nameOf(a) : 'Agent', out = [];
+    for (let i = 0; i < turns.length; i++) {
+      const t = turns[i];
+      if (t.kind === 'did') { out.push(`<p class="oc-did">${esc(t.text)}</p>`); continue; }
+      if (t.kind === 'you') { out.push(`<div class="oc-msg you"><small>You</small>${prose(t.text)}</div>`); continue; }
+      const face = chatFace(t, a), color = esc(face.color || '');
+      if (t.kind === 'handoff') {
+        // One message from the agent for a batch of helpers sent out together.
+        const batch = [t];
+        while (turns[i + 1] && turns[i + 1].kind === 'handoff') batch.push(turns[++i]);
+        const lines = batch.map(h => `<p class="oc-hand"><span class="oc-at" style="--agent:${esc(assign(h.helper))}">@Helper ${esc(h.n)}</span><span class="oc-clamp">${esc(h.text || h.title)}</span></p>`).join('');
+        out.push(`<div class="oc-row">${avatarSpan(chatFace({}, a), faces)}<div class="oc-msg said" style="--agent:${esc((a && a.color) || '')}"><div class="oc-from"><b>${esc(me)}</b><em>sent out ${batch.length === 1 ? 'a helper' : batch.length + ' helpers'}</em></div>${lines}</div></div>`);
+        continue;
+      }
+      if (t.kind === 'send') {
+        const to = t.name || (t.to ? 'an agent' : 'a new agent'), toColor = t.to ? chatFace({ kind: 'agent', from: t.to, name: t.name }, a).color : '';
+        out.push(`<div class="oc-row">${avatarSpan(chatFace({}, a), faces)}<div class="oc-msg said" style="--agent:${esc((a && a.color) || '')}"><div class="oc-from"><b>${esc(me)}</b></div><p><span class="oc-at" style="--agent:${esc(toColor || '#94b0c2')}">@${esc(to)}</span><span class="oc-clamp">${esc(t.text)}</span></p></div></div>`);
+        continue;
+      }
+      if (t.kind === 'helper' || t.kind === 'agent') {
+        const who = t.kind === 'helper' ? `Helper ${t.n}` : (t.name || 'Agent');
+        const sub = t.kind === 'helper' ? `<em>${esc(t.title || '')}</em>` : t.report ? '<span class="oc-tag">Report</span>' : '';
+        const body = t.text ? `<div class="${t.report ? '' : 'oc-clamp'}">${prose(t.text)}</div>` : '';
+        const busy = t.working ? typingDots(t.kind === 'helper' ? (WORDS[t.activity] || 'working') + (t.tool ? ' · ' + toolName(t.tool) : '') : 'working') : '';
+        out.push(`<div class="oc-row">${avatarSpan(face, faces)}<div class="oc-msg mate" style="--agent:${color}"><div class="oc-from"><b>${esc(who)}</b>${sub}</div>${body}${busy}</div></div>`);
+        continue;
+      }
+      out.push(`<div class="oc-row">${avatarSpan(face, faces)}<div class="oc-msg said" style="--agent:${color}"><div class="oc-from"><b>${esc(me)}</b></div>${prose(t.text)}</div></div>`);
+    }
+    return out.join('');
+  }
   function renderChat(turns, screenText) {
     const box = consoleEl.querySelector('.oc-chat');
     if (!box) return;
+    const a = agentById(consoleFor), faces = [];
     let html = turns
-      ? (turns.length ? turns.map(t => t.kind === 'did' ? `<p class="oc-did">${esc(t.text)}</p>`
-          : `<div class="oc-msg ${t.kind}"><small>${t.kind === 'you' ? 'You' : 'Agent'}</small>${prose(t.text)}</div>`).join('') : '<p class="oc-empty">Nothing said yet.</p>')
+      ? (turns.length ? chatHtml(turns, a, faces) : '<p class="oc-empty">Nothing said yet.</p>')
       : `<p class="oc-did">Codex keeps no readable transcript, so this is its screen, tidied.</p>${tidyScreen(screenText).map(p => `<div class="oc-msg said">${prose(p)}</div>`).join('')}`;
     if (sentLine && turns && turns.some(t => t.kind === 'you' && flat(t.text) === sentLine.text)) sentLine = null;
     const echo = sentLine && turns ? `<div class="oc-msg you pending"><small>You${sentLine.queued ? ' · queued, runs when this turn ends' : ' · sending'}</small>${prose(sentLine.text)}</div>` : '';
     html = html.replace('<p class="oc-empty">Nothing said yet.</p>', echo ? '' : '$&') + echo;
-    if (html === lastChat) return;
+    // Same messages: only repaint the pictures (the cast may have changed since).
+    if (html === lastChat) { paintChatAvatars(box, faces); return; }
     const pinnedChat = box.scrollHeight - box.scrollTop - box.clientHeight < 40 || !lastChat;
     lastChat = html; box.innerHTML = html;
+    paintChatAvatars(box, faces);
     if (pinnedChat) box.scrollTop = box.scrollHeight;
   }
   async function readChat() {
     if (!consoleFor || chatBusy || ocView !== 'chat') return;
     const id = consoleFor, a = agentById(id);
     if (demo) { renderChat([{ kind: 'you', text: 'Add the referral field to the waitlist form.' }, { kind: 'did', text: 'Read or searched 4 times, edited 2 files, ran 3 commands' },
+      { kind: 'handoff', helper: 'demo-h1', n: 1, title: 'Review the form', text: 'Review forms/waitlist.tsx for validation gaps and report back in three lines.' },
+      { kind: 'send', to: 'demo-1', name: 'Mocha', text: 'The waitlist form has a referral field now; add a line about it to the landing copy.' },
+      { kind: 'helper', helper: 'demo-h1', n: 1, title: 'Review the form', text: 'Validation looks right. One gap: the referral code is not trimmed before saving.' },
+      { kind: 'agent', from: 'demo-1', name: 'Mocha', text: '', working: true },
       { kind: 'said', text: (a && a.closing && a.closing.text) || 'Done: the **waitlist form** now has a referral field.\n\n- Saved in `forms/waitlist.tsx`\n- Tests pass' }]); return; }
     if (a && a.kind === 'codex') { if (lastScreen) renderChat(null, lastScreen); return; }
     chatBusy = true;
@@ -1628,6 +1693,8 @@
   consoleEl.addEventListener('click', async e => {
     const tabBtn = e.target.closest('.oc-tabs button');
     if (tabBtn) { setOcView(tabBtn.dataset.view); if (tabBtn.dataset.view === 'chat') readChat(); return; }
+    const clamp = e.target.closest('.oc-chat .oc-clamp');
+    if (clamp) { clamp.classList.toggle('open'); return; }
     if (e.target.closest('.oc-close')) { selected = null; lastPlateKey = ''; renderCard(); draw(); return; }
     if (e.target.closest('.oc-latest')) { const pre = consoleEl.querySelector('.oc-screen'); pinned = true; pre.scrollTop = pre.scrollHeight; e.target.hidden = true; return; }
     if (e.target.closest('.oc-dismiss')) { dismissAgent(); return; }

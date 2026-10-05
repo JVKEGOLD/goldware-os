@@ -847,6 +847,161 @@ class Boss(unittest.TestCase):
         self.assertEqual(office.DRY_LOG, [])
 
 
+def add_session(con, sid, parent, title, started, ended=None):
+    con.execute("INSERT INTO sessions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (sid, "subagent", title, "m", None, 1, 0, 0, 0, started, "/home/a/x", parent, ended))
+
+
+def add_msg(con, sid, role, content=None, at=NOW, tool_name=None, tool_calls=None):
+    con.execute("INSERT INTO messages (session_id, role, tool_name, tool_calls, content, timestamp, active) VALUES (?,?,?,?,?,?,1)",
+                (sid, role, tool_name, tool_calls, content, at))
+
+
+class GroupChat(unittest.TestCase):
+    """The Chat view as a group chat: helpers and agents the boss typed to answer as themselves."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.home = os.path.join(self.tmp, "hermes")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def db(self):
+        con = sqlite3.connect(os.path.join(self.home, "state.db"))
+        self.addCleanup(con.close)
+        return con
+
+    def test_office_agents_talk_in_the_boss_chat(self):
+        call = json.dumps([{"function": {"name": "terminal", "arguments": json.dumps(
+            {"command": 'AO="python3 x/office"; $AO send a1 "Fix the \\"form\\" now"; goldware-office new --type sonnet --topic home \'Write copy\''})}}])
+        self.assertEqual(office.office_sends(call), [{"to": "a1", "text": 'Fix the "form" now'}, {"to": None, "text": "Write copy"}])
+        self.assertEqual(office.office_sends(call[:60]), [])
+        self.assertEqual(office.office_sends(json.dumps([{"function": {"name": "web_search", "arguments": "{}"}}])), [])
+        os.makedirs(self.home)
+        con = self.db()
+        con.executescript("""
+            CREATE TABLE messages (id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, content TEXT, timestamp REAL, active INT DEFAULT 1);
+            CREATE TABLE session_turn_leases (conversation_id TEXT, expires_at REAL);
+        """)
+        for sid, role, text, at in (("a1", "user", "/queue Fix the form now", NOW - 99), ("a1", "assistant", "Looking.", NOW - 98),
+                                    ("a1", "assistant", "Form fixed.", NOW - 90), ("a1", "user", "Something else", NOW - 50),
+                                    ("b2", "user", "Check it", NOW - 9), ("b2", "assistant", "", NOW - 8)):
+            con.execute("INSERT INTO messages (session_id, role, content, timestamp) VALUES (?,?,?,?)", (sid, role, text, at))
+        con.execute("INSERT INTO session_turn_leases VALUES ('b2', ?)", (NOW + 60,))
+        con.commit()
+        rows = [{"role": "user", "text": "Get it done", "at": NOW - 200},
+                {"role": "assistant", "text": "", "tools": ["terminal"], "at": NOW - 100,
+                 "sends": [{"to": "a1", "text": "Fix the form"}, {"to": "b2", "text": "Check it"}]},
+                {"role": "user", "text": 'Report from Gengar (id c3, "Lane x", in /home/a/x): All done.\n\nNotes.', "at": NOW - 20}]
+        out = office.office_rows(rows, home=self.home, now=NOW, board_names={"a1": "Bolt"})
+        self.assertEqual([r["role"] for r in out], ["user", "assistant", "send", "send", "agent", "agent", "agent"])
+        self.assertEqual([(r["to"], r["name"]) for r in out if r["role"] == "send"], [("a1", "Bolt"), ("b2", None)])
+        self.assertEqual([(r["from"], r["name"]) for r in out if r["role"] == "agent"], [("a1", "Bolt"), ("c3", "Gengar"), ("b2", None)])
+        self.assertEqual(out[4]["text"], "Form fixed.")
+        self.assertEqual((out[5]["text"], out[5]["report"]), ("All done.\n\nNotes.", True))
+        self.assertEqual((out[6]["working"], out[6]["text"]), (True, ""))
+        self.assertNotIn("sends", out[1])
+        turns = office.chat_turns(out)
+        self.assertEqual([t["kind"] for t in turns], ["you", "did", "send", "send", "agent", "agent", "agent"])
+        self.assertNotIn("at", turns[2])
+        # An agent that reported back after the send is not also quoted from its own chat.
+        rows.append({"role": "user", "at": NOW - 10, "text": 'Report from Bolt (id a1, "t", in /home/a/x): Reported. '
+                     "Read its chat with `goldware-office chat a1` if you need more, decide the next step, act on it."})
+        out = office.office_rows(rows, home=self.home, now=NOW, board_names={})
+        self.assertEqual([r["text"] for r in out if r.get("from") == "a1"], ["Reported."])
+        self.assertEqual([r["name"] for r in out if r["role"] == "send" and r["to"] == "a1"], ["Bolt"])
+
+    def helper_fixture(self):
+        make_hermes(self.home, 200, sid="s1")
+        con = self.db()
+        add_session(con, "q1", "s1", "Subagent: Quiet", NOW - 900)
+        add_msg(con, "q1", "tool", tool_name="read_file", at=NOW - 800)
+        add_session(con, "d1", "s1", "Done already", NOW - 90, NOW - 20)
+        add_msg(con, "d1", "user", "Fix the shelf", NOW - 89)
+        add_msg(con, "d1", "assistant", '{"summary":"Shelf **fixed**."}', NOW - 21)
+        add_session(con, "c1", "s1", "Subagent: Check   one fact", NOW - 30)
+        add_msg(con, "c1", "user", "Find   sources", NOW - 29)
+        add_msg(con, "c1", "assistant", tool_calls=json.dumps([{"function": {"name": "web_extract", "arguments": "{}"}}]), at=NOW - 15)
+        add_session(con, "deep", "c1", "Grandchild", NOW - 10)
+        con.commit()
+
+    def test_helpers_are_numbered_in_start_order_and_answer_as_themselves(self):
+        self.helper_fixture()
+        rows = office.hermes_helper_rows("s1", now=NOW, home=self.home)
+        self.assertEqual([(r["role"], r["helper"], r["n"]) for r in rows],
+                         [("handoff", "q1", 1), ("helper", "q1", 1), ("handoff", "d1", 2), ("helper", "d1", 2),
+                          ("handoff", "c1", 3), ("helper", "c1", 3)])
+        self.assertEqual((rows[3]["text"], rows[3]["working"]), ("Shelf **fixed**.", False))
+        self.assertEqual(rows[1]["text"], "Finished without a written answer.")
+        self.assertEqual((rows[5]["working"], rows[5]["activity"], rows[5]["tool"]), (True, "browsing", "web_extract"))
+        self.assertEqual((rows[4]["text"], rows[4]["title"]), ("Find   sources", "Check one fact"))
+        self.assertEqual(office.hermes_helper_rows("s1", since=NOW, now=NOW, home=self.home), [])
+
+    def test_helpers_join_the_chat_in_time_order(self):
+        own = [{"role": "user", "text": "Split it up", "at": 1},
+               {"role": "assistant", "text": "", "tools": ["delegate_task", "terminal"], "at": 2},
+               {"role": "assistant", "text": "Both are back.", "tools": [], "at": 9}]
+        helpers = [{"role": "handoff", "helper": "h1", "n": 1, "title": "Copy", "text": "Write copy", "at": 3},
+                   {"role": "helper", "helper": "h1", "n": 1, "title": "Copy", "text": "Copy done", "working": False, "at": 8}]
+        turns = office.chat_turns(office.merge_helper_rows(own, helpers))
+        self.assertEqual([t["kind"] for t in turns], ["you", "did", "handoff", "helper", "said"])
+        self.assertEqual(turns[1]["text"], "Ran 1 command")
+        self.assertEqual([turns[3][k] for k in ("helper", "n", "title", "working")], ["h1", 1, "Copy", False])
+        self.assertNotIn("at", turns[3])
+        self.assertEqual(office.merge_helper_rows(own, []), own)
+
+    def test_the_hermes_chat_view_carries_the_group_chat(self):
+        self.helper_fixture()
+        con = self.db()
+        add_msg(con, "s1", "user", "Split it up", NOW - 100)
+        add_msg(con, "s1", "assistant", "Both are back.", NOW - 5)
+        con.commit()
+        turns = office.chat_view({"kind": "hermes", "id": "s1"}, home=self.home)
+        kinds = [t["kind"] for t in turns]
+        self.assertEqual(kinds.count("handoff"), kinds.count("helper"))
+        self.assertIn("handoff", kinds)
+        self.assertEqual(kinds[-1], "said")
+
+    def test_helper_answers_read_as_messages(self):
+        self.assertEqual(office.helper_answer('{"summary":"Done.","files":["a"]}'), "Done.")
+        self.assertEqual(office.helper_answer('{"clean":"/home/a/a.mp4","caption":"Hi","n":[1]}'), "- clean: /home/a/a.mp4\n- caption: Hi")
+        self.assertEqual(office.helper_answer('{"summary":"Line one\\nand two'), "Line one\nand two\u2026")
+        self.assertEqual(office.helper_answer(" Plain answer "), "Plain answer")
+
+
+class GroupChatPage(unittest.TestCase):
+    """The page has no Node in make test, so its source is checked here; tests/office_chat_cdp.mjs drives it
+    in headless Chrome against a fixture."""
+
+    @classmethod
+    def setUpClass(cls):
+        with open(os.path.join(REPO, "dashboard", "office.js"), encoding="utf-8") as f:
+            cls.js = f.read()
+        with open(os.path.join(REPO, "dashboard", "office.css"), encoding="utf-8") as f:
+            cls.css = f.read()
+
+    def test_the_chat_view_is_a_group_chat(self):
+        for name in ("chatFace", "avatarSpan", "paintChatAvatars", "typingDots", "chatHtml"):
+            self.assertIn("function %s(" % name if name != "typingDots" else "const typingDots", self.js)
+        for kind in ("handoff", "helper", "send", "agent"):
+            self.assertIn("t.kind === '%s'" % kind, self.js)
+        # A helper is a blob in the colour the floor gives it.
+        self.assertIn("{ color: assign(t.helper), blob: true }", self.js)
+        # Same messages still repaint the pictures.
+        self.assertIn("if (html === lastChat) { paintChatAvatars(box, faces); return; }", self.js)
+        self.assertIn("clamp.classList.toggle('open')", self.js)
+
+    def test_the_chat_styles_exist_and_do_not_reuse_the_console_header_class(self):
+        for sel in (".oc-row", ".oc-av", ".oc-av.blob", ".oc-from", ".oc-at", ".oc-hand", ".oc-clamp", ".oc-typing"):
+            self.assertIn("\n" + sel + " ", self.css, sel)
+        self.assertNotIn("oc-who", self.js[self.js.index("function chatHtml("):self.js.index("function renderChat(")])
+        self.assertNotIn("\n.oc-who-", self.css[self.css.index(".oc-row {"):])
+
+    def test_browser_script_present(self):
+        self.assertTrue(os.path.isfile(os.path.join(REPO, "tests", "office_chat_cdp.mjs")))
+
+
 class GoldwareOfficeCli(unittest.TestCase):
     def test_help_and_unknown_command(self):
         cli = os.path.join(REPO, "scripts", "office")

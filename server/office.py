@@ -1172,9 +1172,12 @@ def tools_summary(names):
     return text[0].upper() + text[1:]
 
 
-def chat_turns(rows, limit=16):
-    """rows: [{role: user|assistant, text, tools: [names]}], oldest first.
-    Returns the last `limit` of {kind: you|did|said, text}; tool calls fold into one "did" line."""
+def chat_turns(rows, limit=24):
+    """rows: [{role: user|assistant, text, tools: [names]}], oldest first, plus the group-chat rows from
+    hermes_helper_rows (handoff when a helper was sent out, helper for its answer) and office_rows (send
+    when the boss typed to an agent, agent for that agent talking back).
+    Returns the last `limit` of {kind: you|did|said|handoff|helper|send|agent, text, ...};
+    tool calls fold into one "did" line."""
     out, pending = [], []
 
     def flush():
@@ -1185,7 +1188,12 @@ def chat_turns(rows, limit=16):
 
     for r in rows:
         text = str(r.get("text") or "").strip()
-        if r.get("role") == "user":
+        if r.get("role") in GROUP_ROLES:
+            flush()
+            turn = {k: v for k, v in r.items() if k not in ("role", "at")}
+            turn.update(kind=r["role"], text=text)
+            out.append(turn)
+        elif r.get("role") == "user":
             flush()
             if text:
                 out.append({"kind": "you", "text": text[:1500]})
@@ -1199,13 +1207,190 @@ def chat_turns(rows, limit=16):
     return out[-limit:]
 
 
+GROUP_ROLES = ("handoff", "helper", "agent", "send")
+
+
 def hermes_chat_rows(sid, home=None):
     db = os.path.join(home or hermes_home(), "state.db")
     rows = sqlite_rows(db, """
-        SELECT role, substr(coalesce(content, ''), 1, 6000) AS content, substr(coalesce(tool_calls, ''), 1, 4000) AS tool_calls
+        SELECT role, substr(coalesce(content, ''), 1, 6000) AS content, substr(coalesce(tool_calls, ''), 1, 20000) AS tool_calls, timestamp
         FROM messages WHERE session_id = ? AND active = 1 AND role IN ('user', 'assistant') ORDER BY id DESC LIMIT 80""", (sid,))
-    return [{"role": r["role"], "text": r["content"],
-             "tools": re.findall(r'(?<!\\)"name":\s*"([^"\\]+)"', r["tool_calls"] or "")} for r in reversed(rows)]
+    return [{"role": r["role"], "text": r["content"], "at": float(r["timestamp"] or 0),
+             "tools": re.findall(r'(?<!\\)"name":\s*"([^"\\]+)"', r["tool_calls"] or ""),
+             "sends": office_sends(r["tool_calls"])} for r in reversed(rows)]
+
+
+# What the boss typed to other agents: `goldware-office send ID "text"` (or `new ... "task"`) inside a terminal
+# call. Returns [{to: id or None for a new agent, text}]. Unparseable or cut-off calls give [].
+OFFICE_CMD = re.compile(r"""(?:goldware[-_]office|\$\{?AO\}?)["']?\s+(?:send\s+([\w.-]+)|new\b[^"'\n;|&]*?)\s+"""
+                        r"""(?:"((?:[^"\\]|\\.)*)"|'([^']*)')""")
+
+
+def office_sends(tool_calls):
+    try:
+        calls = json.loads(str(tool_calls or ""))
+    except ValueError:
+        return []
+    if not isinstance(calls, list):
+        return []
+    out = []
+    for c in calls:
+        if not isinstance(c, dict):
+            continue
+        fn = c.get("function") if isinstance(c.get("function"), dict) else {}
+        if (fn.get("name") or c.get("name")) != "terminal":
+            continue
+        args = fn.get("arguments") if fn else c.get("arguments")
+        if args is None:
+            args = c.get("arguments")
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except ValueError:
+                args = {}
+        cmd = str(args.get("command") or "") if isinstance(args, dict) else ""
+        for to, dq, sq in OFFICE_CMD.findall(cmd):
+            text = re.sub(r"\\(.)", r"\1", dq, flags=re.S) if dq else sq
+            out.append({"to": to or None, "text": text})
+    return out
+
+
+# Turns a chat into the group chat: "Report from NAME (id X, "title", in DIR): ..." arrives as that agent
+# talking, each `goldware-office send` shows as a message to that agent, and the agent's answer in its own
+# chat (or "working" while it is on it) follows, unless it reported back itself.
+REPORT_LINE = re.compile(r'\AReport from (.+?) \(id ([\w.-]+), ".*?", in [^)]*\):\s*(.*)\Z', re.S)
+REPORT_TAIL = re.compile(r"\s*Read its chat with `goldware-office chat [^`]*` if you need more.*\Z", re.S)
+
+
+def office_rows(rows, home=None, now=None, board_names=None):
+    now = time.time() if now is None else now
+    board_names = board_names or {}
+    names = {}
+    for r in rows:
+        m = r.get("role") == "user" and REPORT_LINE.match(str(r.get("text") or ""))
+        if m:
+            names[m.group(2)] = m.group(1)
+    out = []
+    for r in rows:
+        m = r.get("role") == "user" and REPORT_LINE.match(str(r.get("text") or ""))
+        if m:
+            # The boss's brief is appended to each report (office_boss.py); not the agent's words.
+            said = REPORT_TAIL.sub("", m.group(3))
+            out.append({"role": "agent", "at": r.get("at"), "from": m.group(2), "name": m.group(1), "text": said, "report": True})
+            continue
+        out.append({k: v for k, v in r.items() if k != "sends"})
+        for s in r.get("sends") or []:
+            out.append({"role": "send", "at": r.get("at"), "to": s["to"],
+                        "name": s["to"] and (names.get(s["to"]) or board_names.get(s["to"])), "text": s["text"]})
+    sends = [x for x in out if x["role"] == "send" and x["to"]][-8:]
+    for s in sends:
+        if any(x["role"] == "agent" and x.get("report") and x["from"] == s["to"] and float(x["at"] or 0) > float(s["at"] or 0) for x in out):
+            continue
+        reply = agent_reply(s["to"], s["at"], home=home, now=now)
+        if reply:
+            reply.update(role="agent", **{"from": s["to"]}, name=s["name"])
+            out.append(reply)
+    order = sorted(range(len(out)), key=lambda i: (float(out[i].get("at") or 0), i))
+    return [out[i] for i in order]
+
+
+def agent_reply(sid, at, home=None, now=None):
+    """What an agent said back after a line was typed to it at `at`: its last reply before the next message
+    it got, or working: True while its turn is still running. None when there is nothing yet."""
+    now = time.time() if now is None else now
+    db = os.path.join(home or hermes_home(), "state.db")
+    msgs = sqlite_rows(db, """
+        SELECT role, substr(coalesce(content, ''), 1, 4000) AS content, timestamp FROM messages
+        WHERE session_id = ? AND active = 1 AND role IN ('user', 'assistant') AND timestamp > ? ORDER BY id LIMIT 300""",
+                       (sid, float(at or 0) - 2))
+    first = next((i for i, m in enumerate(msgs) if m["role"] == "user"), None)
+    if first is None:
+        return None
+    rest = msgs[first + 1:]
+    nxt = next((i for i, m in enumerate(rest) if m["role"] == "user"), None)
+    if nxt is not None:
+        rest = rest[:nxt]
+    said = next((m for m in reversed(rest) if m["role"] == "assistant" and str(m["content"] or "").strip()), None)
+    working = bool(sqlite_rows(db, "SELECT 1 AS x FROM session_turn_leases WHERE conversation_id = ? AND expires_at > ?", (sid, now)))
+    if working and all(not str(m["content"] or "").strip() for m in rest):
+        return {"at": now, "text": "", "working": True}
+    if said:
+        return {"at": float(said["timestamp"] or 0), "text": said["content"].strip(), "working": working}
+    return None
+
+
+def hermes_helper_rows(sid, since=0, now=None, home=None):
+    """The helpers a Hermes chat sent out (its direct subagents), as group-chat rows: a handoff when each was
+    given its job, then a helper row with its answer, or working: True while it is still on it.
+    Numbered in start order, so "Helper 2" stays the same helper for the whole chat."""
+    now = time.time() if now is None else now
+    kids = sqlite_rows(os.path.join(home or hermes_home(), "state.db"), """
+        SELECT s.id, coalesce(s.title, '') AS title, s.started_at, s.ended_at,
+          (SELECT substr(g.content, 1, 900) FROM messages g WHERE g.session_id = s.id AND g.role = 'user' ORDER BY g.id LIMIT 1) AS goal,
+          (SELECT substr(f.content, 1, 8000) FROM messages f WHERE f.session_id = s.id AND f.role = 'assistant' AND f.active = 1
+             AND length(trim(coalesce(f.content, ''))) > 0 ORDER BY f.id DESC LIMIT 1) AS reply,
+          m.role, m.tool_name, substr(m.tool_calls, 1, 300) AS tool_calls, m.timestamp
+        FROM sessions s
+        LEFT JOIN (SELECT session_id, role, tool_name, tool_calls, timestamp,
+                          row_number() OVER (PARTITION BY session_id ORDER BY id DESC) AS rn
+                   FROM messages WHERE session_id IN (SELECT id FROM sessions WHERE parent_session_id = ?) AND active = 1) m
+          ON m.session_id = s.id AND m.rn = 1
+        WHERE s.parent_session_id = ? ORDER BY s.started_at, s.id LIMIT 40""", (sid, sid))
+    rows = []
+    for i, k in enumerate(kids):
+        if float(k["started_at"] or 0) < since:
+            continue
+        act = None if k["ended_at"] else helper_activity(k if k["timestamp"] else None, now)
+        base = {"helper": k["id"], "n": i + 1, "title": one_line(re.sub(r"\ASubagent:\s*", "", k["title"]), 120)}
+        rows.append(dict(base, role="handoff", at=float(k["started_at"] or 0), text=str(k["goal"] or "").strip()[:900]))
+        if act:
+            tool = k["tool_name"] if k["role"] == "tool" else first_call(k["tool_calls"])
+            rows.append(dict(base, role="helper", at=now, working=True, activity=act, tool=tool, text=""))
+        else:
+            done = float(k["ended_at"] or k["timestamp"] or k["started_at"] or 0)
+            reply = str(k["reply"] or "").strip()
+            rows.append(dict(base, role="helper", at=done, working=False,
+                             text=helper_answer(reply)[:5000] if reply else "Finished without a written answer."))
+    return rows
+
+
+def helper_answer(text):
+    """Helpers often answer in JSON ({"summary": "..."}). Show the summary as the message, other plain
+    fields as a short list, and the raw text when it is not JSON. A cut-off JSON still yields its summary."""
+    t = str(text or "").strip()
+    if not t.startswith("{"):
+        return t
+    try:
+        h = json.loads(t)
+    except ValueError:
+        h = None
+    if isinstance(h, dict):
+        for key in ("summary", "result", "answer", "message", "text"):
+            if isinstance(h.get(key), str) and h[key].strip():
+                return h[key].strip()
+        lines = ["- %s: %s" % (k.replace("_", " "), one_line(v, 200)) for k, v in h.items()
+                 if isinstance(v, str) or (isinstance(v, (int, float)) and not isinstance(v, bool))]
+        if lines:
+            return "\n".join(lines)
+    m = re.search(r'"summary"\s*:\s*"((?:[^"\\]|\\.)*)', t)
+    if not m:
+        return t
+    raw = re.sub(r"\\+\Z", lambda x: x.group(0)[:-1] if len(x.group(0)) % 2 else x.group(0), m.group(1))
+    try:
+        return json.loads('"%s"' % raw) + "\u2026"
+    except ValueError:
+        return m.group(1) + "\u2026"
+
+
+def merge_helper_rows(rows, helper_rows):
+    """Puts helper rows into the chat by time. Once the helpers show as their own messages, the
+    "sent out N helpers" count would say it twice, so delegate_task drops out of the tool lines."""
+    if not helper_rows:
+        return rows
+    rows = [dict(r, tools=[t for t in r["tools"] if t != "delegate_task"]) if "tools" in r else r for r in rows]
+    both = rows + helper_rows
+    order = sorted(range(len(both)), key=lambda i: (float(both[i].get("at") or 0), i))
+    return [both[i] for i in order]
 
 
 def claude_chat_rows(lines):
@@ -1234,10 +1419,14 @@ def claude_chat_rows(lines):
     return out
 
 
-def chat_view(agent, home=None):
+def chat_view(agent, home=None, data_root=None):
     """The turns for one agent, or None when it keeps no readable transcript (Codex)."""
     if agent.get("kind") == "hermes":
-        return chat_turns(hermes_chat_rows(agent["id"], home))
+        own = hermes_chat_rows(agent["id"], home)
+        names = (load_board(data_root).get("names") or {}) if data_root else {}
+        rows = office_rows(own, home=home, board_names=names)
+        helpers = hermes_helper_rows(agent["id"], since=own[0]["at"] - 1 if own else 0, home=home)
+        return chat_turns(merge_helper_rows(rows, helpers))
     if agent.get("kind") == "claude" and agent.get("transcript"):
         return chat_turns(claude_chat_rows(tail_lines(agent["transcript"], 400000)))
     return None
@@ -1247,7 +1436,7 @@ def chat_of_agent(agent_id, **kw):
     agent = find_agent(agent_id, **kw)
     if not agent:
         raise OfficeError("That agent is not at a terminal any more.", 404)
-    return {"id": agent["id"], "turns": chat_view(agent, kw.get("home"))}
+    return {"id": agent["id"], "turns": chat_view(agent, kw.get("home"), kw.get("data_root"))}
 
 
 # ---------- the board: names, project, tasks, ideas, the lab ----------
