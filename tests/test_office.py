@@ -141,6 +141,20 @@ class Snapshots(unittest.TestCase):
         self.assertEqual(h["tty"], "ttys001")
         self.assertTrue(h["closing"]["question"])
 
+    def test_the_subject_skips_agent_reports(self):
+        # An agent's report to the boss is a user message too, but the user did not ask it.
+        home = os.path.join(self.tmp, "hermes")
+        make_hermes(home, 200)
+        con = sqlite3.connect(os.path.join(home, "state.db"))
+        for at, text in ((NOW - 50, "/queue Fix the shelf please"),
+                         (NOW - 40, 'Report from Mocha (id g9, "Lane", in /home/a/x): done.'),
+                         (NOW - 35, '/queue Report from Bolt (id g8, "Lane", in /home/a/x): done too.')):
+            con.execute("INSERT INTO messages (session_id, role, content, timestamp, active) VALUES ('sess-1','user',?,?,1)", (text, at))
+        con.commit()
+        con.close()
+        h = [a for a in self.snap(PS_MIXED, home=home)["agents"] if a["kind"] == "hermes"][0]
+        self.assertEqual(h["ask"], "Fix the shelf please")
+
     def test_dead_hermes_entry_is_ignored(self):
         home = os.path.join(self.tmp, "hermes")
         make_hermes(home, 99999)       # no such process in the list

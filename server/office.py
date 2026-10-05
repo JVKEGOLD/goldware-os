@@ -346,12 +346,15 @@ def hermes_agents(home, by_pid, now):
                  row_number() OVER (PARTITION BY session_id ORDER BY id DESC) AS rn
           FROM messages WHERE session_id IN (%s) AND role = 'assistant' AND active = 1
                 AND length(trim(coalesce(content, ''))) > 0) WHERE rn = 1""" % q, ids)}
+    # An agent's report to the boss arrives as a user message too, but the user did not ask it: skip those.
     asks = {r["session_id"]: ask_line(r["content"]) for r in sqlite_rows(db, """
         SELECT session_id, content FROM (
           SELECT session_id, substr(content, 1, 600) AS content,
                  row_number() OVER (PARTITION BY session_id ORDER BY id DESC) AS rn
           FROM messages WHERE session_id IN (%s) AND role = 'user' AND active = 1
-                AND length(trim(coalesce(content, ''))) > 0) WHERE rn = 1""" % q, ids)}
+                AND length(trim(coalesce(content, ''))) > 0
+                AND content NOT GLOB 'Report from * (id *' AND content NOT GLOB '/queue Report from * (id *'
+          ) WHERE rn = 1""" % q, ids)}
     todo_lists = {r["session_id"]: parse_todos(r["content"]) for r in sqlite_rows(db, """
         SELECT session_id, content FROM (
           SELECT session_id, substr(content, 1, 12000) AS content,
