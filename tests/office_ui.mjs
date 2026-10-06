@@ -41,3 +41,23 @@ function load(name) {
   assert.equal(taskMatches({ title: 'x' }, '', 'you'), false, 'Needs you hides other tasks');
   console.log('Office task board cards: 15 checks passed');
 }
+
+// Parked whiteboards: groups with open tasks and nobody at a table, and how many columns they need.
+{
+  vm.runInContext('var homeDir=()=>"/home";var WB=84,WBH=44;' + office.match(/  const taskTable = [^\n]+/)[0].replace('const ', 'var ') +
+    office.match(/  const PARK_W = [^\n]+/)[0].replace('const ', 'var ').replace(/, PARK_H = /, '; var PARK_H = ').replace(/, PARK_TOP = /, '; var PARK_TOP = ') +
+    office.match(/  const parkCols = [^\n]+/)[0].replace('const ', 'var '), sandbox);
+  const parkedKeys = load('parkedKeys');
+  const tasks = [{ group: '/k', status: 'todo' }, { group: '/a', status: 'todo' }, { group: '/g', status: 'assigned' }, { group: '/old', status: 'done' }, { status: 'todo' }];
+  const names = { '/k': 'Kitchen', '/a': 'Attic', '/g': 'Garage', '/home': 'Home' };
+  assert.equal(JSON.stringify(parkedKeys(tasks, ['/g'], k => names[k])), JSON.stringify(['/a', '/home', '/k']), 'Open groups without an agent park, by name; done-only groups and agent tables do not');
+  assert.equal(JSON.stringify(parkedKeys(null, [], k => k)), '[]', 'No board yet, nothing parked');
+  assert.equal(JSON.stringify([sandbox.parkCols(0, 0, 500), sandbox.parkCols(3, 72, 500), sandbox.parkCols(9, 72, 500), sandbox.parkCols(40, 72, 200)]), JSON.stringify([0, 1, 2, 3]), 'Columns grow with boards that do not fit, at most 3');
+  // The room grows by the parking, and the layout signature changes with it so the room lays out again.
+  const roomSize = load('roomSize');
+  vm.runInContext('var SLOT=100,ROW=80,FRONT=60;', sandbox);
+  const a = roomSize([2], 2, 0), b = roomSize([2], 2, 2);
+  assert.equal(b.W - a.W, 2 * sandbox.PARK_W, 'Each parking column widens the room by PARK_W');
+  assert.notEqual(a.sig, b.sig, 'Parking is part of the layout signature');
+  console.log('Office parked whiteboards: 5 checks passed');
+}

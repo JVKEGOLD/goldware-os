@@ -1157,6 +1157,7 @@ class PageFunctions(unittest.TestCase):
         r = subprocess.run([node, os.path.join(REPO, "tests", "office_ui.mjs")], capture_output=True, text=True, timeout=60)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("Office task board cards", r.stdout)
+        self.assertIn("Office parked whiteboards", r.stdout)
 
 
 class TaskBoardPage(unittest.TestCase):
@@ -1240,6 +1241,32 @@ class QuestionPage(unittest.TestCase):
         self.assertIn("if let js = pendingScript { pendingScript = nil; webView.evaluateJavaScript(js) }", self.dash)
         self.assertIn("window.goldwareOffice", self.dash)
         self.assertIn("hud.pillViewForTests.onAgentClick", self.main)
+
+
+class ParkedBoardsPage(unittest.TestCase):
+    """Whiteboards nobody is working on park on the left and roll to the table when an agent sits down.
+    The pure parts run in tests/office_ui.mjs; tests/office_chat_cdp.mjs watches the board roll in headless Chrome."""
+
+    @classmethod
+    def setUpClass(cls):
+        with open(os.path.join(REPO, "dashboard", "office.js"), encoding="utf-8") as f:
+            cls.js = f.read()
+
+    def test_the_room_makes_space_for_parked_boards(self):
+        for frag in ("function parkedKeys(taskList, tableKeys, nameOf)", "const parkCols = (n, top, bottom)", "function roomSize(sizes, cols, park = 0)",
+                     "function chooseLayout(sizes, aw, ah, park = 0)", "const PARK_W = WB + 6, PARK_H = WBH + 26, PARK_TOP = 72;",
+                     "ox += pw;", "parked: true", "geo = chooseLayout(sizes, aw, ah, parked.length ? 1 : 0);"):
+            self.assertIn(frag, self.js)
+        # The layout is redone when the parking or what is parked changes.
+        self.assertIn("geo.sig + ':' + parked.length !== seatCount(agents)", self.js)
+        self.assertIn("(geo.park || 0) + ':' + parkedKeys(", self.js)
+
+    def test_boards_roll_over_time_and_snap_on_resize(self):
+        for frag in ("function rollBoards()", "snap = still || wbRoomKey !== room", "Math.exp(-Math.min(400, t - (wbRollAt || t)) / 220)",
+                     "const wbAt = tb =>", "const wbStyle = tb =>", "tables.forEach(tb => whiteboard(wbAt(tb)));"):
+            self.assertIn(frag, self.js)
+        self.assertIn("class=\"office-hit wb${tb.parked ? ' parked' : ''}\"", self.js)
+        self.assertIn("Parked: no agent is working in this group", self.js)
 
 
 class GoldwareOfficeCli(unittest.TestCase):

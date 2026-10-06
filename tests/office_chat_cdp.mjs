@@ -23,6 +23,7 @@ const turns = [
   { kind: 'agent', from: 'fx-2', name: 'Bolt', text: 'Footer fixed.', report: true },
   { kind: 'said', text: 'Done. The **layout** is tidy.' }];
 const answers = [];
+const board = { tasks: [], ideas: [], suggestions: [], project: {}, runs: {}, groupings: {}, progress: { done: 0, total: 0 } };
 const askTurns = [{ kind: 'you', text: 'Ship the form' }, { kind: 'ask', open: true, questions: [
   { question: 'Should the referral field go in before we publish?', choices: ['Add it first, then publish', 'Ship as is, add it next week'], multi: false },
   { question: 'Which pages get the new copy?', choices: ['Home', 'Pricing', 'Waitlist'], multi: true }] }];
@@ -35,7 +36,7 @@ const server = http.createServer((req, res) => {
   if (u.pathname === '/api/office/chat' && u.searchParams.get('id') === 'fx-3') return json(res, { id: 'fx-3', turns: askTurns });
   if (u.pathname === '/api/office/chat') return json(res, { id: u.searchParams.get('id'), turns });
   if (u.pathname === '/api/office/screen') return json(res, { id: u.searchParams.get('id'), activity: 'idle', screen: 'fixture screen' });
-  if (u.pathname === '/api/office/board') return json(res, { tasks: [], ideas: [], suggestions: [], project: {}, runs: {}, groupings: {} });
+  if (u.pathname === '/api/office/board') return json(res, board);
   if (u.pathname === '/api/office/settings') return json(res, { topics: [], presets: [], limits: { items: 12, label: 40, command: 200 } });
   if (u.pathname === '/api/office/usage') return json(res, { plans: [], hours: [], checked_at: now });
   if (u.pathname.startsWith('/api/')) return json(res, {});
@@ -114,6 +115,21 @@ try {
   agents.push(mk('late-9', 'Latte')); await sleep(4500);
   ok('...and opens it once it appears', await ev(`document.querySelector('#office-console .oc-title').textContent.includes('Latte')`));
   agents.pop(); await ev(`document.querySelector('.office-hit[data-id="boss"]').click()`); await sleep(1500);
+  // Whiteboards nobody is working on park on the left; when an agent sits down in the group, its board rolls to the table.
+  board.tasks = [{ id: 'pk1', title: 'Write the launch email', status: 'todo', group: '/home/a/launch', created_at: now }, { id: 'pk2', title: 'Old idea', status: 'done', group: '/home/a/old', created_at: now }];
+  await sleep(4500);
+  const parkedAt = await ev(`(()=>{const b=document.querySelector('.office-hit.wb.parked[data-table="/home/a/launch"]');if(!b)return null;const desks=[...document.querySelectorAll('.office-hit[data-id^="fx-"]')].map(d=>d.getBoundingClientRect().left);return {x:b.getBoundingClientRect().left,minDesk:Math.min(...desks),done:!!document.querySelector('.office-hit.wb[data-table="/home/a/old"]'),title:b.title};})()`);
+  ok('a group with open tasks and no agent parks its board left of the desks (a group with nothing open has none): ' + JSON.stringify(parkedAt), parkedAt && parkedAt.x < parkedAt.minDesk && !parkedAt.done && /Parked/.test(parkedAt.title));
+  await shot('parked-board');
+  ok('a parked board is still clickable and opens its task board', await ev(`(async()=>{document.querySelector('.office-hit.wb.parked[data-table="/home/a/launch"]').click();await new Promise(r=>setTimeout(r,700));return !!document.querySelector('.tb-board .tb-card');})()`));
+  await key('Escape'); await sleep(500);
+  agents.push(mk('fx-9', 'Zed', { cwd: '/home/a/launch', title: 'Launch email' }));
+  const xs = []; for (let k = 0; k < 60; k++) { await sleep(100); xs.push(await ev(`(()=>{const b=document.querySelector('.office-hit.wb[data-table="/home/a/launch"]');return b?Math.round(b.getBoundingClientRect().left):null;})()`)); }
+  await sleep(1500);
+  const atTable = await ev(`(()=>{const b=document.querySelector('.office-hit.wb[data-table="/home/a/launch"]'),d=document.querySelector('.office-hit[data-id="fx-9"]');return b&&d?{parked:b.classList.contains('parked'),x:b.getBoundingClientRect().left,desk:d.getBoundingClientRect().left,top:b.getBoundingClientRect().top,deskTop:d.getBoundingClientRect().top}:null;})()`);
+  ok('when an agent sits down in the group, the board is at its table: ' + JSON.stringify(atTable), atTable && !atTable.parked && atTable.x < atTable.desk && atTable.desk - atTable.x < 200 && Math.abs(atTable.deskTop - atTable.top) < 120);
+  ok('it rolls over rather than jumping: ' + xs.join(','), new Set(xs.filter(x => x != null)).size >= 4);
+  agents.pop(); board.tasks = []; await sleep(4500);
   // Task board (demo mode: nothing is sent): lanes, flags, Give, Done with Undo, drag, search, filters, add with details.
   await send('Page.navigate', { url: base + '/?office-demo&office-n=4#office' }); await sleep(2500);
   await ev(`document.querySelector('.office-hit.wb[data-table="/home/demo/sunrise"]').click()`); await sleep(800);

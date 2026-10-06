@@ -85,20 +85,32 @@
   // starts a new row and has its own roll-around whiteboard (WB wide) on its left. The board is a
   // landscape WB - 8 by WBH, so a task's title reads further before it is cut.
   const WB = 84, WBH = 44;
-  function roomSize(sizes, cols) {
+  // Whiteboards nobody is working on are parked in a column on the left of the room (PARK_W wide per
+  // column, PARK_H apart), still clickable; when an agent sits down in that group, its board rolls over
+  // to the table.
+  const PARK_W = WB + 6, PARK_H = WBH + 26, PARK_TOP = 72;
+  function roomSize(sizes, cols, park = 0) {
     const rows = sizes.reduce((r, n) => r + Math.ceil(n / Math.max(1, cols)), 0), area = Math.max(4, cols) * SLOT + (sizes.length ? WB : 0);
     const bossY = rows ? 130 + (rows - 1) * ROW + FRONT : 150;
-    return { cols, rows, area, W: 48 + area, H: bossY + 56 + (rows > 1 ? 6 : 0), bossY, sig: sizes.join(',') };
+    return { cols, rows, area, park, W: 48 + area + park * PARK_W, H: bossY + 56 + (rows > 1 ? 6 : 0), bossY, sig: sizes.join(',') + '|' + park };
   }
-  function chooseLayout(sizes, aw, ah) {
+  function chooseLayout(sizes, aw, ah, park = 0) {
     let best = null;
     const most = Math.max(0, ...sizes);
     for (let cols = most ? 1 : 0; cols <= Math.min(most, 8); cols++) {
-      const g = roomSize(sizes, cols), scale = Math.min(aw / g.W, ah / g.H);
+      const g = roomSize(sizes, cols, park), scale = Math.min(aw / g.W, ah / g.H);
       if (!best || scale > best.scale * 1.02) best = { ...g, scale };
     }
     return best;
   }
+  // Pure: the groups with open tasks and no agent at a table, in a steady order (by name).
+  function parkedKeys(taskList, tableKeys, nameOf) {
+    const at = new Set(tableKeys), open = new Set();
+    (taskList || []).forEach(t => { if (t.status !== 'done') open.add(taskTable(t)); });
+    return [...open].filter(k => !at.has(k)).sort((a, b) => nameOf(a).localeCompare(nameOf(b)) || a.localeCompare(b));
+  }
+  // Pure: how many parking columns n boards need when PARK_H-tall slots fit between top and bottom.
+  const parkCols = (n, top, bottom) => n ? Math.min(3, Math.ceil(n / Math.max(1, Math.floor((bottom - top) / PARK_H)))) : 0;
   // Which table an agent sits at, and what the table is called.
   const homeDir = () => (data && data.home) || '';
   const tableOf = a => (a && a.cwd) || homeDir();
@@ -121,8 +133,10 @@
   // The room canvas is as big as the space it has; the desks sit in the middle of it (ox, oy) and the
   // extra becomes wall and floor, so the room fills the window instead of letterboxing.
   let ox = 0, oy = 0;
+  let parked = [];   // group keys whose boards are parked on the left, set by fit()
   function layout(agents) {
-    const { cols, area } = geo, spots = [];
+    const { cols, area } = geo, spots = [], pw = (geo.park || 0) * PARK_W, ox0 = ox;
+    ox += pw;   // the desks (and the boss) start right of the parking
     bossSpot = { x: Math.round(ox + 6 + area / 2), y: oy + geo.bossY };
     tables = [];
     let row = 0, i = 0;
@@ -139,8 +153,40 @@
       }
       row += rows; i += n;
     }
+    ox = ox0;
+    // Parked boards: top to bottom, then the next column to the left of it.
+    const per = Math.max(1, Math.ceil(parked.length / Math.max(1, geo.park || 1)));
+    parked.slice(0, per * (geo.park || 0)).forEach((key, k) => {
+      const c = Math.floor(k / per), r = k % per;
+      tables.push({ key, x: Math.round(ox + 6 + pw - (c + 1) * PARK_W + 4), y: oy + PARK_TOP + r * PARK_H, h: WBH + 10, n: 0, parked: true });
+    });
     return spots;
   }
+  // Where each board is drawn right now (room units): it glides to its place (parking or table) instead of jumping.
+  const wbPos = new Map();
+  let wbRoomKey = '', wbRollAt = 0;
+  function rollBoards() {
+    // Snap on a window resize (everything rescales at once); glide when the room itself changes.
+    const room = innerWidth + 'x' + innerHeight, snap = still || wbRoomKey !== room;
+    wbRoomKey = room;
+    let moving = false;
+    // Time based, so it takes about a second whatever the frame rate.
+    const t = performance.now(), k = 1 - Math.exp(-Math.min(400, t - (wbRollAt || t)) / 220);
+    wbRollAt = t;
+    tables.forEach(tb => {
+      const p = wbPos.get(tb.key);
+      if (!p || snap) { wbPos.set(tb.key, { x: tb.x, y: tb.y }); return; }
+      const dx = tb.x - p.x, dy = tb.y - p.y;
+      if (!dx && !dy) return;
+      moving = true;
+      if (Math.abs(dx) < 0.6 && Math.abs(dy) < 0.6) { p.x = tb.x; p.y = tb.y; return; }
+      p.x += dx * k; p.y += dy * k;
+    });
+    [...wbPos.keys()].forEach(k => { if (!tables.some(tb => tb.key === k)) wbPos.delete(k); });
+    return moving;
+  }
+  const wbAt = tb => { const p = wbPos.get(tb.key) || tb; return { ...tb, x: Math.round(p.x), y: Math.round(p.y) }; };
+  const wbStyle = tb => `left:${((tb.x + (WB - 8) / 2) / W * 100).toFixed(3)}%;top:${(tb.y / H * 100).toFixed(3)}%`;
   // A roll-around whiteboard: white surface in an aluminium frame, legs, a marker tray and casters.
   // The writing (the table's name and its open tasks) is HTML in its button.
   function whiteboard(tb) {
@@ -680,11 +726,11 @@
   }
 
   // One table per agent on the floor.
-  const seatCount = agents => tableSizes(agents).join(',');
+  const seatCount = agents => tableSizes(agents).join(',') + '|' + (geo.park || 0) + ':' + parkedKeys(board && board.tasks, [...new Set(agents.map(tableOf))], tableName).length;
   let lastSpots = [];
   function draw() {
     const agents = (data && data.agents) || [];
-    if (geo.sig !== seatCount(agents)) fit();
+    if (geo.sig + ':' + parked.length !== seatCount(agents)) fit();
     const spots = layout(agents);
     lastSpots = spots;
     const now = new Date();
@@ -696,7 +742,8 @@
     labStaff(t);
     // Back row first so the front row overlaps it.
     // An agent whose plan is out of usage is not at its desk: it is in a bunk (or walking there).
-    tables.forEach(whiteboard);
+    const rolling = rollBoards();
+    tables.forEach(tb => whiteboard(wbAt(tb)));
     spots.forEach((s, i) => {
       const away = agents[i] && (agents[i].bed || walking.has(agents[i].id) || awayToBoss(agents[i].id) || leaving.has(agents[i].id));
       desk(s, away ? undefined : agents[i], t + i * 3, phase);
@@ -710,6 +757,7 @@
     particles(t);
     if (error) { ctx.fillStyle = 'rgba(6,6,8,.55)'; ctx.fillRect(0, 0, W, H); }
     placeDesks(spots, agents);
+    if (rolling) tables.forEach(tb => { const b = desksLayer.querySelector(`.office-hit.wb[data-table="${CSS.escape(tb.key)}"]`); if (b) { const q = wbAt(tb); b.style.left = ((q.x + (WB - 8) / 2) / W * 100).toFixed(3) + '%'; b.style.top = (q.y / H * 100).toFixed(3) + '%'; } });
   }
 
   // ── The boards on the wall, the lab staff in front of them, and the bunk beds ──
@@ -1260,7 +1308,7 @@
     }).join('');
     const boardsHTML = tables.map(tb => {
       const open = ((board && board.tasks) || []).filter(t => t.status !== 'done' && taskTable(t) === tb.key);
-      return `<button class="office-hit wb" data-table="${esc(tb.key)}" style="left:${((tb.x + (WB - 8) / 2) / W * 100).toFixed(3)}%;top:${(tb.y / H * 100).toFixed(3)}%;width:${((WB - 8) / W * 100).toFixed(3)}%;height:${(WBH / H * 100).toFixed(3)}%" title="${esc(tableName(tb.key))} whiteboard: ${open.length} open task${open.length === 1 ? '' : 's'}" aria-label="${esc(tableName(tb.key))} whiteboard"><b>${esc(tableName(tb.key))}${open.length ? ` <em>${open.length}</em>` : ''}</b>${open.slice(0, 4).map(t => `<span>${esc(t.title)}</span>`).join('') || '<em>+ add tasks</em>'}</button>`;
+      return `<button class="office-hit wb${tb.parked ? ' parked' : ''}" data-table="${esc(tb.key)}" style="${wbStyle(wbAt(tb))};width:${((WB - 8) / W * 100).toFixed(3)}%;height:${(WBH / H * 100).toFixed(3)}%" title="${esc(tableName(tb.key))} whiteboard: ${open.length} open task${open.length === 1 ? '' : 's'}${tb.parked ? '. Parked: no agent is working in this group' : ''}" aria-label="${esc(tableName(tb.key))} whiteboard"><b>${esc(tableName(tb.key))}${open.length ? ` <em>${open.length}</em>` : ''}</b>${open.slice(0, 4).map(t => `<span>${esc(t.title)}</span>`).join('') || '<em>+ add tasks</em>'}</button>`;
     }).join('');
     desksLayer.innerHTML = bossHTML + boardHits + boardsHTML + askers + spots.map((s, i) => {
       const a = agents[i];
@@ -1351,7 +1399,12 @@
     root.setProperty('--office-bottom', (narrow ? 12 : Math.max(12, innerHeight - r.bottom)) + 'px');
     const aw = Math.max(280, r.width - (cw ? cw + 16 : 0));
     const ah = Math.max(220, narrow ? innerHeight * 0.62 : r.height);
-    geo = chooseLayout(sizes, aw, ah);
+    const agentTables = [...new Set(((data && data.agents) || []).map(tableOf))];
+    parked = parkedKeys(board && board.tasks, agentTables, tableName);
+    geo = chooseLayout(sizes, aw, ah, parked.length ? 1 : 0);
+    // More parked boards than one column holds: widen the parking and lay out again.
+    const tall = Math.max(geo.H, ah / geo.scale), need = parkCols(parked.length, PARK_TOP + (tall - geo.H) * 0.35, tall - 40);
+    if (need > geo.park) geo = chooseLayout(sizes, aw, ah, need);
     // Fill the whole space: grow the canvas to its shape and centre the desks in it. Most of the extra
     // height goes to the floor in front, a little to the wall, so the room does not look top-heavy.
     W = Math.max(geo.W, Math.round(aw / geo.scale)); H = Math.max(geo.H, Math.round(ah / geo.scale));
