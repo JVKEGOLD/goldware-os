@@ -9,6 +9,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 import urllib.error
 import urllib.request
 
@@ -186,6 +187,136 @@ class Snapshots(unittest.TestCase):
         self.assertEqual(office.chat_turns(rows), [{"kind": "you", "text": "Fix it"},
                                                     {"kind": "did", "text": "Ran 2 commands, edited 1 file"},
                                                     {"kind": "said", "text": "Done."}])
+
+
+CLARIFY_CALL = json.dumps([{"type": "function", "function": {"name": "clarify", "arguments": json.dumps(
+    {"questions": [{"question": "Who should do the gym?", "choices": ["Me", "Bolt"]},
+                   {"question": "Which rooms?", "choices": ["Floor", "Desk", "Wall"], "multi_select": True}]})}}])
+PANEL = """\
+╭─ Hermes Agent needs your input ────────────────╮
+│ 2 questions                                    │
+│ ▸ Who should do the gym?                       │
+│   ❯ 1. Me                                      │
+╰────────────────────────────────────────────────╯
+"""
+
+
+class Clarify(unittest.TestCase):
+    """An agent's multiple-choice question shows in the chat as an ask, and is answered by typing keys."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        del office.DRY_LOG[:]
+        self.home = os.path.join(self.tmp, "hermes")
+        make_hermes(self.home, 200)
+        self.kw = dict(now=NOW, home=self.home, ps_text=PS_MIXED, chome="/nonexistent", ollama_url="off",
+                       cwd_fn=lambda pid: "/work/shop", gateway=False)
+        self.db = os.path.join(self.home, "state.db")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def add(self, role, content="", calls=None):
+        con = sqlite3.connect(self.db)
+        con.execute("INSERT INTO messages (session_id, role, content, tool_calls, timestamp, active) VALUES ('sess-1',?,?,?,?,1)",
+                    (role, content, calls, NOW))
+        con.commit()
+        con.close()
+
+    def test_a_clarify_question_shows_in_the_chat_and_closes_when_answered(self):
+        asks = office.clarify_asks(CLARIFY_CALL)
+        self.assertEqual([(q["question"], q["choices"], q["multi"]) for q in asks],
+                         [("Who should do the gym?", ["Me", "Bolt"], False), ("Which rooms?", ["Floor", "Desk", "Wall"], True)])
+        self.assertEqual(office.clarify_asks('[{"function":{"name":"terminal","arguments":"{}"}}]'), [])
+        self.assertEqual(office.clarify_asks(CLARIFY_CALL[:60]), [], "a call cut off by the length limit is ignored")
+        self.assertEqual(office.clarify_asks(CLARIFY_CALL.replace('"clarify"', '"mcp__clarify"'))[0]["question"], "Who should do the gym?")
+        answer = office.clarify_answer_row({"timestamp": 5, "content": json.dumps({"outcome": "submitted", "responses": [
+            {"question": "Who should do the gym?", "status": "answered", "user_response": "Bolt"},
+            {"question": "Which rooms?", "status": "answered", "user_response": '["Floor", "Wall"]'}]})})
+        self.assertEqual([x["answer"] for x in answer["answers"]], ["Bolt", "Floor, Wall"])
+        rows = [{"role": "user", "text": "Make it a gym"}, {"role": "assistant", "text": "", "tools": ["clarify"], "asks": asks}]
+        turns = office.chat_turns(rows)
+        self.assertEqual([t["kind"] for t in turns], ["you", "ask"])
+        self.assertTrue(turns[-1]["open"], "an unanswered question is open")
+        turns = office.chat_turns(rows + [answer])
+        self.assertEqual([t["kind"] for t in turns], ["you", "ask", "answered"])
+        self.assertFalse(turns[1]["open"], "answering closes it")
+        self.assertEqual(turns[2]["answers"][1]["answer"], "Floor, Wall")
+
+    def test_the_chat_view_reads_the_question_and_its_answer_from_the_database(self):
+        self.add("assistant", "", CLARIFY_CALL)
+        kinds = [t["kind"] for t in office.chat_turns(office.hermes_chat_rows("sess-1", self.home))]
+        self.assertEqual(kinds[-2:], ["said", "ask"])
+        self.add("tool", json.dumps({"responses": [{"question": "Who should do the gym?", "user_response": "Me"}], "outcome": "submitted"}))
+        self.add("tool", "plain output that is not an answer")
+        turns = office.chat_turns(office.hermes_chat_rows("sess-1", self.home))
+        self.assertEqual([t["kind"] for t in turns][-2:], ["ask", "answered"])
+        self.assertFalse(turns[-2]["open"])
+
+    def test_answers_become_the_keys_its_terminal_expects(self):
+        asks = [{"question": "Who?", "choices": ["Me", "Bolt"], "multi": False},
+                {"question": "Which rooms?", "choices": ["Floor", "Desk", "Wall"], "multi": True},
+                {"question": "Anything else?", "choices": [], "multi": False}]
+        e = office.ENTER
+        self.assertEqual(office.clarify_keys(asks, [{"picks": [1]}, {"picks": [2, 0]}, {"other": "Paint it\nred"}]),
+                         ["2", "1", "3", e, "Paint it red", e])
+        self.assertEqual(office.clarify_keys(asks, [{"other": "Neither"}, {"picks": [], "other": "Roof"}, {"other": "x"}]),
+                         ["3", "Neither", e, "4", e, "Roof", e, "x", e], "Other is the number after the last choice, then the typed answer")
+        for bad in ([{"picks": [0, 1]}, {"picks": [0]}, {"other": "x"}],      # two picks on a single choice
+                    [{"picks": [5]}, {"picks": [0]}, {"other": "x"}],         # not on the list
+                    [{"picks": [0]}, {"picks": []}, {"other": "x"}],          # nothing ticked
+                    [{"picks": [0]}, {"picks": [0]}, {}],                     # no typed answer
+                    [{"picks": [0]}]):                                        # a question left out
+            with self.assertRaises(office.OfficeError, msg=bad):
+                office.clarify_keys(asks, bad)
+        with self.assertRaises(office.OfficeError):
+            office.clarify_keys([], [])
+
+    def test_the_question_panel_is_recognised_on_screen_even_when_wrapped(self):
+        panel = """\
+╭─ Hermes Agent needs your input ────────────────╮
+│ 2 questions                                    │
+│ ▸ I cleared 7 items where I had proof they     │
+│   were finished or replaced. These next ones   │
+│   ❯ 1. Apple (Recommended)                     │
+╰────────────────────────────────────────────────╯
+"""
+        asks = [{"question": "I cleared 7 items where I had proof they were finished or replaced.", "choices": ["A", "B"]}]
+        self.assertTrue(office.clarify_on_screen(panel, asks))
+        self.assertFalse(office.clarify_on_screen(panel.replace("needs your input", "is done"), asks), "no panel, no keys")
+        self.assertFalse(office.clarify_on_screen(panel, [{"question": "Something else entirely", "choices": []}]))
+
+    def test_only_a_still_waiting_question_is_answered_and_the_keys_go_to_its_tty(self):
+        self.add("assistant", "", CLARIFY_CALL)
+        self.assertEqual([q["question"] for q in office.pending_clarify("sess-1", home=self.home)], ["Who should do the gym?", "Which rooms?"])
+        body = {"id": "sess-1", "answers": [{"picks": [1]}, {"picks": [0, 2]}]}
+        with mock.patch.object(office, "screen", return_value="nothing to see"):
+            with self.assertRaises(office.OfficeError) as cm:
+                office.answer_clarify(body, **self.kw)
+        self.assertIn("not showing that question", str(cm.exception))
+        self.assertEqual([n for n, _ in office.DRY_LOG if n == "keys"], [], "nothing is typed when the panel is not up")
+        with mock.patch.object(office, "screen", return_value=PANEL):
+            self.assertEqual(office.answer_clarify(body, **self.kw), {"ok": True, "keys": 4})
+        name, argv = office.DRY_LOG[-1]
+        self.assertEqual(name, "keys")
+        self.assertEqual(argv[3:], ["/dev/ttys001", "2", "1", "3", "GW-ENTER"])
+        self.assertIn("GW-ENTER", office.KEYS_SCRIPT)
+        # Answered in the terminal meanwhile: nothing is waiting, nothing is typed.
+        self.add("tool", json.dumps({"responses": []}))
+        self.assertEqual(office.pending_clarify("sess-1", home=self.home), [])
+        with self.assertRaises(office.OfficeError) as cm:
+            office.answer_clarify(body, **self.kw)
+        self.assertIn("Nothing is waiting", str(cm.exception))
+
+    def test_only_hermes_questions_and_known_agents(self):
+        with self.assertRaises(office.OfficeError) as cm:
+            office.answer_clarify({"id": "nobody", "answers": []}, **self.kw)
+        self.assertEqual(cm.exception.status, 404)
+        with self.assertRaises(office.OfficeError) as cm:
+            office.answer_clarify({"id": "claude-300", "answers": []}, **self.kw)
+        self.assertIn("Only Hermes", str(cm.exception))
+        with self.assertRaises(office.OfficeError):
+            office.answer_clarify([], **self.kw)
 
 
 class Terminal(unittest.TestCase):
@@ -1067,6 +1198,50 @@ class TaskBoardPage(unittest.TestCase):
         self.assertNotIn("--pk-", board)
 
 
+class QuestionPage(unittest.TestCase):
+    """The chat shows an agent's multiple-choice question and answers it; the app opens an agent in the Office.
+    tests/office_chat_cdp.mjs drives the page in headless Chrome."""
+
+    @classmethod
+    def setUpClass(cls):
+        def read(*parts):
+            with open(os.path.join(REPO, *parts), encoding="utf-8") as f:
+                return f.read()
+        cls.js, cls.css = read("dashboard", "office.js"), read("dashboard", "office.css")
+        src = os.path.join("app", "Sources", "GoldWareOS")
+        cls.hud, cls.dash, cls.delegate, cls.main = (read(src, n) for n in ("HUD.swift", "DashboardWindow.swift", "AppDelegate.swift", "main.swift"))
+
+    def test_the_chat_draws_and_answers_questions(self):
+        for frag in ("function askHtml(t, a, live)", "function answeredHtml(t)", "function askClick(b)", "async function sendAnswer(t, b)",
+                     "'/api/office/answer'", 'class="oc-choices"', "t.kind === 'ask'", "t.kind === 'answered'", "const askPicks = new Map()"):
+            self.assertIn(frag, self.js)
+        # Only the agent's open question, still the newest turn, on a Hermes chat showing clarify, has buttons.
+        self.assertIn("a.kind === 'hermes' && a.tool === 'clarify' && i === turns.length - 1", self.js)
+        # A half-typed Something else answer is not wiped by a repaint.
+        self.assertIn("document.activeElement.classList.contains('oc-other') && box.contains(document.activeElement) && lastChat) return;", self.js)
+
+    def test_the_app_can_open_an_agent_through_the_page(self):
+        self.assertIn("window.goldwareOffice = {", self.js)
+        self.assertIn("if (openWanted && agentById(openWanted)) window.goldwareOffice.open(openWanted);", self.js)
+
+    def test_question_styles_use_the_arcade_skin(self):
+        css = self.css[self.css.index("Multiple-choice questions in the console chat"):]
+        for sel in (".oc-choices", ".oc-choice", ".oc-choice.on", ".oc-choice.other", ".oc-other", ".oc-ask-send"):
+            self.assertIn(".office-console " + sel + " ", css, sel)
+        self.assertIn("var(--px-", css)
+
+    def test_a_click_on_an_agent_beside_the_orb_opens_the_office_not_the_terminal(self):
+        self.assertIn("var onOpenAgent: (AgentPeek) -> Void", self.hud)
+        self.assertIn("WorkData.focus(tty:", self.hud[self.hud.index("var onOpenAgent"):self.hud.index("private var activeAction")])
+        self.assertIn("pillView.onAgentClick = { [weak self] agent in self?.onOpenAgent(agent) }", self.hud)
+        self.assertIn("hud.onOpenAgent = { [weak self] agent in self?.dashboard.openAgent(id: agent.id) }", self.delegate)
+        self.assertIn("func openAgent(id: String)", self.dash)
+        self.assertIn("if loaded { web.evaluateJavaScript(js) } else { pendingScript = js }", self.dash)
+        self.assertIn("if let js = pendingScript { pendingScript = nil; webView.evaluateJavaScript(js) }", self.dash)
+        self.assertIn("window.goldwareOffice", self.dash)
+        self.assertIn("hud.pillViewForTests.onAgentClick", self.main)
+
+
 class GoldwareOfficeCli(unittest.TestCase):
     def test_help_and_unknown_command(self):
         cli = os.path.join(REPO, "scripts", "office")
@@ -1133,7 +1308,7 @@ class OfficeHttp(unittest.TestCase):
         self.assertEqual(self.call("/api/office/nothing")[0], 404)
 
     def test_post_without_same_origin_is_rejected(self):
-        for path in ("/api/office/send", "/api/office/focus", "/api/office/board", "/api/office/dismiss",
+        for path in ("/api/office/send", "/api/office/focus", "/api/office/answer", "/api/office/board", "/api/office/dismiss",
                      "/api/office/boss", "/api/office/report"):
             code, j = self.call(path, {"id": "claude-1", "text": "hi", "action": "add", "title": "x"})
             self.assertEqual(code, 403, path)           # no Origin or Referer at all
@@ -1145,6 +1320,14 @@ class OfficeHttp(unittest.TestCase):
             self.assertEqual(code, 403, path)
             code, _ = self.call(path, {"id": "x"}, {"Origin": self.base, "Sec-Fetch-Site": "cross-site"})
             self.assertEqual(code, 403, path)
+
+    def test_answer_endpoint_is_guarded_and_says_when_nobody_is_there(self):
+        code, _ = self.call("/api/office/answer", {"id": "sess-1", "answers": []})
+        self.assertEqual(code, 403)
+        code, j = self.call("/api/office/answer", {"id": "sess-1", "answers": []}, {"Origin": self.base})
+        self.assertEqual((code, j["error"]), (404, "That agent is not at a terminal any more."))
+        code, _ = self.call("/api/office/answer", b"id=1", {"Origin": self.base}, ctype="text/plain")
+        self.assertEqual(code, 415)
 
     def test_post_needs_json_content_type(self):
         code, _ = self.call("/api/office/send", b"id=1", {"Origin": self.base}, ctype="text/plain")

@@ -22,11 +22,17 @@ const turns = [
   { kind: 'agent', from: 'gone-7', name: 'Mocha', text: 'Cards tidied.' },
   { kind: 'agent', from: 'fx-2', name: 'Bolt', text: 'Footer fixed.', report: true },
   { kind: 'said', text: 'Done. The **layout** is tidy.' }];
+const answers = [];
+const askTurns = [{ kind: 'you', text: 'Ship the form' }, { kind: 'ask', open: true, questions: [
+  { question: 'Should the referral field go in before we publish?', choices: ['Add it first, then publish', 'Ship as is, add it next week'], multi: false },
+  { question: 'Which pages get the new copy?', choices: ['Home', 'Pricing', 'Waitlist'], multi: true }] }];
 const json = (res, o) => { res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(o)); };
 const types = { '.js': 'application/javascript', '.css': 'text/css', '.html': 'text/html' };
 const server = http.createServer((req, res) => {
   const u = new URL(req.url, 'http://x');
   if (u.pathname === '/api/office/agents') return json(res, { agents, home: '/home/a', rack: { ollama: false, units: [] }, topics: [] });
+  if (req.method === 'POST' && u.pathname === '/api/office/answer') { let b = ''; req.on('data', c => b += c); req.on('end', () => { answers.push(JSON.parse(b)); json(res, { ok: true, keys: 3 }); }); return; }
+  if (u.pathname === '/api/office/chat' && u.searchParams.get('id') === 'fx-3') return json(res, { id: 'fx-3', turns: askTurns });
   if (u.pathname === '/api/office/chat') return json(res, { id: u.searchParams.get('id'), turns });
   if (u.pathname === '/api/office/screen') return json(res, { id: u.searchParams.get('id'), activity: 'idle', screen: 'fixture screen' });
   if (u.pathname === '/api/office/board') return json(res, { tasks: [], ideas: [], suggestions: [], project: {}, runs: {}, groupings: {} });
@@ -84,6 +90,30 @@ try {
   await ev(`document.querySelector('.office-hit[data-id="boss"]').click()`); await sleep(1500);
   await ev(`document.querySelector('#office-console .oc-chat').scrollTop=0`); await sleep(200);
   await shot('chat-group');
+  // A multiple-choice question (a Hermes clarify) shows in the chat with its choices; Send types the picks in.
+  agents[2].tool = 'clarify'; agents[2].activity = 'your_turn';
+  await ev(`document.querySelector('.topbar-tab:not([data-tab="office"])').click()`); await sleep(500);
+  ok('the app opens an agent here: the Office tab shows and that agent\'s console opens', await ev(`window.goldwareOffice.open('fx-3')===true`) && await ev(`document.querySelector('#tab-office').classList.contains('active')`) && await (async () => { await sleep(2200); return ev(`document.querySelector('#office-console .oc-title').textContent.includes('Pip')`); })());
+  await ev(`document.querySelector('#office-console .oc-tabs [data-view="chat"]').click()`); await sleep(900);
+  ok('a question shows in the chat with its five choices and the agent\'s picture', await ev(`(()=>{const q=document.querySelector('.oc-chat .oc-ask.live');return !!q&&q.querySelectorAll('.oc-choice:not(.other)').length===5&&!!q.closest('.oc-row').querySelector('.oc-av');})()`));
+  await ev(`document.querySelector('.oc-ask-send').click()`); await sleep(300);
+  ok('Send waits until every question has an answer', answers.length === 0);
+  for (const sel of ['[data-q="0"][data-c="1"]', '[data-q="1"][data-c="0"]', '[data-q="1"][data-c="2"]', '.other[data-q="1"]']) { await ev(`document.querySelector('.oc-choice${sel}').click()`); await sleep(200); }
+  ok('picks stay ticked and Something else opens a box', await ev(`document.activeElement.matches('.oc-other[data-q="1"]')&&document.querySelectorAll('.oc-choice.on').length===3`));
+  await send('Input.insertText', { text: 'Blog' }); await sleep(3800);
+  ok('a half-typed answer survives the chat repainting', await ev(`document.activeElement.matches('.oc-other')&&document.activeElement.value==='Blog'`));
+  await shot('console-question');
+  await key('Enter'); await sleep(600);
+  ok('Send posts the picks and the typed answer', JSON.stringify(answers[0]) === JSON.stringify({ id: 'fx-3', answers: [{ picks: [1], other: '' }, { picks: [0, 2], other: 'Blog' }] }));
+  askTurns[1].open = false; askTurns.push({ kind: 'answered', answers: [{ question: 'a', status: 'answered', answer: 'Ship as is, add it next week' }, { question: 'b', status: 'answered', answer: 'Home, Waitlist, Blog' }] });
+  await sleep(3800);
+  ok('once answered the buttons go and the answer shows as yours', await ev(`(()=>{const c=document.querySelector('#office-console .oc-chat');return !c.querySelector('.oc-ask.live')&&!!c.querySelector('.oc-ask [disabled]')&&/Home, Waitlist, Blog/.test(c.querySelector('.oc-answer').textContent);})()`));
+  agents[2].tool = null; agents[2].activity = 'idle';
+  // The page may not know the agent yet: the first poll that does opens it.
+  ok('opening an agent the page does not know yet waits for it', await ev(`window.goldwareOffice.open('late-9')`) === false);
+  agents.push(mk('late-9', 'Latte')); await sleep(4500);
+  ok('...and opens it once it appears', await ev(`document.querySelector('#office-console .oc-title').textContent.includes('Latte')`));
+  agents.pop(); await ev(`document.querySelector('.office-hit[data-id="boss"]').click()`); await sleep(1500);
   // Task board (demo mode: nothing is sent): lanes, flags, Give, Done with Undo, drag, search, filters, add with details.
   await send('Page.navigate', { url: base + '/?office-demo&office-n=4#office' }); await sleep(2500);
   await ev(`document.querySelector('.office-hit.wb[data-table="/home/demo/sunrise"]').click()`); await sleep(800);

@@ -13,6 +13,13 @@ final class HUD {
     var historyProvider: () -> [Dictation] = { [] }
     var onCopy: (Dictation) -> Void = { _ in }
     var onOpenHistory: () -> Void = {}
+    var pillViewForTests: PillView { pillView }
+    /// Clicking an agent beside the orb. The app opens its console in the Office; without that wiring it
+    /// brings its terminal forward.
+    var onOpenAgent: (AgentPeek) -> Void = { agent in
+        guard !agent.tty.isEmpty else { return }
+        WorkData.focus(tty: "/dev/" + agent.tty)
+    }
     private var activeAction: (() -> Void)?
     /// Whether the indicator stays on screen when idle. Off: it only appears while working.
     var alwaysVisible = true { didSet { if isIdle { settleIdle() } } }
@@ -66,10 +73,7 @@ final class HUD {
             if self.isIdle { self.settleIdle() }
         }
         watchFileDrags()
-        pillView.onAgentClick = { agent in
-            guard !agent.tty.isEmpty else { return }
-            WorkData.focus(tty: "/dev/" + agent.tty)
-        }
+        pillView.onAgentClick = { [weak self] agent in self?.onOpenAgent(agent) }
         agentFeed.onChange = { [weak self] agents in
             guard let self else { return }
             // A saved custom/office-cast.js shows on the next poll, no restart needed.

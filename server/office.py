@@ -825,6 +825,36 @@ SEND_SCRIPT = """on run argv
 end run
 """
 
+# Types the keys one at a time (iTerm only) with a short pause, so each lands on the question it is for.
+# "GW-ENTER" is a Return key.
+KEYS_SCRIPT = """on run argv
+  set target to item 1 of argv
+  if application "iTerm" is running then
+    tell application "iTerm"
+      repeat with w in windows
+        repeat with t in tabs of w
+          repeat with s in sessions of t
+            if tty of s is target then
+              repeat with i from 2 to count of argv
+                set k to item i of argv
+                if k is "GW-ENTER" then
+                  tell s to write text ""
+                else
+                  tell s to write text k newline no
+                end if
+                delay 0.35
+              end repeat
+              return "sent"
+            end if
+          end repeat
+        end repeat
+      end repeat
+    end tell
+  end if
+  return "notfound"
+end run
+"""
+
 FOCUS_SCRIPT = """on run argv
   set target to item 1 of argv
   if application "iTerm" is running then
@@ -879,7 +909,7 @@ def osa(name, script, *args, timeout=OSA_TIMEOUT):
     argv = ["osascript", "-e", script] + list(args)
     if dry_run():
         DRY_LOG.append((name, argv))
-        canned = {"screen": "dry run screen\n", "send": "sent\n", "focus": "ok\n", "new": "opened\n", "close": "closed\n",
+        canned = {"screen": "dry run screen\n", "send": "sent\n", "keys": "sent\n", "focus": "ok\n", "new": "opened\n", "close": "closed\n",
                   "choose": os.path.expanduser("~") + "/Projects/Bakery Site/\n"}
         return canned.get(name, ""), "", 0
     try:
@@ -941,6 +971,13 @@ def send_text(tty, line):
     return out.strip() == "sent"
 
 
+def send_keys(tty, keys):
+    out, err, code = osa("keys", KEYS_SCRIPT, device_path(tty), *["GW-ENTER" if k is ENTER else k for k in keys])
+    if code != 0:
+        raise TerminalError(friendly(err))
+    return out.strip() == "sent"
+
+
 _SENT = {}
 _SENT_LOCK = threading.Lock()
 
@@ -969,6 +1006,25 @@ def send_to_agent(body, **kw):
     if not send_text(agent["tty"], line):
         raise OfficeError("Its terminal window is closed.", 404)
     return {"ok": True, "sent": line, "queued": line.startswith("/queue ") and bool(agent.get("working"))}
+
+
+def answer_clarify(body, home=None, **kw):
+    """Answers the multiple-choice question an agent is waiting on, after checking it still is: the chat's
+    newest message is that clarify and its terminal shows the first question. Returns the JSON reply."""
+    if not isinstance(body, dict):
+        raise OfficeError("Body must be a JSON object.")
+    agent = find_agent(body.get("id"), **(kw if home is None else dict(kw, home=home)))
+    if not agent:
+        raise OfficeError("That agent is not at a terminal any more.", 404)
+    if agent.get("kind") != "hermes":
+        raise OfficeError("Only Hermes questions can be answered from the Office.")
+    asks = pending_clarify(agent["id"], home=home)
+    keys = clarify_keys(asks, body.get("answers"))
+    if not clarify_on_screen(screen(agent["tty"]), asks):
+        raise OfficeError("Its terminal is not showing that question any more. Answer it there.")
+    if not send_keys(agent["tty"], keys):
+        raise OfficeError("Its terminal window is closed, or it is not in iTerm.", 404)
+    return {"ok": True, "keys": len(keys)}
 
 
 # ---------- dismiss: ask, then close the terminal ----------
@@ -1176,11 +1232,11 @@ def tools_summary(names):
 
 
 def chat_turns(rows, limit=24):
-    """rows: [{role: user|assistant, text, tools: [names]}], oldest first, plus the group-chat rows from
+    """rows: [{role: user|assistant|answer, text, tools: [names], asks}], oldest first, plus the group-chat rows from
     hermes_helper_rows (handoff when a helper was sent out, helper for its answer) and office_rows (send
     when the boss typed to an agent, agent for that agent talking back).
-    Returns the last `limit` of {kind: you|did|said|handoff|helper|send|agent, text, ...};
-    tool calls fold into one "did" line."""
+    Returns the last `limit` of {kind: you|did|said|ask|answered|handoff|helper|send|agent, text, ...};
+    tool calls fold into one "did" line, and a clarify call is an "ask" that stays open until an "answered"."""
     out, pending = [], []
 
     def flush():
@@ -1200,12 +1256,23 @@ def chat_turns(rows, limit=24):
             flush()
             if text:
                 out.append({"kind": "you", "text": text[:1500]})
+        elif r.get("role") == "answer":
+            # The answer to a multiple-choice question closes it.
+            flush()
+            ask = next((t for t in reversed(out) if t["kind"] == "ask" and t.get("open")), None)
+            if ask:
+                ask["open"] = False
+            out.append({"kind": "answered", "answers": r.get("answers") or [], "outcome": r.get("outcome")})
         else:
             pending.extend(r.get("tools") or [])
-            if not text:
+            asks = r.get("asks") or []
+            if not text and not asks:
                 continue
             flush()
-            out.append({"kind": "said", "text": text[:6000]})
+            if text:
+                out.append({"kind": "said", "text": text[:6000]})
+            if asks:
+                out.append({"kind": "ask", "questions": asks, "open": True})
     flush()
     return out[-limit:]
 
@@ -1217,10 +1284,148 @@ def hermes_chat_rows(sid, home=None):
     db = os.path.join(home or hermes_home(), "state.db")
     rows = sqlite_rows(db, """
         SELECT role, substr(coalesce(content, ''), 1, 6000) AS content, substr(coalesce(tool_calls, ''), 1, 20000) AS tool_calls, timestamp
-        FROM messages WHERE session_id = ? AND active = 1 AND role IN ('user', 'assistant') ORDER BY id DESC LIMIT 80""", (sid,))
-    return [{"role": r["role"], "text": r["content"], "at": float(r["timestamp"] or 0),
-             "tools": re.findall(r'(?<!\\)"name":\s*"([^"\\]+)"', r["tool_calls"] or ""),
-             "sends": office_sends(r["tool_calls"])} for r in reversed(rows)]
+        FROM messages WHERE session_id = ? AND active = 1
+          AND (role IN ('user', 'assistant') OR (role = 'tool' AND content LIKE '{"responses":%')) ORDER BY id DESC LIMIT 80""", (sid,))
+    out = []
+    for r in reversed(rows):
+        if r["role"] == "tool":
+            out.append(clarify_answer_row(r))
+            continue
+        out.append({"role": r["role"], "text": r["content"], "at": float(r["timestamp"] or 0),
+                    "tools": re.findall(r'(?<!\\)"name":\s*"([^"\\]+)"', r["tool_calls"] or ""),
+                    "sends": office_sends(r["tool_calls"]), "asks": clarify_asks(r["tool_calls"])})
+    return out
+
+
+# ---------- multiple-choice questions (Hermes' clarify tool) in the Office chat ----------
+
+def clarify_asks(tool_calls):
+    """The questions in a clarify call: [{question, choices, multi}]. A call cut off by the length limit,
+    or any other tool, gives []."""
+    try:
+        calls = json.loads(str(tool_calls or ""))
+    except ValueError:
+        return []
+    if not isinstance(calls, list):
+        return []
+    out = []
+    for c in calls:
+        if not isinstance(c, dict):
+            continue
+        fn = c.get("function") if isinstance(c.get("function"), dict) else {}
+        if re.sub(r"^mcp__", "", str(fn.get("name") or c.get("name") or "")) != "clarify":
+            continue
+        args = fn.get("arguments") if fn.get("arguments") is not None else c.get("arguments")
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except ValueError:
+                args = {}
+        if not isinstance(args, dict):
+            continue
+        qs = args["questions"] if isinstance(args.get("questions"), list) else [args]
+        for q in qs:
+            if not isinstance(q, dict) or not str(q.get("question") or "").strip():
+                continue
+            choices = q.get("choices") if isinstance(q.get("choices"), list) else []
+            out.append({"question": str(q["question"]).strip()[:2000], "choices": [str(x)[:600] for x in choices][:9],
+                        "multi": q.get("multi_select") is True})
+    return out
+
+
+def clarify_answer_row(r):
+    """The tool's reply once the question was answered (or timed out): what was picked for each question."""
+    try:
+        data = json.loads(str(r.get("content") or ""))
+    except ValueError:
+        data = None
+    items = data["responses"] if isinstance(data, dict) and isinstance(data.get("responses"), list) else []
+    answers = []
+    for x in items:
+        if not isinstance(x, dict):
+            continue
+        said = x.get("user_response")
+        if isinstance(said, str) and said.startswith("["):
+            try:
+                said = json.loads(said)
+            except ValueError:
+                pass
+        answers.append({"question": str(x.get("question") or "")[:300], "status": str(x.get("status") or ""),
+                        "answer": ", ".join(str(v) for v in said) if isinstance(said, list) else str(said if said is not None else "")[:1500]})
+    return {"role": "answer", "at": float(r.get("timestamp") or 0), "answers": answers,
+            "outcome": str(data.get("outcome") or "") if isinstance(data, dict) else ""}
+
+
+def pending_clarify(sid, home=None):
+    """The questions a Hermes chat is waiting on right now: its newest message is a clarify call with no
+    reply yet. [] when nothing is waiting."""
+    rows = sqlite_rows(os.path.join(home or hermes_home(), "state.db"), """
+        SELECT role, substr(coalesce(tool_calls, ''), 1, 40000) AS tool_calls FROM messages
+        WHERE session_id = ? AND active = 1 ORDER BY id DESC LIMIT 1""", (sid,))
+    return clarify_asks(rows[0]["tool_calls"]) if rows and rows[0]["role"] == "assistant" else []
+
+
+ENTER = object()           # a Return key in a list of keys to type
+
+
+def _choice_number(i):
+    return "0" if i == 9 else str(i + 1)
+
+
+def _index(x):
+    if isinstance(x, bool):
+        return None
+    if isinstance(x, int):
+        return x
+    if isinstance(x, str) and re.fullmatch(r"\s*[+-]?\d+\s*", x):
+        return int(x)
+    return None
+
+
+def clarify_keys(asks, answers):
+    """The keys that answer a waiting clarify in the Hermes terminal, question by question: a number picks a
+    choice (and moves on), numbers tick boxes on a multi-select then Return locks them, the last number is
+    "Other" followed by the typed answer and Return, and a question with no choices is just the typed
+    answer and Return. `answers` is [{picks: [index], other: text}]."""
+    if not asks:
+        raise OfficeError("Nothing is waiting for an answer.")
+    if not isinstance(answers, list) or len(answers) != len(asks):
+        raise OfficeError("Answer every question.")
+    keys = []
+    for q, a in zip(asks, answers):
+        a = a if isinstance(a, dict) else {}
+        n = len(q["choices"])
+        raw = a.get("picks") if isinstance(a.get("picks"), list) else []
+        picks = [_index(x) for x in raw]
+        other = re.sub(r"[\x00-\x1f\x7f-\x9f]+", "", re.sub(r"[\r\n\t]+", " ", str(a.get("other") or ""))).strip()
+        if len(other) > MAX_TEXT:
+            raise OfficeError("Keep the answer under %d characters." % MAX_TEXT)
+        if any(x is None or x < 0 or x >= n for x in picks):
+            raise OfficeError("That choice is not on the list.")
+        if n == 0:
+            if not other:
+                raise OfficeError("Type an answer.")
+            keys += [other, ENTER]
+        elif q["multi"]:
+            if not picks and not other:
+                raise OfficeError("Tick at least one.")
+            ticked = [_choice_number(i) for i in sorted(set(picks))]
+            keys += ticked + [ENTER] if not other else ticked + [_choice_number(n), ENTER, other, ENTER]
+        else:
+            if (len(picks) == 1) == bool(other):
+                raise OfficeError("Pick one.")
+            keys += [_choice_number(picks[0])] if not other else [_choice_number(n), other, ENTER]
+    return keys
+
+
+# Whether a Hermes terminal shows its question panel for these questions. The panel wraps long questions inside
+# a box, so spaces and box lines are ignored; the start of the first question is enough.
+_BOX = re.compile(r"[\s│╭╮╰╯─▸·❯]+")
+
+
+def clarify_on_screen(screen_text, asks):
+    shown = _BOX.sub("", str(screen_text or ""))
+    return "needsyourinput" in shown and _BOX.sub("", asks[0]["question"])[:24] in shown
 
 
 # What the boss typed to other agents: `goldware-office send ID "text"` (or `new ... "task"`) inside a terminal

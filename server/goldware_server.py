@@ -730,6 +730,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path == "/api/office/send":
                 return self.send_json(200, office.send_to_agent(body))
+            if path == "/api/office/answer":
+                return self.send_json(200, office.answer_clarify(body))
             if path == "/api/office/focus":
                 return self.send_json(200, office.focus_agent(body))
             if path == "/api/office/dismiss":

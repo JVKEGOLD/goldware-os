@@ -1061,3 +1061,25 @@ body:has(#tab-office.active) .topbar-tab.active { background: var(--px-coin); co
   #tab-office .tb-add { padding-top: 7px; padding-bottom: 9px; } #tab-office .tb-add input, #tab-office .tb-add .tb-tool, #tab-office .tb-add button[type="submit"] { height: 34px; }
   #tab-office .tb-lane h4 { padding-top: 8px; padding-bottom: 6px; } }
 @media (prefers-reduced-motion: reduce) { #tab-office .tb-card, #tab-office .tb-mate, #tab-office .tb-hp-bar i { transition: none; } #tab-office .tb-card.leaving { animation: none; opacity: 0; } }
+
+/* Multiple-choice questions in the console chat (a Hermes clarify): choices as buttons, Send types them in. */
+.office-console .oc-ask .oc-ask-q + .oc-ask-q { margin-top: 12px; padding-top: 10px; border-top: 2px dashed var(--px-slate); }
+.office-console .oc-ask .oc-ask-q > small { display: block; margin-bottom: 3px; font: 400 9.5px/1.3 var(--px-font); letter-spacing: .04em; text-transform: uppercase; color: var(--px-teal); }
+.office-console .oc-choices { display: grid; gap: 6px; margin-top: 8px; }
+.office-console .oc-choice { display: grid; grid-template-columns: 22px minmax(0, 1fr); align-items: start; gap: 8px; width: 100%; padding: 8px 10px; border: 2px solid var(--px-ink); border-radius: 2px;
+  background: var(--px-slate); color: var(--px-cream); font: 500 13.5px/1.4 var(--font); text-align: left; cursor: pointer; box-shadow: 3px 3px 0 0 rgba(0,0,0,.45); }
+.office-console .oc-choice i { display: grid; place-items: center; width: 22px; height: 22px; background: var(--px-ink); color: var(--px-steel); font: 400 10px/1 var(--px-font); font-style: normal; }
+.office-console .oc-choice:not(:disabled):hover { background: var(--px-blue); color: #fff; }
+.office-console .oc-choice.on { background: var(--px-navy); box-shadow: inset 4px 0 0 var(--px-coin), 3px 3px 0 0 rgba(0,0,0,.45); }
+.office-console .oc-choice.on i { background: var(--px-coin); color: var(--px-ink); }
+.office-console .oc-choice:disabled { cursor: default; opacity: .6; box-shadow: none; }
+.office-console .oc-choice.other { border-style: dashed; border-color: var(--px-steel); color: var(--px-steel); background: transparent; }
+.office-console .oc-other { width: 100%; box-sizing: border-box; min-height: 38px; padding: 8px 10px; border: 2px solid var(--px-slate); border-radius: 2px; background: var(--px-deep); color: var(--px-cream);
+  font: 14px/1.4 var(--font); resize: none; overflow-y: hidden; outline: none; }
+.office-console .oc-other:focus { border-color: var(--px-sky); }
+.office-console .oc-ask-foot { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; margin-top: 10px; }
+.office-console .oc-ask-foot span, .office-console .oc-ask-note { font: 12px/1.3 var(--font); color: var(--px-steel); }
+.office-console .oc-ask-note { margin: 8px 0 0; }
+.office-console .oc-ask-send { background: var(--px-coin); color: var(--px-ink); }
+.office-console .oc-ask-send:hover { background: #ffe68a; color: var(--px-ink); }
+.office-console .oc-answer .oc-skip { color: var(--px-steel); font-style: italic; }

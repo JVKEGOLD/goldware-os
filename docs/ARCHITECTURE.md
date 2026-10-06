@@ -74,6 +74,9 @@ embed (options.url), html (options.html, rendered in a sandboxed iframe srcdoc).
   127.0.0.1 or localhost address, no cross-site Sec-Fetch-Site; otherwise 403):
   POST /api/office/send   {id, text} types one line into that agent's terminal, then Return
   POST /api/office/focus  {id}       brings that agent's terminal tab to the front
+  POST /api/office/answer {id, answers: [{picks: [index], other: text}]} answers the multiple-choice question (Hermes'
+                          clarify tool) a Hermes agent is waiting on, by typing the keys into its iTerm session, one
+                          per question. 422 unless its newest message is that question and its terminal shows it.
   POST /api/office/dismiss {id, step: check|ask|close} check: 409 with the reason while it works or has helpers out.
                           ask: types "Anything else before we dismiss you?" through the send path. close: re-checks
                           (409), sends HUP, TERM, KILL (0.8 s apart) to that tty's processes except login, pid 1,

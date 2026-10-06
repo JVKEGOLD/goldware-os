@@ -1995,6 +1995,13 @@ if args.count >= 2, args[1] == "--test-agent-peek" {
     let leaving = pill.lift[parsed[1].id] ?? 0
     for _ in 0..<60 { pill.stepLift() }
     expect("leaving glides back down", leaving > 0 && leaving < 1 && pill.lift.isEmpty)
+    // Clicking an agent opens it in the Office: the page call carries the id as a JSON string.
+    var opened: String?
+    let hud = HUD()
+    hud.onOpenAgent = { opened = $0.id }
+    hud.pillViewForTests.onAgentClick(parsed[1])
+    expect("clicking an agent beside the orb goes to the app's handler (the Office), not the terminal", opened == parsed[1].id)
+    expect("open script quotes the id", DashboardWindow.openAgentScript(id: "a\"b") == "(function(){var o=window.goldwareOffice;return o?o.open([\"a\\\"b\"][0]):false;})()")
     print(failures == 0 ? "All agent peek checks passed." : "\(failures) agent peek check(s) FAILED.")
     exit(failures == 0 ? 0 : 1)
 }

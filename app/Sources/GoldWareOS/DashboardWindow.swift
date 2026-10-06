@@ -12,6 +12,7 @@ final class DashboardWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, W
     private let retry = NSButton(title: "Try Again", target: nil, action: nil)
     private var loaded = false
     private var pendingTab: String?
+    private var pendingScript: String?
     let home: URL
     var onRetry: () -> Void = {}
     /// A whitelisted goldwareos:// link was clicked in the page.
@@ -138,6 +139,19 @@ final class DashboardWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, W
         web.evaluateJavaScript(js)
     }
 
+    /// Opens one agent's console in the Office (an agent beside the orb), once the page has loaded if it is
+    /// still opening. The page itself waits for its first poll if it does not know the agent yet.
+    func openAgent(id: String) {
+        show(tab: "office")
+        guard let js = Self.openAgentScript(id: id) else { return }
+        if loaded { web.evaluateJavaScript(js) } else { pendingScript = js }
+    }
+
+    static func openAgentScript(id: String) -> String? {
+        guard let quoted = try? JSONSerialization.data(withJSONObject: [id]), let arg = String(data: quoted, encoding: .utf8) else { return nil }
+        return "(function(){var o=window.goldwareOffice;return o?o.open(\(arg)[0]):false;})()"
+    }
+
     @objc func reload() {
         if loaded { web.reload() } else { onRetry() }
     }
@@ -185,6 +199,7 @@ final class DashboardWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, W
             overlay.animator().alphaValue = 0
         } completionHandler: { self.overlay.isHidden = true }
         if let tab = pendingTab { pendingTab = nil; go(tab: tab) }
+        if let js = pendingScript { pendingScript = nil; webView.evaluateJavaScript(js) }
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {

@@ -149,6 +149,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self?.hud.show("Copied. Paste with ⌘V.", orb: .breathing, autoHide: 1.4)
         }
         hud.onOpenHistory = { [weak self] in self?.openHistory() }
+        hud.onOpenAgent = { [weak self] agent in self?.dashboard.openAgent(id: agent.id) }
         assistant.library = library
         learner.onLearned = { [weak self] terms in
             self?.hud.show("Learned “\(terms.joined(separator: "”, “"))” from your edit", orb: .breathing, tint: .assistant, autoHide: 2.5)

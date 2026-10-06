@@ -1567,7 +1567,32 @@
   // ── Chat: the conversation in plain, readable type. Hermes and Claude Code come from their
   //    transcripts (tool calls counted into one line); Codex has none, so its screen is tidied:
   //    box rules, spinners and status bars dropped, wrapped lines joined. No model is called. ──
-  let lastChat = '', chatBusy = false;
+  let lastChat = '', chatBusy = false, lastTurns = null;
+  // Multiple-choice questions in the chat: what you have ticked so far, per agent and question.
+  const askPicks = new Map();
+  const askPick = qi => { const k = consoleFor + '|' + qi; if (!askPicks.has(k)) askPicks.set(k, { picks: [], other: '', otherOn: false }); return askPicks.get(k); };
+  // One question bubble: the agent asks, its choices are buttons (tick boxes for "pick any"), "Something else"
+  // takes a typed answer, Send types the picks into its terminal. A question that was answered (or is no
+  // longer what the terminal is waiting on) shows its choices quietly, without buttons.
+  function askHtml(t, a, live) {
+    const qs = (t.questions || []).map((q, qi) => {
+      const st = live ? askPick(qi) : { picks: [], other: '', otherOn: false };
+      const choices = (q.choices || []).map((c, ci) => `<button type="button" class="oc-choice${st.picks.includes(ci) ? ' on' : ''}" data-ask="pick" data-q="${qi}" data-c="${ci}"${live ? '' : ' disabled'} aria-pressed="${st.picks.includes(ci)}"><i aria-hidden="true">${q.multi ? (st.picks.includes(ci) ? '☑' : '☐') : ci + 1}</i><span>${esc(c)}</span></button>`).join('');
+      const otherOpen = live && (st.otherOn || !(q.choices || []).length);
+      const other = !live ? '' : (q.choices || []).length && !otherOpen
+        ? `<button type="button" class="oc-choice other" data-ask="other" data-q="${qi}"><i aria-hidden="true">✎</i><span>Something else…</span></button>`
+        : `<textarea class="oc-other" data-q="${qi}" rows="1" placeholder="${(q.choices || []).length ? 'Type your own answer' : 'Type your answer'}">${esc(st.other)}</textarea>`;
+      return `<div class="oc-ask-q">${(t.questions || []).length > 1 ? `<small>Question ${qi + 1} of ${t.questions.length}${q.multi ? ' · pick any' : ''}</small>` : q.multi ? '<small>Pick any</small>' : ''}${prose(q.question)}<div class="oc-choices">${choices}${other}</div></div>`;
+    }).join('');
+    const foot = live ? `<div class="oc-ask-foot"><button type="button" class="oc-btn oc-ask-send" data-ask="send">Send answer</button><span>Types it into the terminal for you</span></div>`
+      : t.open ? '<p class="oc-ask-note">Waiting for an answer in its terminal.</p>' : '';
+    return `<div class="oc-msg said oc-ask${live ? ' live' : ''}" style="--agent:${esc((a && a.color) || '')}"><div class="oc-from"><b>${esc(a ? nameOf(a) : 'Agent')}</b><span class="oc-tag">Question</span></div>${qs}${foot}</div>`;
+  }
+  function answeredHtml(t) {
+    const lines = (t.answers || []).map(x => x.status === 'answered' && x.answer ? `<p>${esc(x.answer)}</p>` : '<p class="oc-skip">Skipped</p>').join('');
+    const none = t.outcome === 'timed_out' ? 'No answer in time' : t.outcome === 'cancelled' ? 'Question cancelled' : 'Answered';
+    return `<div class="oc-msg you oc-answer"><small>You${(t.answers || []).length ? '' : ' · ' + none}</small>${lines}</div>`;
+  }
   // What you just sent, shown at once: a busy Hermes agent holds a /queue line until its turn ends,
   // so the transcript does not have it yet. It goes when the transcript shows the same words.
   let sentLine = null;
@@ -1629,6 +1654,13 @@
       const t = turns[i];
       if (t.kind === 'did') { out.push(`<p class="oc-did">${esc(t.text)}</p>`); continue; }
       if (t.kind === 'you') { out.push(`<div class="oc-msg you"><small>You</small>${prose(t.text)}</div>`); continue; }
+      if (t.kind === 'answered') { out.push(answeredHtml(t)); continue; }
+      if (t.kind === 'ask') {
+        // Answerable here only while it is the agent's open question right now (a Hermes chat on clarify).
+        const live = !!(t.open && a && a.kind === 'hermes' && a.tool === 'clarify' && i === turns.length - 1);
+        out.push(`<div class="oc-row">${avatarSpan(chatFace({}, a), faces)}${askHtml(t, a, live)}</div>`);
+        continue;
+      }
       const face = chatFace(t, a), color = esc(face.color || '');
       if (t.kind === 'handoff') {
         // One message from the agent for a batch of helpers sent out together.
@@ -1666,7 +1698,10 @@
     const echo = sentLine && turns ? `<div class="oc-msg you pending"><small>You${sentLine.queued ? ' · queued, runs when this turn ends' : ' · sending'}</small>${prose(sentLine.text)}</div>` : '';
     html = html.replace('<p class="oc-empty">Nothing said yet.</p>', echo ? '' : '$&') + echo;
     // Same messages: only repaint the pictures (the cast may have changed since).
+    lastTurns = turns;
     if (html === lastChat) { paintChatAvatars(box, faces); return; }
+    // Do not wipe an answer being typed into a question.
+    if (document.activeElement && document.activeElement.classList.contains('oc-other') && box.contains(document.activeElement) && lastChat) return;
     const pinnedChat = box.scrollHeight - box.scrollTop - box.clientHeight < 40 || !lastChat;
     lastChat = html; box.innerHTML = html;
     paintChatAvatars(box, faces);
@@ -1695,6 +1730,8 @@
     if (tabBtn) { setOcView(tabBtn.dataset.view); if (tabBtn.dataset.view === 'chat') readChat(); return; }
     const clamp = e.target.closest('.oc-chat .oc-clamp');
     if (clamp) { clamp.classList.toggle('open'); return; }
+    const ask = e.target.closest('.oc-chat [data-ask]');
+    if (ask && !ask.disabled) { askClick(ask); return; }
     if (e.target.closest('.oc-close')) { selected = null; lastPlateKey = ''; renderCard(); draw(); return; }
     if (e.target.closest('.oc-latest')) { const pre = consoleEl.querySelector('.oc-screen'); pinned = true; pre.scrollTop = pre.scrollHeight; e.target.hidden = true; return; }
     if (e.target.closest('.oc-dismiss')) { dismissAgent(); return; }
@@ -1705,11 +1742,46 @@
       if (!r.ok) flash((await r.json().catch(() => ({}))).error || 'Could not open it.', true);
     }
   });
+  function askClick(b) {
+    const turns = lastTurns, t = turns && turns[turns.length - 1];
+    if (!t || t.kind !== 'ask') return;
+    if (b.dataset.ask === 'send') { sendAnswer(t, b); return; }
+    const qi = +b.dataset.q, q = t.questions[qi], st = askPick(qi);
+    if (b.dataset.ask === 'other') { st.otherOn = true; if (!q.multi) st.picks = []; }
+    else {
+      const ci = +b.dataset.c;
+      if (q.multi) st.picks = st.picks.includes(ci) ? st.picks.filter(x => x !== ci) : st.picks.concat(ci);
+      else { st.picks = st.picks[0] === ci ? [] : [ci]; st.otherOn = false; st.other = ''; }
+    }
+    lastChat = ''; renderChat(turns, lastScreen);
+    if (b.dataset.ask === 'other') { const ta = consoleEl.querySelector(`.oc-other[data-q="${qi}"]`); if (ta) ta.focus(); }
+  }
+  async function sendAnswer(t, b) {
+    const answers = t.questions.map((q, qi) => { const st = askPick(qi); return { picks: st.picks, other: st.otherOn || !(q.choices || []).length ? st.other.trim() : '' }; });
+    const missing = t.questions.findIndex((q, qi) => q.multi ? !answers[qi].picks.length && !answers[qi].other : (answers[qi].picks.length === 1) === !!answers[qi].other);
+    if (missing >= 0) { flash(t.questions.length > 1 ? `Answer question ${missing + 1} first.` : 'Pick an answer first.', true); return; }
+    if (demo) { flash('Demo: nothing was sent.'); return; }
+    b.disabled = true;
+    try {
+      const res = await fetchT('/api/office/answer', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: consoleFor, answers }) }, 15000);
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || 'Not sent.');
+      t.questions.forEach((_, qi) => askPicks.delete(consoleFor + '|' + qi));
+      // The box that was typed in no longer holds the chat back from repainting with the answer.
+      if (document.activeElement && document.activeElement.classList.contains('oc-other')) document.activeElement.blur();
+      flash('Answered.');
+      setTimeout(readChat, 1200); setTimeout(poll, 1500);
+    } catch (err) { flash(err.name === 'AbortError' ? 'iTerm did not answer. Check the terminal.' : err.message, true); b.disabled = false; }
+  }
+  consoleEl.addEventListener('input', e => { if (e.target.classList.contains('oc-other')) { askPick(+e.target.dataset.q).other = e.target.value; fitInput(e.target); } });
   // The message box wraps and grows with what you type (up to a few lines, then it scrolls).
   // Return sends; Shift+Return starts a new line (sent as a space: a terminal takes one line).
   function fitInput(el) { el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 160) + 'px'; }
   consoleEl.addEventListener('input', e => { if (e.target.classList.contains('oc-input')) fitInput(e.target); });
   consoleEl.addEventListener('keydown', e => {
+    if (e.target.classList.contains('oc-other') && e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+      e.preventDefault(); const b = consoleEl.querySelector('.oc-ask-send'); if (b) askClick(b); return;
+    }
     if (!e.target.classList.contains('oc-input') || e.key !== 'Enter' || e.shiftKey || e.isComposing) return;
     e.preventDefault(); e.target.form.requestSubmit();
   });
@@ -2739,6 +2811,7 @@
       tick(seen, next);
       data = next; error = false;
       applyUsage(); updateTrips();
+      if (openWanted && agentById(openWanted)) window.goldwareOffice.open(openWanted);
       const awake = data.agents.filter(a => !a.bed), inBed = data.agents.length - awake.length;
       const n = data.agents.length, busy = awake.filter(a => BUSY.has(a.activity)).length;
       const you = awake.filter(a => a.activity === 'your_turn').length;
@@ -2814,6 +2887,20 @@
     finally { setTimeout(() => { go.disabled = false; }, 1500); }
   });
   const emptyConsoleBox = el => !!(el && el.matches && el.matches('.office-console .oc-input') && !el.value);
+  // The app's pill: clicking an agent there opens its console here. The page may still be loading, so the
+  // first poll that knows the agent opens it.
+  let openWanted = null;
+  window.goldwareOffice = {
+    open(id) {
+      const t = document.querySelector('.topbar-tab[data-tab="office"]');
+      if (!tab.classList.contains('active') && t) t.click();
+      if (!agentById(id)) { openWanted = id; return false; }
+      openWanted = null; closeWbz();
+      selected = (data.boss && data.boss.id === id) ? 'boss' : id;
+      lastPlateKey = ''; renderCard(); renderRoster(); draw();
+      return true;
+    }
+  };
   document.addEventListener('keydown', e => {
     if (!active()) return;
     if (e.key === 'Escape' && closeWbz()) { e.preventDefault(); return; }
