@@ -259,6 +259,7 @@ details p { color: var(--text-muted); font-size: 14px; margin-top: 8px; }
 <link rel="stylesheet" href="/dashboard/gestures.css">
 <link rel="stylesheet" href="/dashboard/tour.css">
 <link rel="stylesheet" href="/dashboard/office.css">
+<link rel="stylesheet" href="/dashboard/office-music.css">
 <link rel="stylesheet" href="/custom/office.css">
 </head>
 <body>
@@ -1051,6 +1052,12 @@ details p { color: var(--text-muted); font-size: 14px; margin-top: 8px; }
 <script src="/dashboard/office-cast.js"></script>
 <script src="/custom/office-cast.js"></script>
 <script src="/dashboard/office.js"></script>
+<script src="/dashboard/office-music.js"></script>
+<script id="office-music-mount">
+  // The record player, bottom left of the room. ?office-demo pretends: nothing reaches Spotify or the boss.
+  window.mountRecordPlayer && mountRecordPlayer(document.getElementById('office-stage'),
+    new URLSearchParams(location.search).has('office-demo') ? { fetchJson: mountRecordPlayer.demoFetch } : {});
+</script>
 <script src="/dashboard/gestures.js"></script>
 <script src="/dashboard/tour.js"></script>
 </body>

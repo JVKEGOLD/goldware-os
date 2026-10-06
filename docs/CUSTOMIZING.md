@@ -25,6 +25,7 @@ Then `make check` for the full gate. Back up first: `cp goldware.json goldware.j
 | `models.whisper` | Speech model file name under `~/Library/Application Support/GoldWare OS/models/` | `"ggml-small.en-q5_1.bin"` |
 | `office.topics` | The folders New agent can start in: a list of `{id, label, dir}`. `dir` is absolute or starts with `~/`. Easiest to change with Edit in the New agent menu | `[{"id": "home", "label": "Home", "dir": "~"}]` |
 | `office.presets` | The agents New agent can start: a list of `{id, label, command}`. `command` is one line you run in a terminal, for example `hermes`, `claude` or `codex` | `[{"id": "codex", "label": "Codex", "command": "codex"}]` |
+| `office.music.playlists` | Your own Spotify playlists on the record player's **Mine** tab: a list of `{label, playlist}` (optional `color` as `#RRGGBB`). `playlist` is a share link (`https://open.spotify.com/playlist/...`) or its 22-character id. None by default; the Mine tab's **Add my playlists** button asks the boss to add them | `{"playlists": [{"label": "Focus", "playlist": "https://open.spotify.com/playlist/37i9dQZF1DWZeKCadgRdKQ"}]}` |
 | `dashboard.layout` | A label only: it must be text but nothing reads it. Card order in `dashboard.cards` is what is displayed | `"starter"` |
 | `dashboard.cards` | Ordered list of cards | see below |
 
@@ -157,6 +158,29 @@ The Office's **New agent** button opens a terminal window that runs `cd <folder>
 - `goldware.json` is git-ignored, so `make update` never touches your lists. If the file does not exist, Edit creates it from `goldware.default.json`.
 - The new window opens in iTerm (profile from `letsWork.profile`), or Terminal if iTerm is not installed.
 
+## The record player
+
+A small turntable sits in the bottom-left corner of the Office. Click it and pick music with the dial: scroll, drag or use the arrow keys to turn it, and Enter (or a click on the style under the needle) plays it in the Spotify app on this Mac. Pause, Skip and Volume are under the dial; Esc closes it and the music keeps playing.
+
+- **Instrumental** and **Vocals** are Spotify's own public playlists, built in (`server/office_music.py`, `STYLES`).
+- **Mine** is yours, and empty to start with. Press **Add my playlists** there and the boss (at the front desk) asks which playlists you want, then adds them to `goldware.json`. Or add them by hand:
+
+```json
+"office": {
+  "music": {
+    "playlists": [
+      { "label": "Deep work", "playlist": "https://open.spotify.com/playlist/37i9dQZF1DWZeKCadgRdKQ" },
+      { "label": "Friday", "playlist": "37i9dQZF1DXcBWIGoYBM5M", "color": "#FF8AD8" }
+    ]
+  }
+}
+```
+
+  In Spotify, a playlist's share link is in its **...** menu under **Share > Copy link to playlist**. Up to 24 playlists, a label of 1 to 60 characters, no playlist twice. Reopen the record player to see changes.
+- The page only sends a style name, a volume from 0 to 100, or Play, Pause, Resume, Skip; the playlist always comes from the server's list or your `goldware.json`. Nothing plays until you press Play, and it never likes, follows or saves anything in Spotify.
+- The first time, macOS asks to let GoldWare OS control Spotify (System Settings > Privacy & Security > Automation).
+- Spotify cannot report which playlist a song came from, so the record player names a style only while the music is still the one it started; if you pick something else in Spotify, it just shows the song.
+
 ## Your own Office look (custom/office.css)
 
 Put CSS in `custom/office.css`. The dashboard loads it after the built-in `dashboard/office.css`, so your rules win, and the whole `custom/` folder is git-ignored, so `make update` never overwrites it. Create the folder and file if they are missing, then reload the Office tab. There is no file by default and the page works fine without one.
@@ -201,7 +225,7 @@ The dashboard opens a short tour the first time it loads: what GoldWare OS is, e
 
 | What | Where |
 |---|---|
-| Your config, including your New agent topics and agents | `goldware.json` (repo root, gitignored) |
+| Your config, including your New agent topics and agents and your record player playlists | `goldware.json` (repo root, gitignored) |
 | Your Office CSS and character looks | `custom/office.css`, `custom/office-cast.js` (gitignored) |
 | Tasks, notes, drafts, tour progress, the boss's folder (`data/boss`) | `data/` in the repo root (gitignored). `GOLDWARE_DATA_ROOT` overrides it |
 | Models, app data, history | `~/Library/Application Support/GoldWare OS/` (`GOLDWARE_DATA` overrides it) |

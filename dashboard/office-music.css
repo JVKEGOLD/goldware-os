@@ -1,0 +1,181 @@
+/* The Office record player, in the Office's arcade palette (dark panels, coin-gold frame) with its
+ * pixel fonts. Your own look goes in custom/office.css, like the rest of the Office. */
+.rp-root {
+  --rp-ink: var(--px-ink, #0b0c17); --rp-fg: var(--px-cream, #f4f4f4); --rp-box: var(--px-deep, #14152a); --rp-screen: var(--px-panel, #222540);
+  --rp-edge: var(--px-slate, #333c57); --rp-line: #46508a; --rp-hover: var(--px-navy, #29366f);
+  --rp-shell: var(--px-yellow, #ffcd75); --rp-shell-hi: #ffe7a8; --rp-shell-dark: #b9772c; --rp-yellow: var(--px-coin, #ffd84a);
+  --rp-red: var(--px-orange, #ef7d57); --rp-muted: var(--px-steel, #94b0c2); --rp-text: var(--px-cream, #f4f4f4); --rp-focus: var(--px-sky, #41a6f6);
+  --rp-px: "Silkscreen", "Press Start 2P", ui-monospace, monospace; --rp-display: "Pixelify Sans", "Silkscreen", system-ui, sans-serif;
+  --rp-now: var(--rp-yellow);
+  position: absolute; left: 6.2%; bottom: 2.2%; z-index: 4; width: clamp(44px, 5.2%, 84px);
+}
+.rp-root *, .rp-root *::before, .rp-root *::after { box-sizing: border-box; }
+/* Out of the way while a whiteboard is zoomed in. The music keeps playing. */
+.office-stage.wb-zooming > .rp-root { display: none; }
+.rp-panel [hidden] { display: none !important; }
+
+/* The turntable in the corner. */
+.rp-corner { position: relative; display: block; width: 100%; aspect-ratio: 32 / 24; padding: 0; border: 0; background: none; cursor: pointer;
+  border-radius: 6px; outline: none; image-rendering: pixelated; transition: transform 140ms steps(3, end); }
+.rp-corner svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.rp-corner:hover, .rp-root.open .rp-corner { transform: translateY(-2px); }
+.rp-corner:focus-visible { box-shadow: 0 0 0 2px var(--rp-box), 0 0 0 4px var(--rp-ink); }
+.rp-corner .rp-label-fill { fill: var(--rp-now); }
+.rp-corner .rp-vinyl { transform-box: view-box; transform-origin: 12px 10px; }
+.rp-corner .rp-arm { transform-box: view-box; transform-origin: 26px 5px; transform: rotate(-38deg); transition: transform 420ms cubic-bezier(.3,.7,.3,1); }
+.rp-root.playing .rp-corner .rp-arm { transform: rotate(0deg); }
+.rp-root.playing .rp-corner .rp-vinyl { animation: rp-spin 1.8s linear infinite; }
+.rp-corner .rp-notes { opacity: 0; transform-box: view-box; }
+.rp-root.playing .rp-corner .rp-notes { animation: rp-note 2.4s steps(6, end) infinite; }
+@keyframes rp-spin { to { transform: rotate(360deg); } }
+@keyframes rp-note { 0% { opacity: 0; transform: translate(0, 4px); } 20% { opacity: 1; } 80% { opacity: 1; } 100% { opacity: 0; transform: translate(2px, -4px); } }
+
+.rp-tip { position: absolute; left: 50%; bottom: calc(100% + 6px); transform: translateX(-50%); padding: 5px 7px 4px; white-space: nowrap; pointer-events: none;
+  font: 400 9px/1 var(--rp-px); text-transform: uppercase; color: var(--rp-fg); background: var(--rp-box); border-radius: 4px;
+  box-shadow: 0 0 0 2px var(--rp-edge), 2px 3px 0 2px rgba(0,0,0,.25); opacity: 0; transition: opacity 120ms; }
+.rp-corner:hover .rp-tip, .rp-corner:focus-visible .rp-tip { opacity: 1; }
+.rp-root.open .rp-tip { opacity: 0; }
+
+/* The panel: a dark arcade window in a coin-gold frame, above everything in the Office. */
+.rp-panel { position: fixed; z-index: 130; display: flex; flex-direction: column; gap: 10px; padding: 12px 14px 12px;
+  color: var(--rp-text); background: var(--rp-screen); border-radius: 10px;
+  box-shadow: 0 0 0 2px var(--rp-ink), 0 0 0 6px var(--rp-shell), 0 0 0 7px var(--rp-shell-hi), 0 0 0 9px var(--rp-ink), 8px 10px 0 6px rgba(0,0,0,.45);
+  transform-origin: 0 100%; animation: rp-pop 160ms steps(4, end); }
+.rp-panel[hidden] { display: none; }
+@keyframes rp-pop { from { transform: scale(.92); opacity: 0; } }
+.rp-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.rp-head b { display: flex; align-items: center; gap: 8px; font: 400 18px/1 var(--rp-display); color: var(--rp-yellow); text-shadow: 2px 2px 0 var(--rp-ink); }
+/* Power light: green while music plays. */
+.rp-led { width: 8px; height: 8px; border-radius: 2px; background: #6a7286; box-shadow: 0 0 0 2px var(--rp-ink), inset 0 2px 0 rgba(255,255,255,.35); }
+.rp-root.playing .rp-led { background: #40d050; box-shadow: 0 0 0 2px var(--rp-ink), inset 0 2px 0 rgba(255,255,255,.5), 0 0 8px 2px rgba(64,208,80,.55); }
+.rp-x { width: 30px; height: 30px; border: 0; border-radius: 6px; cursor: pointer; font: 400 18px/1 var(--rp-px); color: var(--rp-fg); background: var(--rp-box);
+  box-shadow: 0 0 0 2px var(--rp-edge), 0 2px 0 2px var(--rp-ink); }
+.rp-x:hover { background: var(--rp-hover); }
+
+.rp-toggle { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0; padding: 3px; border-radius: 8px; background: var(--rp-box); box-shadow: 0 0 0 2px var(--rp-edge); }
+.rp-toggle button { height: 30px; border: 0; border-radius: 5px; cursor: pointer; font: 400 10px/1 var(--rp-px); text-transform: uppercase; color: var(--rp-muted); background: none; }
+.rp-toggle button[aria-pressed="true"] { color: var(--rp-ink); background: var(--rp-yellow); box-shadow: inset 0 -2px 0 rgba(0,0,0,.16), 0 0 0 2px var(--rp-ink); }
+.rp-toggle button:focus-visible, .rp-play:focus-visible, .rp-controls button:focus-visible, .rp-x:focus-visible { outline: 2px solid var(--rp-focus); outline-offset: 2px; }
+
+/* The dial: a record seen straight on. The dial turns; the needle and the label in the middle stay put. */
+.rp-wheel { --rp-size: min(340px, 72vw); --rp-sel: var(--rp-yellow); position: relative; isolation: isolate; width: var(--rp-size); height: var(--rp-size); margin: 24px auto 14px;
+  border-radius: 50%; outline: none; touch-action: none; user-select: none; -webkit-user-select: none; cursor: grab; }
+/* The turntable the record sits on: a dark plinth with a lit edge, a speed switch and the power light. */
+.rp-wheel::before { content: ""; position: absolute; inset: -14px; z-index: -1; border-radius: 16px;
+  background: linear-gradient(180deg, #3a3f62, #2a2e4a 60%, #1f2238);
+  box-shadow: 0 0 0 2px var(--rp-ink), inset 0 2px 0 rgba(255,255,255,.12), inset 0 -3px 0 rgba(0,0,0,.35), 0 5px 0 2px rgba(32,32,48,.28); }
+.rp-wheel::after { content: "33  45"; position: absolute; left: -8px; bottom: -11px; z-index: -1; font: 400 6px/1 var(--rp-px); letter-spacing: 1px; color: #8a90a8; white-space: pre; pointer-events: none; }
+.rp-wheel:active { cursor: grabbing; }
+.rp-wheel:focus-visible { box-shadow: 0 0 0 3px var(--rp-screen), 0 0 0 6px var(--rp-focus); }
+.rp-dial { position: absolute; inset: 0; will-change: transform; }
+.rp-disc { position: absolute; inset: 0; width: 100%; height: 100%; display: block; filter: drop-shadow(0 3px 0 rgba(0,0,0,.45)); }
+/* Light on the vinyl: two soft wedges that stay put while the record turns under them. */
+.rp-sheen { position: absolute; inset: 2.5%; border-radius: 50%; pointer-events: none; z-index: 1;
+  background: conic-gradient(from 0deg, transparent 0 4%, rgba(255,255,255,.11) 9%, transparent 15% 50%, rgba(255,255,255,.07) 58%, transparent 65%);
+  -webkit-mask: radial-gradient(circle, transparent 0 34%, #000 36% 97%, transparent 98%); mask: radial-gradient(circle, transparent 0 34%, #000 36% 97%, transparent 98%); }
+.rp-tonearm { position: absolute; left: 0; top: -18px; width: 100%; height: auto; z-index: 3; pointer-events: none; filter: drop-shadow(0 3px 0 rgba(0,0,0,.35)); }
+.rp-opts { position: absolute; inset: 0; }
+.rp-opt { position: absolute; left: 50%; top: 50%; width: 0; height: 0; transform: rotate(var(--rp-a)) translateY(calc(var(--rp-size) * -.372)); cursor: pointer; }
+.rp-opt-k { position: absolute; left: 0; top: calc(var(--rp-size) * -.083); width: calc(var(--rp-size) * .044); height: calc(var(--rp-size) * .028); translate: -50% -50%;
+  background: var(--rp-c); box-shadow: 0 0 0 1px #0b0b12, inset 0 1px 0 rgba(255,255,255,.5), inset 0 -1px 0 rgba(0,0,0,.3); transition: scale 160ms ease-out, box-shadow 160ms; }
+.rp-opt.on .rp-opt-k { scale: 1.3; box-shadow: 0 0 0 1px #0b0b12, inset 0 1px 0 rgba(255,255,255,.6), 0 0 10px 2px var(--rp-c); }
+.rp-reduced .rp-opt-k { display: none; }
+.rp-reduced .rp-opt-t { opacity: 1 !important; }
+.rp-opt-t { position: absolute; left: 0; top: 0; width: var(--rp-lw, calc(var(--rp-size) * .2)); translate: -50% -50%; text-align: center; transform-origin: 50% 50%;
+  font: 500 12px/1 var(--rp-display); color: #f3efe0; text-shadow: 1px 1px 0 #000; overflow-wrap: break-word; hyphens: manual; }
+.rp-opt.on .rp-opt-t { color: var(--rp-c); font-weight: 700; text-shadow: 1px 1px 0 #000, 0 0 6px rgba(0,0,0,.6); }
+.rp-opt.live .rp-opt-t::before { content: ""; display: block; width: 5px; height: 5px; margin: 0 auto 3px; background: var(--rp-c); box-shadow: 0 0 0 1px #000; }
+.rp-root.playing .rp-opt.live .rp-opt-t::before { animation: rp-blink 1.2s steps(2, end) infinite; }
+@keyframes rp-blink { 50% { opacity: .35; } }
+.rp-reduced .rp-opt.live .rp-opt-t::before { display: inline-block; margin: 0 6px 1px 0; }
+.rp-center { position: absolute; left: 50%; top: 50%; width: 31%; height: 31%; translate: -50% -50%; border-radius: 50%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px;
+  text-align: center; padding: 6px; z-index: 2;
+  background: radial-gradient(circle at 35% 28%, rgba(255,255,255,.28), transparent 45%), var(--rp-sel);
+  box-shadow: 0 0 0 3px #12121b, 0 0 0 4px rgba(255,255,255,.07), inset 0 0 0 5px rgba(0,0,0,.07), inset 0 0 0 6px rgba(255,255,255,.22), inset 0 -4px 0 rgba(0,0,0,.16);
+  transition: background 200ms; pointer-events: none; }
+/* The spindle sits between the kind and the name, never on top of the text. */
+.rp-center::after { content: ""; order: 1; flex: none; width: 6px; height: 6px; border-radius: 1px; background: linear-gradient(135deg, #f3f5fb, #8a90a8); box-shadow: 0 0 0 1px #15151f; }
+.rp-center-kind { font: 400 7px/1 var(--rp-px); text-transform: uppercase; color: rgba(20,20,30,.7); order: 0; }
+.rp-center-name { font: 700 13px/1.05 var(--rp-display); color: #15151f; max-width: 82px; order: 2; }
+.rp-center-name.long { font-size: 10px; max-width: 90px; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; overflow: hidden; }
+/* The stylus under the tonearm's head: the needle that marks the selected style. */
+.rp-needle { position: absolute; left: 50%; top: 7px; width: 6px; height: 7px; translate: -50% 0; z-index: 4; pointer-events: none;
+  background: #e6e9f4; clip-path: polygon(0 0, 100% 0, 100% 50%, 50% 100%, 0 50%); filter: drop-shadow(0 1px 0 #000); }
+.rp-wheel.rp-flip .rp-dial { animation: rp-flip 220ms ease-out; }
+@keyframes rp-flip { from { scale: .9; opacity: .4; } }
+
+.rp-mine { display: grid; gap: 10px; }
+.rp-mine.empty { padding: 18px 16px; border-radius: 10px; text-align: center; background: var(--rp-box); box-shadow: 0 0 0 2px var(--rp-edge), inset 0 0 0 2px var(--rp-box), inset 0 0 0 3px var(--rp-line); }
+.rp-mine-text { margin: 0; font: 400 14px/1.35 var(--rp-display); color: var(--rp-fg); }
+.rp-add { justify-self: center; height: 32px; padding: 0 14px; border: 0; border-radius: 6px; cursor: pointer; font: 400 10px/1 var(--rp-px); text-transform: uppercase;
+  color: var(--rp-fg); background: var(--rp-box); box-shadow: 0 0 0 2px var(--rp-edge), 0 2px 0 2px var(--rp-ink); }
+.rp-mine.empty .rp-add { height: 38px; color: var(--rp-ink); background: var(--rp-yellow); box-shadow: inset 0 -3px 0 rgba(0,0,0,.18), inset 0 2px 0 rgba(255,255,255,.6), 0 0 0 2px var(--rp-ink), 0 3px 0 2px var(--rp-ink); }
+.rp-add:hover:not(:disabled) { filter: brightness(1.1); }
+.rp-add:disabled { opacity: .5; cursor: default; }
+.rp-add:focus-visible { outline: 2px solid var(--rp-focus); outline-offset: 2px; }
+.rp-play { height: 38px; padding: 0 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border: 0; border-radius: 8px; cursor: pointer; font: 400 11px/1 var(--rp-px); text-transform: uppercase; color: var(--rp-ink);
+  background: var(--rp-yellow); box-shadow: inset 0 -3px 0 rgba(0,0,0,.18), inset 0 2px 0 rgba(255,255,255,.6), 0 0 0 2px var(--rp-ink), 0 3px 0 2px var(--rp-ink); }
+.rp-play:hover:not(:disabled) { filter: brightness(1.06); }
+.rp-play:active:not(:disabled) { translate: 0 2px; box-shadow: inset 0 -2px 0 rgba(0,0,0,.18), 0 0 0 2px var(--rp-ink), 0 1px 0 2px var(--rp-ink); }
+.rp-play:disabled, .rp-controls button:disabled, .rp-vol input:disabled { opacity: .45; cursor: default; }
+
+.rp-now { display: grid; gap: 8px; padding: 9px 10px; border-radius: 8px; background: var(--rp-box); box-shadow: 0 0 0 2px var(--rp-edge), inset 0 0 0 2px var(--rp-box), inset 0 0 0 3px var(--rp-line); }
+.rp-np { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.rp-cover { flex: none; width: 46px; height: 46px; image-rendering: pixelated; border-radius: 3px; box-shadow: 0 0 0 2px var(--rp-ink), 2px 3px 0 2px rgba(0,0,0,.18); }
+.rp-now-line { flex: 1; min-width: 0; margin: 0; display: grid; gap: 2px; font: 400 13px/1.2 var(--rp-display); color: var(--rp-text); }
+.rp-now-line b { font: 400 8px/1.3 var(--rp-px); text-transform: uppercase; color: var(--rp-muted); }
+.rp-now-line span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rp-now-line .rp-track { font: 500 15px/1.15 var(--rp-display); color: var(--rp-fg); }
+.rp-now-line .rp-artist { font-size: 12px; color: var(--rp-muted); }
+.rp-now-line .rp-artist:empty { display: none; }
+/* A little equalizer that dances while music plays. */
+.rp-eq { flex: none; display: flex; align-items: flex-end; gap: 2px; height: 16px; opacity: .25; }
+.rp-eq i { width: 3px; height: 4px; background: var(--rp-now); box-shadow: 0 0 0 1px var(--rp-ink); }
+.rp-root.playing .rp-eq { opacity: 1; }
+.rp-root.playing .rp-eq i { animation: rp-eq 900ms steps(4, end) infinite alternate; }
+.rp-root.playing .rp-eq i:nth-child(2) { animation-duration: 700ms; animation-delay: -200ms; }
+.rp-root.playing .rp-eq i:nth-child(3) { animation-duration: 1100ms; animation-delay: -500ms; }
+.rp-root.playing .rp-eq i:nth-child(4) { animation-duration: 800ms; animation-delay: -300ms; }
+@keyframes rp-eq { from { height: 3px; } to { height: 16px; } }
+.rp-controls { display: flex; align-items: center; gap: 8px; }
+.rp-controls button { display: grid; place-items: center; width: 36px; height: 30px; padding: 0; border: 0; border-radius: 6px; cursor: pointer; color: var(--rp-fg);
+  background: var(--rp-box); box-shadow: 0 0 0 2px var(--rp-edge), 0 2px 0 2px var(--rp-ink); }
+.rp-controls svg { width: 14px; height: 14px; fill: currentColor; }
+.rp-controls button:active:not(:disabled) { translate: 0 2px; box-shadow: 0 0 0 2px var(--rp-edge), 0 0 0 2px var(--rp-ink); }
+.rp-controls button:hover:not(:disabled) { background: var(--rp-hover); }
+.rp-vol { flex: 1; display: flex; align-items: center; gap: 8px; margin-left: 4px; color: var(--rp-muted); }
+.rp-vol svg { flex: none; width: 14px; height: 14px; fill: currentColor; }
+/* A pixel slider: a notched track that fills red, and a square yellow knob. */
+.rp-vol input { --v: 50%; flex: 1; min-width: 0; height: 18px; margin: 0; background: none; -webkit-appearance: none; appearance: none; cursor: pointer; }
+.rp-vol input::-webkit-slider-runnable-track { height: 8px; border-radius: 2px; box-shadow: 0 0 0 2px var(--rp-ink);
+  background: repeating-linear-gradient(90deg, transparent 0 9px, rgba(0,0,0,.18) 9px 10px), linear-gradient(90deg, var(--rp-red) var(--v), #46508a var(--v)); }
+.rp-vol input::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 18px; margin-top: -5px; border-radius: 2px; background: var(--rp-yellow);
+  box-shadow: 0 0 0 2px var(--rp-ink), inset 0 2px 0 rgba(255,255,255,.6), inset 0 -2px 0 rgba(0,0,0,.18); }
+.rp-vol input::-moz-range-track { height: 8px; border-radius: 2px; background: linear-gradient(90deg, var(--rp-red) var(--v), #46508a var(--v)); box-shadow: 0 0 0 2px var(--rp-ink); }
+.rp-vol input::-moz-range-thumb { width: 12px; height: 18px; border: 0; border-radius: 2px; background: var(--rp-yellow); box-shadow: 0 0 0 2px var(--rp-ink); }
+.rp-vol input:focus-visible { outline: 2px solid var(--rp-focus); outline-offset: 3px; }
+.rp-msg { margin: 0; min-height: 0; font: 400 12px/1.25 var(--rp-display); color: var(--rp-muted); }
+.rp-msg:empty { display: none; }
+.rp-msg.bad { color: #ff6b7a; }
+.rp-root.busy .rp-wheel { cursor: progress; }
+
+/* Reduce Motion: no turning record, a plain list with the selected style highlighted. */
+.rp-reduced .rp-wheel { width: 100%; height: auto; margin: 4px 0 0; border-radius: 8px; cursor: default; background: #15151f; padding: 6px; }
+.rp-reduced .rp-dial { position: static; transform: none !important; }
+.rp-reduced .rp-disc, .rp-reduced .rp-center, .rp-reduced .rp-needle, .rp-reduced .rp-sheen, .rp-reduced .rp-tonearm, .rp-reduced .rp-wheel::before, .rp-reduced .rp-wheel::after { display: none; }
+.rp-reduced .rp-opts { position: static; display: grid; grid-template-columns: 1fr; gap: 2px; max-height: 46vh; overflow-y: auto; }
+.rp-reduced .rp-opt { position: static; width: auto; height: auto; transform: none; opacity: 1 !important; padding: 6px 8px; border-radius: 5px; border-left: 6px solid var(--rp-c); }
+.rp-reduced .rp-opt-t { position: static; translate: none; width: auto; transform: none !important; text-align: left; display: block; }
+.rp-reduced .rp-opt.on { background: var(--rp-yellow); }
+.rp-reduced .rp-opt.on .rp-opt-t { color: var(--rp-ink); text-shadow: none; }
+@media (prefers-reduced-motion: reduce) {
+  .rp-panel, .rp-wheel.rp-flip .rp-dial { animation: none; }
+  .rp-root.playing .rp-corner .rp-vinyl, .rp-root.playing .rp-corner .rp-notes { animation: none; }
+  .rp-corner, .rp-corner .rp-arm, .rp-opt-k { transition: none; }
+  .rp-root.playing .rp-eq i, .rp-root.playing .rp-opt.live .rp-opt-t::before { animation: none; }
+  .rp-root.playing .rp-eq i:nth-child(odd) { height: 12px; }
+}
+@media (max-width: 600px) {
+  .rp-root { width: 60px; left: 4%; }   /* 45px tall: a full-size touch target */
+  .rp-play, .rp-controls button, .rp-toggle button, .rp-x, .rp-add { min-height: 44px; }
+}

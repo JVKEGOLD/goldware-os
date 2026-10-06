@@ -20,6 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import office  # noqa: E402  (the Office tab: agents at desks, console, board, usage)
 import office_launch  # noqa: E402  (the New agent button and its topics and presets)
 import office_boss  # noqa: E402  (the boss at the front desk: runs the other agents when asked)
+import office_music  # noqa: E402  (the record player: Spotify on this Mac, by style)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.environ.get("GOLDWARE_ROOT") or os.path.dirname(HERE))
@@ -121,6 +122,9 @@ def validate_config(cfg):
     oerr = office_launch.validate_shape(cfg.get("office"))
     if oerr:
         return oerr
+    merr = office_music.validate((cfg.get("office") or {}).get("music"))
+    if merr:
+        return merr
     dash = cfg.get("dashboard")
     if dash is not None:
         if not isinstance(dash, dict):
@@ -711,6 +715,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(200, office.chat_of_agent(q("id"), data_root=DATA_ROOT))
             if path == "/api/office/settings":
                 return self.send_json(200, office_launch.view(default_path(), user_path()))
+            if path == "/api/office/music":
+                code, obj = office_music.handle("GET", None, load_config()[0])
+                return self.send_json(code, obj)
             return self.err(404, "Not found.")
         except office.OfficeError as e:
             return self.err(e.status, str(e))
@@ -740,6 +747,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(200, office_boss.ask(body, DATA_ROOT, ROOT, self.terminal_profile()))
             if path == "/api/office/report":
                 return self.send_json(200, office_boss.report(body, DATA_ROOT, ROOT, self.terminal_profile()))
+            if path == "/api/office/music":
+                if body == {"action": "add-playlists"}:
+                    # The Mine tab's button: the boss asks the user for their playlists and adds them.
+                    text = office_music.add_playlists_request(ROOT, user_path(), default_path())
+                    return self.send_json(200, office_boss.ask({"text": text}, DATA_ROOT, ROOT, self.terminal_profile()))
+                code, obj = office_music.handle("POST", body, load_config()[0])
+                return self.send_json(code, obj)
             return self.err(404, "Not found.")
         except office.OfficeError as e:
             return self.err(e.status, str(e))
