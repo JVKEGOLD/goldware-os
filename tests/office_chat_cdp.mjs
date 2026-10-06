@@ -55,6 +55,7 @@ const shot = async name => { const r = await send('Page.captureScreenshot', { fo
 await send('Runtime.enable'); await send('Page.enable');
 const checks = {}; const ok = (name, v) => { checks[name] = !!v; };
 try {
+  const key = async k => { await send('Input.dispatchKeyEvent', { type: 'keyDown', key: k, code: k }); await send('Input.dispatchKeyEvent', { type: 'keyUp', key: k, code: k }); await sleep(150); };
   await send('Page.navigate', { url: base + '/#office' }); await sleep(2500);
   await ev(`document.querySelector('.office-hit[data-id="boss"]').click()`); await sleep(1800);
   ok('console opens on the Chat view', await ev(`(()=>{const c=document.querySelector('#office-console .oc-chat');return !!c&&!c.hidden;})()`));
@@ -66,10 +67,24 @@ try {
   ok('a Report is tagged', await ev(`(()=>{const t=document.querySelector('#office-console .oc-chat .oc-tag');return !!t&&t.textContent==='Report'&&t.closest('.oc-row').querySelector('.oc-from b').textContent==='Bolt';})()`));
   ok('a long message clamps, then opens on click', await ev(`(async()=>{const el=[...document.querySelectorAll('#office-console .oc-chat .oc-clamp')].find(x=>x.textContent.startsWith('Tidy the cards')),h=el.getBoundingClientRect().height;el.click();await new Promise(r=>setTimeout(r,50));const open=el.classList.contains('open')&&el.getBoundingClientRect().height>h;el.click();return h<110&&open&&!el.classList.contains('open');})()`));
   ok('the chat stays put when the same turns arrive again', await ev(`(async()=>{const c=document.querySelector('#office-console .oc-chat'),first=c.querySelector('.oc-row');await new Promise(r=>setTimeout(r,3500));return c.querySelector('.oc-row')===first&&c.querySelectorAll('.oc-row').length===7;})()`));
+  // Up and down scroll the open console's conversation; left and right still switch agents; typing is left alone.
+  const title = () => ev(`document.querySelector('#office-console .oc-title').textContent`);
+  await ev(`(()=>{const p=document.querySelector('#office-console .oc-chat');p.scrollTop=0;const i=document.querySelector('#office-console .oc-input');i.value='';i.focus();})()`);
+  const t0 = await title();
+  ok('the chat is taller than its pane (so scrolling means something)', await ev(`(()=>{const p=document.querySelector('#office-console .oc-chat');return p.scrollHeight>p.clientHeight+60;})()`));
+  await key('ArrowDown'); await sleep(500);
+  ok('Down arrow scrolls the chat, same agent, from an empty send box', await ev(`document.querySelector('#office-console .oc-chat').scrollTop>20`) && (await title()) === t0);
+  await key('ArrowUp'); await sleep(500);
+  ok('Up arrow scrolls back', await ev(`document.querySelector('#office-console .oc-chat').scrollTop<20`));
+  await ev(`(()=>{const p=document.querySelector('#office-console .oc-chat');p.scrollTop=0;const i=document.querySelector('#office-console .oc-input');i.value='draft';i.focus();})()`); await key('ArrowDown'); await sleep(400);
+  ok('arrows leave the conversation alone while typing a message', await ev(`document.querySelector('#office-console .oc-chat').scrollTop===0`));
+  await ev(`document.querySelector('#office-console .oc-input').value=''`);
+  await ev(`document.activeElement.blur()`); await key('ArrowRight'); await sleep(400);
+  ok('Right arrow still switches to the next agent', (await title()) !== t0);
+  await ev(`document.querySelector('.office-hit[data-id="boss"]').click()`); await sleep(1500);
   await ev(`document.querySelector('#office-console .oc-chat').scrollTop=0`); await sleep(200);
   await shot('chat-group');
   // Task board (demo mode: nothing is sent): lanes, flags, Give, Done with Undo, drag, search, filters, add with details.
-  const key = async k => { await send('Input.dispatchKeyEvent', { type: 'keyDown', key: k, code: k }); await send('Input.dispatchKeyEvent', { type: 'keyUp', key: k, code: k }); await sleep(150); };
   await send('Page.navigate', { url: base + '/?office-demo&office-n=4#office' }); await sleep(2500);
   await ev(`document.querySelector('.office-hit.wb[data-table="/home/demo/sunrise"]').click()`); await sleep(800);
   const tbAdd = async t => { await ev(`(()=>{const i=document.querySelector('.tb-add input');i.value=${JSON.stringify(t)};document.querySelector('.tb-add').requestSubmit();})()`); await sleep(350); };

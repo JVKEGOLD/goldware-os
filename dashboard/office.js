@@ -2813,6 +2813,7 @@
     } catch (err) { msg.textContent = err.name === 'AbortError' ? 'The terminal did not answer.' : err.message; msg.classList.add('bad'); }
     finally { setTimeout(() => { go.disabled = false; }, 1500); }
   });
+  const emptyConsoleBox = el => !!(el && el.matches && el.matches('.office-console .oc-input') && !el.value);
   document.addEventListener('keydown', e => {
     if (!active()) return;
     if (e.key === 'Escape' && closeWbz()) { e.preventDefault(); return; }
@@ -2825,6 +2826,15 @@
     if (e.key === 'Escape' && !shell.classList.contains('roster-folded')) { setFolded(true); return; }
     if ((e.key === 'f' || e.key === 'F') && !e.metaKey && !e.ctrlKey && !e.altKey && !(e.target.closest && e.target.closest('input, textarea, select, [contenteditable]'))) { e.preventDefault(); setImmersive(!document.body.classList.contains('office-immersive')); return; }
     if (e.key === 'Escape' && selected) { selected = null; lastPlateKey = ''; renderCard(); draw(); return; }
+    // Up and down scroll the open console's conversation (Chat, Terminal or Plan, whichever shows), a few
+    // lines a press, under the same rule as the desk arrows: never while typing in a box (an empty send
+    // box is fine, its cursor has nowhere to go).
+    if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && consoleFor && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey &&
+        (emptyConsoleBox(e.target) || !(e.target.closest && e.target.closest('input, textarea, select, [contenteditable], #office-roster, .oh-new-menu')))) {
+      const pane = [...consoleEl.querySelectorAll('.oc-chat, .oc-screen, .oc-plan')].find(x => !x.hidden && x.offsetParent);
+      if (pane) { e.preventDefault(); pane.scrollBy({ top: (e.key === 'ArrowDown' ? 1 : -1) * Math.max(48, Math.round(pane.clientHeight * 0.18)), behavior: still || e.repeat ? 'auto' : 'smooth' }); }
+      return;
+    }
     // Left and right step through the desks in reading order, the boss first. Never while typing
     // somewhere (digits are already the tab shortcuts).
     if (e.metaKey || e.ctrlKey || e.altKey || (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') || (e.target.closest && e.target.closest('input, textarea, select, [contenteditable], #office-roster'))) return;

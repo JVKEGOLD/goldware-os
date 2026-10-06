@@ -1052,6 +1052,13 @@ class TaskBoardPage(unittest.TestCase):
         self.assertIn("e.key === '/' ? '.tb-search input'", self.js)
         self.assertIn("e.target.matches('.tb-search input') && e.target.value", self.js)
 
+    def test_up_and_down_scroll_the_console_and_left_right_still_switch_agents(self):
+        self.assertIn("const emptyConsoleBox = el =>", self.js)
+        self.assertIn("(e.key === 'ArrowUp' || e.key === 'ArrowDown') && consoleFor", self.js)
+        self.assertIn("emptyConsoleBox(e.target) ||", self.js)
+        self.assertIn(".oc-chat, .oc-screen, .oc-plan", self.js)
+        self.assertIn("e.key !== 'ArrowLeft' && e.key !== 'ArrowRight'", self.js)
+
     def test_board_styles_use_the_arcade_skin(self):
         for sel in (".tb-board", ".tb-lane", ".tb-card", ".tb-flag.you", ".tb-team", ".tb-mate.drop-on", ".tb-add"):
             self.assertIn("#tab-office " + sel + " ", self.css, sel)
