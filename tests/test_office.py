@@ -1016,6 +1016,50 @@ class GroupChatPage(unittest.TestCase):
         self.assertTrue(os.path.isfile(os.path.join(REPO, "tests", "office_chat_cdp.mjs")))
 
 
+class PageFunctions(unittest.TestCase):
+    """The pure functions of the page, run in a sandbox by tests/office_ui.mjs when Node is installed."""
+
+    def test_pure_page_functions(self):
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("Node is not installed")
+        r = subprocess.run([node, os.path.join(REPO, "tests", "office_ui.mjs")], capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("Office task board cards", r.stdout)
+
+
+class TaskBoardPage(unittest.TestCase):
+    """A zoomed whiteboard is a task board; tests/office_chat_cdp.mjs drives it in headless Chrome."""
+
+    @classmethod
+    def setUpClass(cls):
+        with open(os.path.join(REPO, "dashboard", "office.js"), encoding="utf-8") as f:
+            cls.js = f.read()
+        with open(os.path.join(REPO, "dashboard", "office.css"), encoding="utf-8") as f:
+            cls.css = f.read()
+
+    def test_the_board_has_its_parts(self):
+        for name in ("renderTableBoard(force)", "taskBits(t, drop)", "taskFlags(t)", "taskLane(t)", "taskMatches(t, q, filter, shown)",
+                     "paintWbzAvatars()", "applyWbzFilter()", "finishTask(id, el)"):
+            self.assertIn("function " + name, self.js)
+        for frag in ('class="tb-lanes"', 'data-wact="give"', 'data-wact="undo"', 'data-wact="reopen"', "wbzEl.addEventListener('drop'",
+                     'class="tb-team"', 'placeholder="Search tasks', 'data-wact="details"', 'data-view="list"'):
+            self.assertIn(frag, self.js)
+        # The same picture the chat uses, from the cast.
+        self.assertIn("cast.url(a.name)", self.js[self.js.index("function paintWbzAvatars"):self.js.index("function applyWbzFilter")])
+
+    def test_slash_and_n_and_escape(self):
+        self.assertIn("e.key === '/' ? '.tb-search input'", self.js)
+        self.assertIn("e.target.matches('.tb-search input') && e.target.value", self.js)
+
+    def test_board_styles_use_the_arcade_skin(self):
+        for sel in (".tb-board", ".tb-lane", ".tb-card", ".tb-flag.you", ".tb-team", ".tb-mate.drop-on", ".tb-add"):
+            self.assertIn("#tab-office " + sel + " ", self.css, sel)
+        board = self.css[self.css.index("Whiteboard task board"):]
+        self.assertIn("var(--px-night)", board)
+        self.assertNotIn("--pk-", board)
+
+
 class GoldwareOfficeCli(unittest.TestCase):
     def test_help_and_unknown_command(self):
         cli = os.path.join(REPO, "scripts", "office")

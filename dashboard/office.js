@@ -1882,7 +1882,7 @@
     let result = true;
     if (body.action === 'add') b.tasks.push(result = { id: 'dt' + Math.random().toString(36).slice(2, 7), title: body.title, notes: body.notes || '', status: 'todo', group: body.group, created_at: Date.now() / 1000 });
     if (body.action === 'assign' && t) { const a = data.agents.find(x => x.id === body.agent) || data.agents[0]; Object.assign(t, { status: 'assigned', agent: a.id, agent_title: a.title, assigned_at: Date.now() / 1000 }); result = t; }
-    if (body.action === 'done' && t) { t.status = 'done'; result = t; }
+    if (body.action === 'done' && t) { t.status = 'done'; t.done_at = Date.now() / 1000; result = t; }
     if (body.action === 'reopen' && t) t.status = t.agent ? 'assigned' : 'todo';
     if (body.action === 'remove') b[body.list] = b[body.list].filter(x => x.id !== body.id);
     if (body.action === 'project') b.project = { name: body.name, about: body.about };
@@ -2061,74 +2061,272 @@
   function closeWbz() {
     if (wbzEl.hidden || wbzTable == null) return false;
     const was = wbzTable;
-    wbzTable = null; stage.classList.remove('wb-zooming'); wbzEl.classList.add('closed');
+    wbzTable = null; wbzGive = null; wbzDrag = null; wbzOpen.clear(); stage.classList.remove('wb-zooming'); wbzEl.classList.add('closed');
     wbzTimer = setTimeout(() => { wbzEl.hidden = true; wbzEl.innerHTML = ''; }, still ? 0 : 300);
     const back = [...desksLayer.querySelectorAll('.office-hit.wb')].find(b => b.dataset.table === was);
     if (back) back.focus({ preventScroll: true });
     return true;
   }
-  function renderWbz(force) {
-    if (wbzTable == null) return;
+  // ── The zoomed whiteboard, a task board: lanes (To do, With an agent, Done) or a compact list,
+  // search and quick filters that never rebuild the page, cards with their codes, flags and source
+  // pulled out of the text, a team bar to hand a card to an agent (drag it there, or Give), drag to
+  // Done, Undo, and a quick add with details. Groups still come from the text alone (or a saved AI
+  // regroup). Nothing here calls a model.
+  const TB_CODE = /\b[A-Z]{1,4}-\d{1,3}(?:-\d{1,3})?\b/g;
+  // Pure: the title without its tracking codes (and without a leading "Board:" or "Group:" that only
+  // repeats where the card already sits, given in `drop`), the codes, the note without its "Source:"
+  // line, and the source.
+  function taskBits(t, drop) {
+    let title = String((t && t.title) || '').trim(), note = String((t && t.notes) || '').replace(/^\|\s*/, '').trim();
+    (drop || []).forEach(d => { const pre = String(d || '').trim().toLowerCase() + ':'; if (pre.length > 1 && title.toLowerCase().startsWith(pre)) title = title.slice(pre.length).trim(); });
+    const refs = [];
+    const take = s => { (s.match(TB_CODE) || []).forEach(c => { if (!refs.includes(c)) refs.push(c); }); };
+    // "(P-08, K-05)" anywhere, when the brackets hold nothing but codes.
+    title = title.replace(/\s*\(([A-Z0-9 ,/+&-]+)\)/g, (m, inner) => {
+      if (!/^[\s,/+&]*([A-Z]{1,4}-\d{1,3}(?:-\d{1,3})?[\s,/+&]*)+$/.test(inner)) return m;
+      take(inner); return '';
+    });
+    // "P-10/P-11 finish ..." at the start.
+    title = title.replace(/^((?:[A-Z]{1,4}-\d{1,3}(?:-\d{1,3})?\s*[/,&+]\s*)*[A-Z]{1,4}-\d{1,3}(?:-\d{1,3})?)\s+(?=\S)/, (m, codes) => { take(codes); return ''; });
+    let source = '';
+    note = note.replace(/\s*Source:\s*([^\n]+?)\.?\s*$/i, (m, s) => { source = s.trim(); return ''; }).trim();
+    title = title.replace(/\s{2,}/g, ' ').trim();
+    if (title) title = title[0].toUpperCase() + title.slice(1);
+    return { title: title || String((t && t.title) || ''), refs, note, source };
+  }
+  // Pure: the flags a card shows. "you" when it waits on your own decision or hand; "blocker" when
+  // the text calls it one; "waiting" when it waits on someone else.
+  function taskFlags(t) {
+    const title = String((t && t.title) || ''), all = title + ' ' + String((t && t.notes) || '');
+    return {
+      you: /^(decide|approve|call|review|sign|pay)\b/i.test(title) || /\b(needs? you|your (approval|call|decision)|you must|only you|account holder only)\b/i.test(all),
+      blocker: /\b(launch )?blocker\b|\bblocks?\b|\bunblocks?\b/i.test(all) && !/^(watch|wait)\b/i.test(title),
+      waiting: /^(watch|wait|follow[ -]?up|chase|monitor)\b/i.test(title) || /\bwaiting (on|for)\b/i.test(title)
+    };
+  }
+  // Pure: which lane a task sits in.
+  function taskLane(t) { return t.status === 'done' ? 'done' : t.status === 'assigned' ? 'agents' : 'todo'; }
+  // Pure: does a task match the search words and the quick filter ('all', 'you', 'free', 'agents', 'blocker')?
+  // `shown` is the card's visible text, so an agent's name finds the cards it holds.
+  function taskMatches(t, q, filter, shown) {
+    const lane = taskLane(t), f = taskFlags(t);
+    if (filter === 'you' && !f.you) return false;
+    if (filter === 'blocker' && !f.blocker) return false;
+    if (filter === 'free' && lane !== 'todo') return false;
+    if (filter === 'agents' && lane !== 'agents') return false;
+    const words = String(q || '').toLowerCase().split(/\s+/).filter(Boolean);
+    const hay = [t.title, t.notes, t.agent_title, shown].join(' ').toLowerCase();
+    return words.every(w => hay.includes(w));
+  }
+  let wbzView = (() => { try { return localStorage.getItem('goldware-wbz-view') === 'list' ? 'list' : 'board'; } catch (e) { return 'board'; } })();
+  let wbzFilter = 'all', wbzOpen = new Set(), wbzGive = null, wbzDrag = null, wbzUndo = null, wbzDetails = false;
+  function renderTableBoard(force) {
+    wbzEl.setAttribute('aria-label', 'Whiteboard');
     const agents = (data && data.agents) || [], all = (board && board.tasks) || [];
     const runR = (board && board.runs && board.runs.regroup) || null, grouping = ((board && board.groupings) || {})[wbzTable] || null;
-    const key = JSON.stringify([wbzTable, all, boardMsg, runR, grouping, tables.map(tb => tb.key), agents.map(a => [a.id, a.name, a.title, a.cwd, a.tty])]);
-    if (!force && (key === lastWbzKey || (wbzEl.contains(document.activeElement) && /INPUT|SELECT/.test(document.activeElement.tagName)) ||
-      [...wbzEl.querySelectorAll('input')].some(e => e.value))) return;
+    const key = JSON.stringify([wbzTable, all, boardMsg, runR, grouping, wbzView, wbzGive, [...wbzOpen], wbzUndo && wbzUndo.id, wbzDetails, tables.map(tb => tb.key),
+      agents.map(a => [a.id, a.name, a.title, a.cwd, a.tty, a.activity, a.color])]);
+    const typing = wbzEl.contains(document.activeElement) && document.activeElement.matches('.tb-add input, .tb-add textarea');
+    const drafted = [...wbzEl.querySelectorAll('.tb-add input, .tb-add textarea')].some(e => e.value);
+    if (!force && (key === lastWbzKey || wbzDrag || typing || drafted)) return;
     lastWbzKey = key;
+    const now = Date.now() / 1000;
     const keys = [...new Set([...tables.map(tb => tb.key), ...all.filter(t => t.status !== 'done').map(taskTable)])];
-    const tasks = all.filter(t => taskTable(t) === wbzTable), open = tasks.filter(t => t.status !== 'done'), done = tasks.filter(t => t.status === 'done');
+    const tasks = all.filter(t => taskTable(t) === wbzTable);
+    const open = tasks.filter(t => t.status !== 'done'), done = tasks.filter(t => t.status === 'done').sort((a, b) => (b.done_at || 0) - (a.done_at || 0));
+    const todo = open.filter(t => t.status !== 'assigned'), withA = open.filter(t => t.status === 'assigned').sort((a, b) => (b.assigned_at || 0) - (a.assigned_at || 0));
     const here = agents.filter(a => tableOf(a) === wbzTable && (a.tty || demo));
-    const withN = open.filter(t => t.status === 'assigned').length;
     const ai = aiGroups(open, grouping), groups = ai || groupTasks(open);
-    const regrouping = !!(runR && runR.status === 'running');
-    if (!regrouping && boardMsg[0].startsWith('Regrouping')) boardMsg = ['', false];
-    const here_ = regrouping && runR.table === wbzTable;
-    const aiBtn = `<button type="button" class="wbz-ai" data-wact="regroup" ${regrouping || open.length < 2 ? 'disabled' : ''} title="Sorts these tasks into groups with one model call. Runs only when you press it.">${here_ ? '<i></i>Regrouping…' : regrouping ? 'Regrouping another board…' : ai ? 'Regroup again' : 'Regroup with AI'}</button>`;
-    const tag = ai ? `<span class="wbz-tag">AI groups · ${ago(Date.now() / 1000 - grouping.at)} ago<button type="button" data-wact="ungroup">Undo</button></span>` : '';
-    const failed = runR && runR.status === 'failed' && runR.table === wbzTable && !boardMsg[0] ? `<p class="wbz-msg bad">${esc(runR.error || 'The regroup did not finish.')}</p>` : '';
     let hue = 0;
-    const colour = g => g.kind === 'you' ? '#b0302a' : g.kind === 'watch' || g.kind === 'loose' ? '#3b4656' : MARKERS[hue++ % MARKERS.length];
-    const item = (it, mk) => {
-      const t = it.task, who = t.status === 'assigned' ? nameOf(agents.find(a => a.id === t.agent) || { title: t.agent_title || 'an agent' }) : '';
-      const pick = here.length ? `<select data-wact="pick" aria-label="Give it to"><option value="">${who ? 'Send again to…' : 'Give it to…'}</option>${here.map(a => `<option value="${esc(a.id)}">${esc(nameOf(a))}: ${esc(a.title)}</option>`).join('')}</select>` : '';
-      return `<li class="wbz-task" data-id="${esc(t.id)}" style="--mk:${mk}"><button type="button" class="wbz-check" data-wact="done" title="Mark done" aria-label="Mark done: ${esc(t.title)}"></button>
-        <div><b>${esc(it.text)}</b>${t.notes ? `<p>${esc(String(t.notes).replace(/^\|\s*/, ''))}</p>` : ''}</div>
-        ${who || pick ? `<div class="wbz-row">${who ? `<span class="wbz-with">With ${esc(who)}</span>` : ''}${pick}</div>` : ''}</li>`;
+    const markOf = new Map(), groupOf = new Map();
+    const kindOf = new Map();
+    groups.forEach(g => { const mk = g.kind === 'you' ? '#e3350d' : g.kind === 'watch' || g.kind === 'loose' ? '#6a7286' : MARKERS[hue++ % MARKERS.length];
+      g.items.forEach(it => { markOf.set(it.task.id, mk); groupOf.set(it.task.id, g.name); kindOf.set(it.task.id, g.kind); }); });
+    const youN = open.filter(t => taskFlags(t).you).length, blockN = open.filter(t => taskFlags(t).blocker).length;
+    const pct = tasks.length ? Math.round(done.length / tasks.length * 100) : 0;
+    const regrouping = !!(runR && runR.status === 'running'), here_ = regrouping && runR.table === wbzTable;
+    if (!regrouping && boardMsg[0].startsWith('Regrouping')) boardMsg = ['', false];
+    const agentOf = t => agents.find(a => a.id === t.agent);
+    const av = (a, size) => `<span class="oc-av tb-av${size ? ' ' + size : ''}" data-wav="${esc(a ? a.id : '')}" aria-hidden="true"></span>`;
+    const card = t => {
+      const lane = taskLane(t), b = taskBits(t, [tableName(wbzTable), groupOf.get(t.id)]), f = taskFlags(t), mk = markOf.get(t.id) || '#6a7286', a = agentOf(t), isOpen = wbzOpen.has(t.id);
+      // The project a card belongs to, named only outside its own group heading and only for real projects.
+      const grp = lane !== 'todo' && wbzView !== 'list' && kindOf.get(t.id) === 'project' ? groupOf.get(t.id) : '';
+      const age = lane === 'done' ? (t.done_at ? 'done ' + ago(now - t.done_at) + ' ago' : 'done') : t.created_at ? 'added ' + ago(now - t.created_at) + ' ago' : '';
+      const flags = [f.you && lane !== 'done' ? '<span class="tb-flag you">Needs you</span>' : '', f.blocker && lane !== 'done' ? '<span class="tb-flag block">Blocker</span>' : '',
+        f.waiting && lane !== 'done' ? '<span class="tb-flag wait">Waiting</span>' : ''].join('');
+      const who = lane === 'agents' ? `<span class="tb-who">${av(a)}<span><b>${esc(a ? nameOf(a) : (t.agent_title || 'An agent'))}</b>${t.assigned_at ? `<small>${ago(now - t.assigned_at)} ago</small>` : ''}</span></span>` : '';
+      const acts = lane === 'done'
+        ? `<button type="button" class="tb-act" data-wact="reopen">Reopen</button>`
+        : `${here.length ? `<button type="button" class="tb-act" data-wact="give" aria-expanded="${wbzGive === t.id}">${lane === 'agents' ? 'Send again' : 'Give'}</button>` : ''}<button type="button" class="tb-act go" data-wact="done">Done</button>`;
+      const give = wbzGive === t.id ? `<div class="tb-give" role="menu" aria-label="Give it to">${here.map(x => `<button type="button" role="menuitem" data-wact="pick" data-agent="${esc(x.id)}">${av(x)}<span><b>${esc(nameOf(x))}</b><small>${esc(WORDS[x.activity] || x.activity || '')} · ${esc(x.title || '')}</small></span></button>`).join('')}
+        ${here.length > 1 ? `<button type="button" role="menuitem" data-wact="pick" data-agent="auto" class="tb-auto"><span class="tb-auto-coin" aria-hidden="true"></span><span><b>Whoever is free</b><small>The least busy agent at this table</small></span></button>` : ''}</div>` : '';
+      return `<article class="tb-card${lane === 'done' ? ' is-done' : ''}${f.you && lane !== 'done' ? ' is-you' : ''}" data-id="${esc(t.id)}" data-lane="${lane}" draggable="${lane === 'done' || here.length ? 'true' : 'false'}" style="--mk:${mk}">
+        ${lane === 'done' ? '<span class="tb-tick done" aria-hidden="true"></span>' : `<button type="button" class="tb-tick" data-wact="done" title="Mark done" aria-label="Mark done: ${esc(b.title)}"></button>`}
+        ${grp || flags || b.refs.length ? `<div class="tb-top">${grp ? `<span class="tb-grp">${esc(grp)}</span>` : ''}${flags}${b.refs.map(r => `<code class="tb-ref">${esc(r)}</code>`).join('')}</div>` : ''}
+        <button type="button" class="tb-title" data-wact="expand" aria-expanded="${isOpen}">${esc(b.title)}</button>
+        ${b.note && (lane !== 'done' || isOpen) ? `<p class="tb-note${isOpen ? ' open' : ''}">${esc(b.note)}</p>` : ''}
+        ${isOpen && b.source ? `<p class="tb-src">Source: <span>${esc(b.source)}</span></p>` : ''}
+        <footer class="tb-foot">${who}${lane === 'agents' ? '' : `<small class="tb-age">${esc(age)}</small>`}<span class="tb-acts">${acts}</span></footer>${give}</article>`;
     };
-    wbzEl.innerHTML = `<div class="wbz-board">
-      <header class="wbz-head"><h3>${esc(tableName(wbzTable))}</h3><small>${open.length} open${withN ? ` · ${withN} with an agent` : ''}${done.length ? ` · ${done.length} done` : ''}</small>${tag}
-        <div class="wbz-tables">${aiBtn}${keys.length > 1 ? keys.map(k => `<button type="button" data-wact="table" data-table="${esc(k)}" aria-pressed="${k === wbzTable}">${esc(tableName(k))}</button>`).join('') : ''}<button type="button" class="wbz-close" data-wact="close" aria-label="Close the whiteboard (Esc)">Close</button></div></header>
-      <p class="wbz-msg${boardMsg[1] ? ' bad' : ''}" aria-live="polite">${esc(boardMsg[0])}</p>${failed}
-      <div class="wbz-groups">${groups.map(g => { const mk = colour(g); return `<section class="wbz-group" data-group="${esc(g.kind)}" style="--mk:${mk}"><h4>${esc(g.name)}<small>${g.items.length}</small>${g.kind === 'you' ? '<em>Needs you</em>' : ''}</h4><ul>${g.items.map(it => item(it, mk)).join('')}</ul></section>`; }).join('') || '<p class="wbz-empty">Nothing on this whiteboard yet.</p>'}</div>
-      ${done.length ? `<details class="wbz-done"><summary>Done (${done.length})</summary><ul>${done.slice(-12).map(t => `<li>${esc(t.title)}</li>`).join('')}</ul></details>` : ''}
-      <form class="wbz-add"><input name="title" maxlength="140" placeholder="Add a task to ${esc(tableName(wbzTable))}" required><button type="submit">Add</button></form>
+    // To do keeps the groups (Needs you first, as groupTasks orders them); the other lanes are by time.
+    const todoIds = new Set(todo.map(t => t.id));
+    const todoHtml = groups.map(g => { const items = g.items.filter(it => todoIds.has(it.task.id)); if (!items.length) return '';
+      const solo = groups.length === 1 && (g.kind === 'loose' || String(g.name).toLowerCase() === String(tableName(wbzTable)).toLowerCase());
+      return `<div class="tb-sub" style="--mk:${markOf.get(items[0].task.id)}">${solo ? '' : `<h5>${esc(g.name)}<small>${items.length}</small></h5>`}${items.map(it => card(it.task)).join('')}</div>`; }).join('');
+    const lane = (id, name, n, body, empty) => `<section class="tb-lane" data-lane="${id}" aria-label="${esc(name)}"><h4><span class="tb-lane-dot ${id}"></span>${esc(name)}<small class="tb-count">${n}</small></h4>
+      <div class="tb-cards">${body || `<p class="tb-empty">${empty}</p>`}</div></section>`;
+    const lanes = `<div class="tb-lanes">
+      ${lane('todo', 'To do', todo.length, todoHtml, 'Nothing waiting. Add one below.')}
+      ${lane('agents', 'With an agent', withA.length, withA.map(card).join(''), here.length ? 'Drag a card onto an agent below, or press Give.' : 'No agents at this table yet.')}
+      ${lane('done', 'Done', done.length, done.slice(0, 15).map(card).join(''), 'Finished tasks land here.')}</div>`;
+    const list = `<div class="tb-list">${[...groups.map(g => ({ name: g.name, items: g.items.map(it => it.task) })), { name: 'Done', items: done.slice(0, 15), done: true }]
+      .filter(g => g.items.length).map(g => `<section class="tb-lsec${g.done ? ' done' : ''}"><h4>${esc(g.name)}<small class="tb-count">${g.items.length}</small></h4>${g.items.map(card).join('')}</section>`).join('')
+      || '<p class="tb-empty big">Nothing on this whiteboard yet.</p>'}</div>`;
+    const tabs = keys.length > 1 ? `<nav class="tb-tables" aria-label="Whiteboards">${keys.map(k => { const n = all.filter(t => t.status !== 'done' && taskTable(t) === k).length;
+      return `<button type="button" data-wact="table" data-table="${esc(k)}" aria-pressed="${k === wbzTable}">${esc(tableName(k))}<small>${n}</small></button>`; }).join('')}</nav>` : '';
+    const team = `<div class="tb-team" aria-label="Agents at this table">${here.length ? `<span class="tb-team-label">Team</span>${here.map(a => `<button type="button" class="tb-mate" data-agent="${esc(a.id)}" data-wact="mate" title="${esc(nameOf(a) + ': ' + (a.title || ''))}">${av(a)}<span><b>${esc(nameOf(a))}</b><small class="${esc(stateClass(a.activity))}">${esc(WORDS[a.activity] || a.activity || '')}</small></span><em>${open.filter(t => t.agent === a.id && t.status === 'assigned').length || ''}</em></button>`).join('')}<span class="tb-team-hint">Drag a card onto an agent to hand it over</span>`
+      : '<span class="tb-team-label">Team</span><span class="tb-team-hint">No agents at this table. Start one with New agent.</span>'}</div>`;
+    const undo = wbzUndo && wbzUndo.table === wbzTable ? `<p class="tb-undo" role="status">Done: <b>${esc(wbzUndo.title)}</b><button type="button" data-wact="undo">Undo</button></p>` : '';
+    const aiBtn = `<button type="button" class="tb-tool wbz-ai" data-wact="regroup" ${regrouping || open.length < 2 ? 'disabled' : ''} title="Sorts these tasks into groups with one Sonnet call. Runs only when you press it.">${here_ ? '<i></i>Regrouping…' : regrouping ? 'Regrouping another board…' : ai ? 'Regroup again' : 'Regroup with AI'}</button>`;
+    const tag = ai ? `<span class="wbz-tag">AI groups · ${ago(now - grouping.at)} ago<button type="button" data-wact="ungroup">Undo</button></span>` : '';
+    const failed = runR && runR.status === 'failed' && runR.table === wbzTable && !boardMsg[0] ? `<p class="wbz-msg bad">${esc(runR.error || 'The regroup did not finish.')}</p>` : '';
+    const search = wbzEl.querySelector('.tb-search input'), sState = search ? { v: search.value, focus: document.activeElement === search, at: search.selectionStart } : null;
+    const chip = (id, label, n) => id !== 'all' && !n && wbzFilter !== id ? '' : `<button type="button" class="tb-chip${id === 'you' ? ' you' : id === 'blocker' ? ' block' : ''}" data-wact="filter" data-filter="${id}" aria-pressed="${wbzFilter === id}">${label}${n != null ? `<small>${n}</small>` : ''}</button>`;
+    wbzEl.innerHTML = `<div class="wbz-board tb-board" data-view="${wbzView}">
+      <header class="tb-head">
+        <div class="tb-name"><span class="tb-coin" aria-hidden="true"></span><h3>${esc(tableName(wbzTable))}</h3>
+          <div class="tb-hp" title="${done.length} of ${tasks.length} done"><small>DONE</small><span class="tb-hp-bar"><i style="width:${pct}%"></i></span><b>${done.length}/${tasks.length}</b></div></div>
+        <div class="tb-headtools">${aiBtn}<button type="button" class="wbz-close" data-wact="close" aria-label="Close the whiteboard (Esc)">Close</button></div>
+        ${tabs}
+      </header>
+      <div class="tb-bar">
+        <label class="tb-search"><span aria-hidden="true">⌕</span><input type="search" placeholder="Search tasks  ( / )" aria-label="Search tasks" autocomplete="off"></label>
+        <div class="tb-chips" role="group" aria-label="Show">${chip('all', 'All', open.length)}${chip('you', 'Needs you', youN)}${blockN ? chip('blocker', 'Blockers', blockN) : ''}${chip('free', 'Not given out', todo.length)}${chip('agents', 'With agents', withA.length)}</div>
+        <div class="tb-view" role="group" aria-label="View"><button type="button" data-wact="view" data-view="board" aria-pressed="${wbzView === 'board'}">Lanes</button><button type="button" data-wact="view" data-view="list" aria-pressed="${wbzView === 'list'}">List</button></div>
+        ${tag}
+      </div>
+      <p class="wbz-msg${boardMsg[1] ? ' bad' : ''}" aria-live="polite">${esc(boardMsg[0])}</p>${failed}${undo}
+      <div class="tb-main">${wbzView === 'list' ? list : lanes}<p class="tb-nomatch" hidden>No task matches. <button type="button" data-wact="clear">Clear the search</button></p></div>
+      ${team}
+      <form class="tb-add wbz-add"><div class="tb-add-row"><input name="title" maxlength="140" placeholder="Add a task to ${esc(tableName(wbzTable))}  ( N )" required aria-label="New task">
+        <button type="button" class="tb-tool" data-wact="details" aria-expanded="${wbzDetails}">${wbzDetails ? 'Hide details' : '+ Details'}</button><button type="submit">Add</button></div>
+        ${wbzDetails ? '<textarea name="notes" maxlength="600" rows="2" placeholder="Details: what done looks like, links, where the source is"></textarea>' : ''}</form>
     </div>`;
+    if (sState) { const s = wbzEl.querySelector('.tb-search input'); s.value = sState.v; if (sState.focus) { s.focus({ preventScroll: true }); try { s.setSelectionRange(sState.at, sState.at); } catch (e) { /* type=search */ } } }
+    paintWbzAvatars();
+    applyWbzFilter();
+  }
+  // The same picture the console and chat use: the cast character on a tinted tile, else a blob in the agent's colour.
+  function paintWbzAvatars() {
+    const agents = (data && data.agents) || [];
+    wbzEl.querySelectorAll('[data-wav]').forEach(el => {
+      const a = agents.find(x => x.id === el.dataset.wav) || { color: '#94b0c2' };
+      const url = monOf(a) ? cast.url(a.name) : '';
+      el.style.setProperty('--agent', a.color || '#94b0c2');
+      el.classList.toggle('blob', !url);
+      el.innerHTML = url ? '<i></i>' : '';
+      if (url) el.firstChild.style.setProperty('--mon', `url(${url})`);
+    });
+  }
+  // Search and quick filters hide cards in place (no rebuild), and lane counts follow.
+  function applyWbzFilter() {
+    const s = wbzEl.querySelector('.tb-search input'); if (!s) return;
+    const q = s.value, all = (board && board.tasks) || [];
+    let shown = 0;
+    wbzEl.querySelectorAll('.tb-card').forEach(c => {
+      const t = all.find(x => x.id === c.dataset.id);
+      const ok = !t || (c.dataset.lane === 'done' ? wbzFilter === 'all' && taskMatches(t, q, 'all', c.textContent) : taskMatches(t, q, wbzFilter, c.textContent));
+      c.hidden = !ok; if (ok) shown++;
+    });
+    wbzEl.querySelectorAll('.tb-sub, .tb-lsec').forEach(g => { g.hidden = ![...g.querySelectorAll('.tb-card')].some(c => !c.hidden); });
+    wbzEl.querySelectorAll('.tb-lane').forEach(l => { const n = [...l.querySelectorAll('.tb-card')].filter(c => !c.hidden).length; const c = l.querySelector('.tb-count'); if (c) c.textContent = n; });
+    const filtering = !!q.trim() || wbzFilter !== 'all';
+    const none = wbzEl.querySelector('.tb-nomatch'); if (none) none.hidden = !(filtering && shown === 0);
+    wbzEl.querySelector('.tb-board').classList.toggle('filtering', filtering);
+  }
+  function renderWbz(force) {
+    if (wbzTable == null) return;
+    renderTableBoard(force);
   }
   wbzEl.addEventListener('pointerdown', e => { if (e.target === wbzEl) { e.preventDefault(); closeWbz(); } });
   wbzEl.addEventListener('click', e => {
     const btn = e.target.closest('[data-wact]');
-    if (!btn || btn.disabled || btn.tagName === 'SELECT') return;
-    const act = btn.dataset.wact, li = btn.closest('.wbz-task');
+    if (!btn) { if (wbzGive && !e.target.closest('.tb-give')) { wbzGive = null; renderWbz(true); } return; }
+    if (btn.disabled || btn.tagName === 'SELECT') return;
+    const act = btn.dataset.wact, c = btn.closest('.tb-card'), id = c && c.dataset.id;
     if (act === 'close') { closeWbz(); return; }
-    if (act === 'table') { wbzTable = btn.dataset.table; boardMsg = ['', false]; renderWbz(true); return; }
-    if (act === 'done' && li) { btn.disabled = true; boardPost({ action: 'done', id: li.dataset.id }); }
-    if (act === 'regroup') { btn.disabled = true; boardPost({ action: 'regroup', table: wbzTable }); }
-    if (act === 'ungroup') { boardPost({ action: 'ungroup', table: wbzTable }, true); }
+    if (act === 'table') { wbzTable = btn.dataset.table; boardMsg = ['', false]; wbzGive = null; wbzOpen.clear(); renderWbz(true); return; }
+    if (act === 'regroup') { btn.disabled = true; boardPost({ action: 'regroup', table: wbzTable }); return; }
+    if (act === 'ungroup') { boardPost({ action: 'ungroup', table: wbzTable }, true); return; }
+    if (act === 'view') { wbzView = btn.dataset.view === 'list' ? 'list' : 'board'; try { localStorage.setItem('goldware-wbz-view', wbzView); } catch (err) { /* private mode */ } renderWbz(true); return; }
+    if (act === 'filter') { wbzFilter = btn.dataset.filter; wbzEl.querySelectorAll('[data-wact="filter"]').forEach(b => b.setAttribute('aria-pressed', String(b === btn))); applyWbzFilter(); return; }
+    if (act === 'clear') { const s = wbzEl.querySelector('.tb-search input'); s.value = ''; wbzFilter = 'all'; wbzEl.querySelectorAll('[data-wact="filter"]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.filter === 'all'))); applyWbzFilter(); s.focus(); return; }
+    if (act === 'details') { wbzDetails = !wbzDetails; const keep = wbzEl.querySelector('.tb-add input').value; renderWbz(true); const i = wbzEl.querySelector('.tb-add input'); i.value = keep; (wbzEl.querySelector('.tb-add textarea') || i).focus(); return; }
+    if (act === 'expand' && id) { wbzOpen.has(id) ? wbzOpen.delete(id) : wbzOpen.add(id); renderWbz(true); return; }
+    if (act === 'give' && id) { wbzGive = wbzGive === id ? null : id; renderWbz(true); const f = wbzEl.querySelector('.tb-give button'); if (f) f.focus({ preventScroll: true }); return; }
+    if (act === 'pick' && id) { wbzGive = null; btn.disabled = true; boardPost({ action: 'assign', id, agent: btn.dataset.agent }); return; }
+    if (act === 'mate') { const s = wbzEl.querySelector('.tb-search input'), name = btn.querySelector('b').textContent; s.value = s.value === name ? '' : name; applyWbzFilter(); return; }
+    if (act === 'done' && id) { finishTask(id, c); return; }
+    if (act === 'reopen' && id) { if (wbzUndo && wbzUndo.id === id) wbzUndo = null; boardPost({ action: 'reopen', id }, true); return; }
+    if (act === 'undo' && wbzUndo) { const u = wbzUndo; wbzUndo = null; boardPost({ action: 'reopen', id: u.id }, true); return; }
   });
-  wbzEl.addEventListener('change', e => {
-    const sel = e.target.closest('select[data-wact="pick"]');
-    if (!sel || !sel.value) return;
-    sel.disabled = true;
-    boardPost({ action: 'assign', id: sel.closest('.wbz-task').dataset.id, agent: sel.value });
+  // Done: the card ticks and folds away, then the board saves it; Undo stays offered until the next done.
+  function finishTask(id, el) {
+    const t = ((board && board.tasks) || []).find(x => x.id === id);
+    if (!t || t.status === 'done') return;
+    wbzUndo = { id, title: taskBits(t).title, table: wbzTable };
+    if (el) { el.classList.add('leaving'); el.querySelectorAll('button').forEach(b => { b.disabled = true; }); }
+    setTimeout(() => boardPost({ action: 'done', id }), still || !el ? 0 : 260);
+  }
+  wbzEl.addEventListener('input', e => { if (e.target.matches('.tb-search input')) applyWbzFilter(); });
+  wbzEl.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && wbzGive) { e.preventDefault(); e.stopPropagation(); wbzGive = null; renderWbz(true); return; }
+    if (e.key === 'Escape' && e.target.matches('.tb-search input') && e.target.value) { e.preventDefault(); e.stopPropagation(); e.target.value = ''; applyWbzFilter(); return; }
+    if (e.key === 'Enter' && !e.shiftKey && e.target.matches('.tb-add textarea')) { e.preventDefault(); e.target.form.requestSubmit(); }
+  }, true);
+  // Drag a card: onto Done to finish it, from Done back to To do to reopen it, onto an agent to hand it over.
+  const dropAt = e => e.target.closest && (e.target.closest('.tb-mate') || e.target.closest('.tb-lane[data-lane="done"], .tb-lane[data-lane="todo"]'));
+  const canDrop = (target, card) => !!target && !!card && (target.classList.contains('tb-mate') ? card.dataset.lane !== 'done'
+    : target.dataset.lane === 'done' ? card.dataset.lane !== 'done' : card.dataset.lane === 'done');
+  wbzEl.addEventListener('dragstart', e => {
+    const card = e.target.closest && e.target.closest('.tb-card[draggable="true"]');
+    if (!card) return;
+    wbzDrag = card;
+    e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', card.dataset.id);
+    requestAnimationFrame(() => { card.classList.add('dragging'); wbzEl.querySelector('.tb-board').classList.add('drag-' + card.dataset.lane, 'is-dragging'); });
   });
+  wbzEl.addEventListener('dragover', e => {
+    const t = dropAt(e);
+    wbzEl.querySelectorAll('.drop-on').forEach(x => { if (x !== t) x.classList.remove('drop-on'); });
+    if (!canDrop(t, wbzDrag)) return;
+    e.preventDefault(); e.dataTransfer.dropEffect = 'move'; t.classList.add('drop-on');
+  });
+  wbzEl.addEventListener('drop', e => {
+    const t = dropAt(e), card = wbzDrag;
+    if (!canDrop(t, card)) return;
+    e.preventDefault();
+    const id = card.dataset.id;
+    endDrag();
+    if (t.classList.contains('tb-mate')) boardPost({ action: 'assign', id, agent: t.dataset.agent });
+    else if (t.dataset.lane === 'done') finishTask(id, null);
+    else { if (wbzUndo && wbzUndo.id === id) wbzUndo = null; boardPost({ action: 'reopen', id }, true); }
+  });
+  function endDrag() {
+    if (wbzDrag) wbzDrag.classList.remove('dragging');
+    wbzDrag = null;
+    const b = wbzEl.querySelector('.tb-board'); if (b) b.className = b.className.replace(/\s*(drag-\w+|is-dragging)/g, '');
+    wbzEl.querySelectorAll('.drop-on').forEach(x => x.classList.remove('drop-on'));
+  }
+  wbzEl.addEventListener('dragend', () => { const was = !!wbzDrag; endDrag(); if (was) renderWbz(); });
   wbzEl.addEventListener('submit', e => {
     e.preventDefault();
-    const input = e.target.querySelector('input[name="title"]'), title = input.value.trim();
+    const input = e.target.querySelector('input[name="title"]'), title = input.value.trim(), notes = e.target.querySelector('textarea[name="notes"]');
     if (!title) return;
-    input.value = '';
-    boardPost({ action: 'add', title, notes: '', group: wbzTable || homeDir() });
+    const body = { action: 'add', title, notes: notes ? notes.value.trim() : '', group: wbzTable || homeDir() };
+    input.value = ''; if (notes) notes.value = '';
+    boardPost(body).then(() => { const i = wbzEl.querySelector('.tb-add input'); if (i) i.focus({ preventScroll: true }); });
   });
-
   // ── Panel tabs: the floor, the three boards, usage ──
   const boardEl = document.getElementById('office-board');
   const rosterEl = document.getElementById('office-roster');
@@ -2618,6 +2816,11 @@
   document.addEventListener('keydown', e => {
     if (!active()) return;
     if (e.key === 'Escape' && closeWbz()) { e.preventDefault(); return; }
+    // On a zoomed task board: / searches, N adds a task (not while typing somewhere).
+    if (wbzTable != null && !e.metaKey && !e.ctrlKey && !e.altKey && !(e.target.closest && e.target.closest('input, textarea, select, [contenteditable]'))) {
+      const to = e.key === '/' ? '.tb-search input' : (e.key === 'n' || e.key === 'N') ? '.tb-add input' : null, el = to && wbzEl.querySelector(to);
+      if (el) { e.preventDefault(); el.focus(); return; }
+    }
     if (wbzTable != null) return;
     if (e.key === 'Escape' && !shell.classList.contains('roster-folded')) { setFolded(true); return; }
     if ((e.key === 'f' || e.key === 'F') && !e.metaKey && !e.ctrlKey && !e.altKey && !(e.target.closest && e.target.closest('input, textarea, select, [contenteditable]'))) { e.preventDefault(); setImmersive(!document.body.classList.contains('office-immersive')); return; }
