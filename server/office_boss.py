@@ -42,6 +42,9 @@ Run it in the terminal. If `goldware-office` is not on PATH, use `python3 "{cli}
 | `goldware-office presets` | The agent types and topics (folders) the user set up for New agent |
 | `goldware-office new --type T --topic P "task"` | Opens a new agent and hands it the task once it sits down |
 | `goldware-office dismiss ID` | Closes an idle agent's terminal (refused while it works) |
+| `goldware-office board [TABLE]` | Open whiteboard tasks with ids, status and who has each |
+| `goldware-office give TASK AGENT` | Types a whiteboard task into that agent (`auto`: the least busy at its table) |
+| `goldware-office done TASK` | Marks a whiteboard task done |
 
 ## How to work
 
@@ -54,6 +57,9 @@ Run it in the terminal. If `goldware-office` is not on PATH, use `python3 "{cli}
 - A report arrives as a message starting "Report from". Read that agent's chat and decide the next step.
   If the next step is work for an agent (fix, continue, hand to another agent), do it. If it needs the
   user (review, a decision, anything that sends or publishes), do not act on it: say what is waiting.
+- When the user hands you a whiteboard, you manage it: give each open task out (fewest agents that can do
+  it, related tasks together), check on them when they report, mark tasks done only when the work is
+  verified, and leave anything that needs the user on the board with a note.
 - Finish every turn with a short summary for the user: who is doing what. If you need a decision, ask it.
 """
 

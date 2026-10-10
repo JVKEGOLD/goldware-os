@@ -116,6 +116,8 @@ Each agent gets a character from the cast (Bolt, Mocha, Pixel, Latte, Sprout, Em
 The boss at the front desk can run the other agents for you. It only acts when asked; nothing runs on a timer.
 
 - **Ask it**: click the front desk, type what you want ("put two agents on the Sunrise site, one for copy and one for the form"), and press Ask. The first request opens the boss: a Hermes chat in its own terminal, working in `data/boss`. After that, clicking the front desk opens the boss's console, like any agent's, and you type to it there. Dismiss it like any agent; the next request opens a new one.
+- **Hand it a whiteboard**: **Hand to the boss** on a zoomed whiteboard sends the boss one line to get that board's open tasks done. It gives each task to a free agent at that table or opens a new one for it (at most three without asking), follows up when they report, and marks tasks done once the work is checked. Cards it has are tagged **The boss has it** until an agent takes them. Anything that sends, publishes or pays still waits for you.
+- **Message it from anywhere**: the phone in the room's bottom-left corner (or press **P**) opens your chat with the boss. Start a line with an agent's name ("Bolt, run the tests" or "@Bolt run the tests") and it goes straight to that agent instead; everything else goes to the boss, and your first line sits the boss down if it is not in. Esc closes it.
 - **Report to it**: the **Report to boss** button on any agent's console sends that agent to the boss, which reads its chat and decides the next step. Or tell the agent "report to the boss": setup installs a small Hermes skill (`~/.hermes/skills/goldware/goldware-office`) so it runs `goldware-office report "..."` itself. A report starts the boss if it is not in.
 - **What it can do**: the boss uses the `goldware-office` command (setup links it into `~/.local/bin`; it is `scripts/office`). It only calls this server's Office endpoints, so it can do what the Office page can and nothing more:
 
@@ -129,6 +131,9 @@ The boss at the front desk can run the other agents for you. It only acts when a
   | `goldware-office dismiss ID` | close an idle agent (refused while it works) |
   | `goldware-office report "note"` | report the agent you are in to the boss |
   | `goldware-office boss "text"` | ask the boss from any terminal |
+  | `goldware-office board [TABLE]` | open whiteboard tasks: id, status, who has it |
+  | `goldware-office give TASK AGENT` | type a whiteboard task into an agent (`auto`: the least busy at its table) |
+  | `goldware-office done TASK` | mark a whiteboard task done |
 
 - Its brief is `data/boss/AGENTS.md`, rewritten each time it starts: act only on your requests and on reports, read before acting, start at most three agents without asking, never dismiss unless you said so, and end each turn with a short summary.
 - It runs on your Hermes default model. It needs Hermes; without it the front desk says so.

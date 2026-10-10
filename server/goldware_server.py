@@ -737,6 +737,15 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/office/dismiss":
                 return self.send_json(200, office.dismiss_agent(body))
             if path == "/api/office/board":
+                if isinstance(body, dict) and body.get("action") == "boss":
+                    # Hand to the boss: the boss gives the whiteboard's open tasks out and follows up.
+                    table = office.clean(body.get("table"), 400) or office.home_table()
+                    topics, _presets = office_launch.effective(default_path(), user_path())
+                    label = next((str(t.get("label") or "") for t in topics
+                                  if os.path.realpath(os.path.expanduser(str(t.get("dir", "")))) == os.path.realpath(table)), "")
+                    out = office.hand_to_boss(DATA_ROOT, table, label,
+                                              lambda line: office_boss.ask({"text": line}, DATA_ROOT, ROOT, self.terminal_profile()))
+                    return self.send_json(200, {"ok": True, "result": out, "board": office.board_view(DATA_ROOT)})
                 return self.send_json(200, office.board_action(DATA_ROOT, body))
             if path == "/api/office/new":
                 return self.send_json(200, office_launch.new_agent(body, default_path(), user_path(), self.terminal_profile()))

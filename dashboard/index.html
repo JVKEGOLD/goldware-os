@@ -260,6 +260,7 @@ details p { color: var(--text-muted); font-size: 14px; margin-top: 8px; }
 <link rel="stylesheet" href="/dashboard/tour.css">
 <link rel="stylesheet" href="/dashboard/office.css">
 <link rel="stylesheet" href="/dashboard/office-music.css">
+<link rel="stylesheet" href="/dashboard/office-phone.css">
 <link rel="stylesheet" href="/custom/office.css">
 </head>
 <body>
@@ -1057,6 +1058,13 @@ details p { color: var(--text-muted); font-size: 14px; margin-top: 8px; }
   // The record player, bottom left of the room. ?office-demo pretends: nothing reaches Spotify or the boss.
   window.mountRecordPlayer && mountRecordPlayer(document.getElementById('office-stage'),
     new URLSearchParams(location.search).has('office-demo') ? { fetchJson: mountRecordPlayer.demoFetch } : {});
+</script>
+<script src="/dashboard/office-phone.js"></script>
+<script id="office-phone-mount">
+  // The phone, bottom-left corner of the room and reachable from every view: your chat with the boss, and a
+  // line that starts with an agent's name goes straight to that agent. P opens it; Esc closes it.
+  window.officePhone = window.mountOfficePhone && mountOfficePhone(document.getElementById('office-stage'),
+    new URLSearchParams(location.search).has('office-demo') ? { fetchJson: mountOfficePhone.demoFetch } : {});
 </script>
 <script src="/dashboard/gestures.js"></script>
 <script src="/dashboard/tour.js"></script>

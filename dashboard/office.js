@@ -2015,6 +2015,7 @@
     if (body.action === 'lab') b.runs[body.kind] = { status: 'running', started_at: Date.now() / 1000 };
     if (body.action === 'regroup') { const open = b.tasks.filter(x => x.status !== 'done' && (x.group || homeDir()) === body.table); (b.groupings = b.groupings || {})[body.table] = { at: Date.now() / 1000, groups: [{ name: 'Demo group', needs_user: false, ids: open.map(x => x.id) }] }; b.runs.regroup = { status: 'done', count: 1, table: body.table }; }
     if (body.action === 'ungroup' && b.groupings) delete b.groupings[body.table];
+    if (body.action === 'boss') { const open = b.tasks.filter(x => x.status === 'todo' && (x.group || homeDir()) === body.table); open.forEach(x => { x.boss = Date.now() / 1000; }); result = { ok: true, sent: true, demo: true, count: open.length }; }
     return { ok: true, result, board: demoBoard() };
   }
   function demoUsage() {
@@ -2279,7 +2280,7 @@
       const grp = lane !== 'todo' && wbzView !== 'list' && kindOf.get(t.id) === 'project' ? groupOf.get(t.id) : '';
       const age = lane === 'done' ? (t.done_at ? 'done ' + ago(now - t.done_at) + ' ago' : 'done') : t.created_at ? 'added ' + ago(now - t.created_at) + ' ago' : '';
       const flags = [f.you && lane !== 'done' ? '<span class="tb-flag you">Needs you</span>' : '', f.blocker && lane !== 'done' ? '<span class="tb-flag block">Blocker</span>' : '',
-        f.waiting && lane !== 'done' ? '<span class="tb-flag wait">Waiting</span>' : ''].join('');
+        f.waiting && lane !== 'done' ? '<span class="tb-flag wait">Waiting</span>' : '', t.boss && t.status === 'todo' ? '<span class="tb-flag boss">The boss has it</span>' : ''].join('');
       const who = lane === 'agents' ? `<span class="tb-who">${av(a)}<span><b>${esc(a ? nameOf(a) : (t.agent_title || 'An agent'))}</b>${t.assigned_at ? `<small>${ago(now - t.assigned_at)} ago</small>` : ''}</span></span>` : '';
       const acts = lane === 'done'
         ? `<button type="button" class="tb-act" data-wact="reopen">Reopen</button>`
@@ -2313,7 +2314,7 @@
     const team = `<div class="tb-team" aria-label="Agents at this table">${here.length ? `<span class="tb-team-label">Team</span>${here.map(a => `<button type="button" class="tb-mate" data-agent="${esc(a.id)}" data-wact="mate" title="${esc(nameOf(a) + ': ' + (a.title || ''))}">${av(a)}<span><b>${esc(nameOf(a))}</b><small class="${esc(stateClass(a.activity))}">${esc(WORDS[a.activity] || a.activity || '')}</small></span><em>${open.filter(t => t.agent === a.id && t.status === 'assigned').length || ''}</em></button>`).join('')}<span class="tb-team-hint">Drag a card onto an agent to hand it over</span>`
       : '<span class="tb-team-label">Team</span><span class="tb-team-hint">No agents at this table. Start one with New agent.</span>'}</div>`;
     const undo = wbzUndo && wbzUndo.table === wbzTable ? `<p class="tb-undo" role="status">Done: <b>${esc(wbzUndo.title)}</b><button type="button" data-wact="undo">Undo</button></p>` : '';
-    const aiBtn = `<button type="button" class="tb-tool wbz-ai" data-wact="regroup" ${regrouping || open.length < 2 ? 'disabled' : ''} title="Sorts these tasks into groups with one Sonnet call. Runs only when you press it.">${here_ ? '<i></i>Regrouping…' : regrouping ? 'Regrouping another board…' : ai ? 'Regroup again' : 'Regroup with AI'}</button>`;
+    const aiBtn = `<button type="button" class="tb-tool wbz-ai" data-wact="regroup" ${regrouping || open.length < 2 ? 'disabled' : ''} title="Sorts these tasks into groups with one model call. Runs only when you press it.">${here_ ? '<i></i>Regrouping…' : regrouping ? 'Regrouping another board…' : ai ? 'Regroup again' : 'Regroup with AI'}</button>`;
     const tag = ai ? `<span class="wbz-tag">AI groups · ${ago(now - grouping.at)} ago<button type="button" data-wact="ungroup">Undo</button></span>` : '';
     const failed = runR && runR.status === 'failed' && runR.table === wbzTable && !boardMsg[0] ? `<p class="wbz-msg bad">${esc(runR.error || 'The regroup did not finish.')}</p>` : '';
     const search = wbzEl.querySelector('.tb-search input'), sState = search ? { v: search.value, focus: document.activeElement === search, at: search.selectionStart } : null;
@@ -2322,7 +2323,7 @@
       <header class="tb-head">
         <div class="tb-name"><span class="tb-coin" aria-hidden="true"></span><h3>${esc(tableName(wbzTable))}</h3>
           <div class="tb-hp" title="${done.length} of ${tasks.length} done"><small>DONE</small><span class="tb-hp-bar"><i style="width:${pct}%"></i></span><b>${done.length}/${tasks.length}</b></div></div>
-        <div class="tb-headtools">${aiBtn}<button type="button" class="wbz-close" data-wact="close" aria-label="Close the whiteboard (Esc)">Close</button></div>
+        <div class="tb-headtools">${aiBtn}<button type="button" class="tb-tool wbz-boss" data-wact="boss" ${open.some(t => t.status !== 'assigned') ? '' : 'disabled'} title="The boss gives these tasks out to agents (starting new ones if needed) and follows up. Runs only when you press it.">Hand to the boss</button><button type="button" class="wbz-close" data-wact="close" aria-label="Close the whiteboard (Esc)">Close</button></div>
         ${tabs}
       </header>
       <div class="tb-bar">
@@ -2383,6 +2384,7 @@
     if (act === 'close') { closeWbz(); return; }
     if (act === 'table') { wbzTable = btn.dataset.table; boardMsg = ['', false]; wbzGive = null; wbzOpen.clear(); renderWbz(true); return; }
     if (act === 'regroup') { btn.disabled = true; boardPost({ action: 'regroup', table: wbzTable }); return; }
+    if (act === 'boss') { btn.disabled = true; boardPost({ action: 'boss', table: wbzTable }).then(r => { if (r && !r.error) { const n = (r.result && r.result.count) || 0; toast('Handed to the boss', `${n} task${n === 1 ? '' : 's'} on the ${tableName(wbzTable)} whiteboard`); }; }); return; }
     if (act === 'ungroup') { boardPost({ action: 'ungroup', table: wbzTable }, true); return; }
     if (act === 'view') { wbzView = btn.dataset.view === 'list' ? 'list' : 'board'; try { localStorage.setItem('goldware-wbz-view', wbzView); } catch (err) { /* private mode */ } renderWbz(true); return; }
     if (act === 'filter') { wbzFilter = btn.dataset.filter; wbzEl.querySelectorAll('[data-wact="filter"]').forEach(b => b.setAttribute('aria-pressed', String(b === btn))); applyWbzFilter(); return; }
@@ -2498,7 +2500,7 @@
       }
       board = out.board; lastBoardKey = '';
       if (!quiet) boardMsg = [{ add: 'Added to the board.', assign: `Typed into ${(out.result || {}).agent_title || 'its terminal'}.`, done: 'Done.',
-        lab: body.kind === 'research' ? 'The researcher is in the lab.' : 'The brainstormer is on it.', project: 'Project saved.', regroup: 'Regrouping with AI, about half a minute.' }[body.action] || '', false];
+        lab: body.kind === 'research' ? 'The researcher is in the lab.' : 'The brainstormer is on it.', project: 'Project saved.', regroup: 'Regrouping with AI, about half a minute.', boss: 'Handed to the boss: it gives the tasks out and follows up.' }[body.action] || '', false];
       if (body.action === 'done') { toast('Task done', (out.result || {}).title || 'Nice work'); confetti(); }
       renderBoard(true); renderWbz(true); markNew(); draw();
       return out;

@@ -22,6 +22,7 @@ import datetime
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import sqlite3
@@ -2042,6 +2043,37 @@ def board_action(data_root, body, **kw):
     return {"ok": True, "result": result, "board": board_view(data_root)}
 
 
+def boss_handoff_line(table, label):
+    """What the boss is told when the user hands it a whiteboard."""
+    return one_line(
+        "The user handed you the %s whiteboard: get its open tasks done. Run `goldware-office board %s` for the tasks "
+        "and their ids. Give each one to a free agent at that table (`goldware-office give TASK AGENT`, or `auto` for "
+        "the least busy) or open a new agent for it (`goldware-office new --topic P \"task\"`, at most three without "
+        "asking), group small related tasks for one agent, follow up when they report, and mark finished tasks with "
+        "`goldware-office done TASK`. Anything that sends, publishes or pays waits for the user. Sum up who has what."
+        % (label, shlex.quote(table)), 1500)
+
+
+def hand_to_boss(data_root, table, label, asker, home=None, now=None):
+    """The whiteboard's Hand to the boss button: one line to the boss, and the waiting cards are tagged.
+    `asker(line)` reaches the boss (office_boss.ask); nothing else here types into a terminal."""
+    home = home or home_table()
+    table = clean(table, 400) or home
+    now = time.time() if now is None else now
+    ids = [t["id"] for t in open_at(load_board(data_root), table, home) if t.get("status") != "assigned"]
+    if not ids:
+        raise OfficeError("Nothing on this whiteboard is waiting for an agent.", 409)
+    out = dict(asker(boss_handoff_line(table, label or os.path.basename(table) or table)))
+    with BOARD_LOCK:
+        s = load_board(data_root)
+        for t in s["tasks"]:
+            if t["id"] in ids and t.get("status") == "todo":
+                t["boss"] = now
+        save_board(data_root, s)
+    out["count"] = len(ids)
+    return out
+
+
 def table_agents(agents, task):
     """The agents at a task's table. Desks group by working folder; a task with no table belongs to
     the home folder's table (tasks from before the tables)."""
@@ -2067,6 +2099,7 @@ def _assign(data_root, body, agents=None, sender=None, **kw):
         s = load_board(data_root)
         t = _find(s, "tasks", body.get("id"))
         t.update({"status": "assigned", "agent": agent["id"], "agent_title": agent["title"], "assigned_at": time.time()})
+        t.pop("boss", None)
         save_board(data_root, s)
         return t
 

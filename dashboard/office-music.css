@@ -7,7 +7,8 @@
   --rp-red: var(--px-orange, #ef7d57); --rp-muted: var(--px-steel, #94b0c2); --rp-text: var(--px-cream, #f4f4f4); --rp-focus: var(--px-sky, #41a6f6);
   --rp-px: "Silkscreen", "Press Start 2P", ui-monospace, monospace; --rp-display: "Pixelify Sans", "Silkscreen", system-ui, sans-serif;
   --rp-now: var(--rp-yellow);
-  position: absolute; left: 6.2%; bottom: 2.2%; z-index: 4; width: clamp(44px, 5.2%, 84px);
+  /* Never closer to the corner than 66 px: the phone owns the very bottom-left (dashboard/office-phone.css). */
+  position: absolute; left: max(6.2%, 66px); bottom: 2.2%; z-index: 4; width: clamp(44px, 5.2%, 84px);
 }
 .rp-root *, .rp-root *::before, .rp-root *::after { box-sizing: border-box; }
 /* Out of the way while a whiteboard is zoomed in. The music keeps playing. */
@@ -176,6 +177,6 @@
   .rp-root.playing .rp-eq i:nth-child(odd) { height: 12px; }
 }
 @media (max-width: 600px) {
-  .rp-root { width: 60px; left: 4%; }   /* 45px tall: a full-size touch target */
+  .rp-root { width: 60px; left: 62px; }   /* 45px tall: a full-size touch target; right of the phone */
   .rp-play, .rp-controls button, .rp-toggle button, .rp-x, .rp-add { min-height: 44px; }
 }

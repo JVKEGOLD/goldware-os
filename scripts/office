@@ -14,6 +14,9 @@ uses, so it can do nothing the Office page cannot.
   goldware-office dismiss ID                     close an idle agent's terminal
   goldware-office report ["note"]                report this agent to the boss (run inside an agent)
   goldware-office boss "text"                    ask the boss something (starts it if needed)
+  goldware-office board [TABLE]                  open whiteboard tasks: id, status, who has it, title
+  goldware-office give TASK AGENT|auto           type a whiteboard task into an agent (auto: least busy at its table)
+  goldware-office done TASK                      mark a whiteboard task done
 """
 import json
 import os
@@ -185,6 +188,28 @@ def main(argv):
         need(1, 'boss "text"')
         out = call("/api/office/boss", {"text": " ".join(rest)})
         print("Told the boss." if out.get("sent") else "The boss is starting up at the front desk.")
+    elif cmd == "board":
+        b = call("/api/office/board")
+        home = os.path.expanduser("~")
+        want = os.path.realpath(os.path.expanduser(rest[0])) if rest else None
+        shown = 0
+        for t in b.get("tasks", []):
+            table = t.get("group") or home
+            if t.get("status") == "done" or (want and os.path.realpath(table) != want):
+                continue
+            who = t.get("agent_title") or t.get("agent") or ("the boss has it" if t.get("boss") else "nobody yet")
+            print("%s  %-8s  %s  |  %s%s" % (t["id"], t.get("status"), who, t.get("title"), "" if want else "  [" + table + "]"))
+            shown += 1
+        if not shown:
+            print("No open tasks%s." % (" on that whiteboard" if want else ""))
+    elif cmd == "give":
+        tid, agent = need(2, "give TASK AGENT|auto")
+        t = call("/api/office/board", {"action": "assign", "id": tid, "agent": agent}).get("result") or {}
+        print("Given to %s." % (t.get("agent_title") or t.get("agent") or agent))
+    elif cmd == "done":
+        (tid,) = need(1, "done TASK")
+        call("/api/office/board", {"action": "done", "id": tid})
+        print("Marked done.")
     else:
         sys.exit("goldware-office: unknown command %r (try --help)" % cmd)
 

@@ -980,6 +980,7 @@ body:has(#tab-office.active) .topbar-tab.active { background: var(--px-coin); co
 #tab-office .tb-flag.you { background: var(--px-red); color: #fff; }
 #tab-office .tb-flag.block { background: var(--px-orange); color: var(--px-ink); }
 #tab-office .tb-flag.wait { background: var(--px-navy); color: var(--px-teal); }
+#tab-office .tb-flag.boss { background: var(--px-coin); color: var(--px-ink); }
 #tab-office .tb-ref { padding: 2px 5px; background: var(--px-ink); color: var(--px-teal); font: 600 10.5px/1.2 var(--mono); }
 #tab-office .tb-top .tb-ref:first-of-type { margin-left: auto; }
 #tab-office .tb-top:not(:has(.tb-grp, .tb-flag)) .tb-ref:first-of-type { margin-left: 0; }

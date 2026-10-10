@@ -1,0 +1,111 @@
+/* The Office phone (outputs/office-phone.js). Every class is op-; every Office variable has a fallback. */
+
+/* ── The icon: fixed on <body>, pinned by the script to the room's bottom-left corner, above
+   everything in the stage (rooms, Client House, garden, whiteboard zoom) and the console ── */
+.op-root { position: fixed; left: 14px; bottom: 14px; z-index: 128; transition: opacity 200ms; }
+.op-root.op-off { display: none; }
+.op-root *, .op-panel, .op-panel *, .op-panel *::before, .op-panel *::after { box-sizing: border-box; }
+.op-icon { position: relative; display: grid; place-items: center; width: 48px; height: 70px; padding: 0; border: 0; background: none; cursor: pointer;
+  filter: drop-shadow(0 3px 0 rgba(20, 12, 4, .45)); transition: transform 140ms ease-out; -webkit-tap-highlight-color: transparent; }
+.op-handset { display: block; width: 36px; height: 60px; image-rendering: pixelated; }
+.op-icon:hover, .op-root.op-open .op-icon { transform: translateY(-3px); }
+.op-icon:focus-visible { outline: 3px solid var(--px-yellow, #ffcb05); outline-offset: 2px; border-radius: 6px; }
+.op-glow { opacity: .55; }
+.op-root.op-open .op-glow, .op-icon:hover .op-glow { opacity: 1; }
+.op-badge { position: absolute; top: 4px; right: -2px; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 10px; background: #e3350d; color: #fff;
+  box-shadow: 0 0 0 2px #fff4dc, 0 2px 0 rgba(0,0,0,.35); font: 400 9px/20px "Press Start 2P", var(--px-font, monospace); text-align: center; }
+.op-badge[hidden] { display: none; }
+.op-tip { position: absolute; left: 50%; bottom: calc(100% + 4px); transform: translateX(-50%); padding: 4px 7px; border-radius: 3px; background: #fff8e4; color: #2a1a0c;
+  font: 400 8px/1 "Press Start 2P", var(--px-font, monospace); text-transform: uppercase; white-space: nowrap; box-shadow: 0 0 0 2px #2a1a0c; opacity: 0; pointer-events: none; transition: opacity 120ms; }
+.op-icon:hover .op-tip, .op-icon:focus-visible .op-tip { opacity: 1; }
+.op-root.op-open .op-tip { opacity: 0; }
+/* A reply came in while the phone was shut: it rings now and then. */
+.op-root.op-ringing .op-handset { animation: op-ring 2.4s steps(1, end) infinite; transform-origin: 50% 90%; }
+@keyframes op-ring { 0%, 70%, 100% { transform: none; } 74%, 82%, 90% { transform: rotate(-8deg); } 78%, 86%, 94% { transform: rotate(8deg); } }
+
+/* ── The phone ── */
+.op-panel { position: fixed; z-index: 135; left: 24px; top: 80px; width: 340px; height: 580px; padding: 9px; border-radius: 34px;
+  background: linear-gradient(160deg, #3b4270, #202030 60%); box-shadow: 0 0 0 2px #0d0d18, inset 0 0 0 2px #5a64a8, 0 18px 40px rgba(10, 6, 20, .55);
+  transform-origin: 0 100%; opacity: 0; transform: translateY(14px) scale(.94); transition: opacity 160ms ease-out, transform 180ms cubic-bezier(.2,.9,.3,1.2); }
+.op-panel[hidden] { display: none; }
+.op-panel.op-shown { opacity: 1; transform: none; }
+.op-panel.op-away { display: none; }
+.op-bezel { display: flex; flex-direction: column; height: 100%; overflow: hidden; border-radius: 26px; background: var(--px-cream, #f6efdc); color: #2a1a0c; }
+
+.op-status { position: relative; display: flex; align-items: center; justify-content: space-between; flex: none; height: 30px; padding: 0 20px; background: #202030; color: #fff4dc;
+  font: 400 11px/1 "Silkscreen", var(--px-font, monospace); letter-spacing: .04em; }
+.op-notch { position: absolute; left: 50%; top: 0; width: 92px; height: 20px; transform: translateX(-50%); border-radius: 0 0 12px 12px; background: #0d0d18; }
+.op-notch::after { content: ""; position: absolute; right: 18px; top: 7px; width: 6px; height: 6px; border-radius: 50%; background: #2b3266; }
+.op-signal { display: flex; align-items: flex-end; gap: 2px; height: 11px; }
+.op-signal i { width: 3px; background: #fff4dc; }
+.op-signal i:nth-child(1) { height: 4px; } .op-signal i:nth-child(2) { height: 6px; } .op-signal i:nth-child(3) { height: 8px; } .op-signal i:nth-child(4) { height: 11px; }
+.op-signal em { width: 20px; height: 10px; margin-left: 6px; border: 2px solid #fff4dc; border-radius: 2px; background: linear-gradient(90deg, #78c850 70%, transparent 70%) 1px 1px / calc(100% - 2px) calc(100% - 2px) no-repeat; }
+
+.op-head { display: flex; align-items: center; gap: 10px; flex: none; padding: 10px 12px 9px 14px; background: #fff8e4; border-bottom: 2px solid #e2d4b0; }
+.op-face { display: grid; place-items: center; flex: none; width: 34px; height: 34px; border-radius: 50%; background: #d9a441; color: #2a1a0c; box-shadow: 0 0 0 2px #2a1a0c;
+  font: 400 12px/1 "Press Start 2P", var(--px-font, monospace); }
+.op-who { flex: 1; min-width: 0; }
+.op-who h3 { margin: 0; font: 400 13px/1.1 "Press Start 2P", var(--px-font, monospace); color: #2a1a0c; }
+.op-state { display: flex; align-items: center; gap: 6px; margin: 5px 0 0; font: 400 10px/1 "Silkscreen", var(--px-font, monospace); text-transform: uppercase; color: #6b5536; }
+.op-state i, .op-dot { flex: none; width: 8px; height: 8px; border-radius: 2px; background: #a99a80; box-shadow: 0 0 0 1px rgba(42, 26, 12, .45); }
+.op-state.busy i, .op-dot.busy { background: #40c050; }
+.op-state.you i, .op-dot.you { background: #ffb020; }
+.op-state.sleep i, .op-dot.sleep { background: #7088c8; }
+.op-state.away i { background: #d0c4a8; }
+.op-close { flex: none; width: 34px; height: 34px; border: 0; border-radius: 50%; background: #efe3c4; color: #2a1a0c; font: 700 14px/1 system-ui, sans-serif; cursor: pointer; }
+.op-close:hover { background: #e2d0a4; }
+
+.op-contacts { display: flex; gap: 6px; flex: none; overflow-x: auto; padding: 8px 10px; background: #fff8e4; border-bottom: 2px solid #e2d4b0; scrollbar-width: none; }
+.op-contacts::-webkit-scrollbar { display: none; }
+.op-contact { display: inline-flex; align-items: center; gap: 6px; flex: none; height: 30px; padding: 0 10px 0 8px; border: 0; border-radius: 15px; cursor: pointer;
+  background: color-mix(in srgb, var(--op-c, #d9a441) 26%, #fff8e4); box-shadow: inset 0 0 0 2px var(--op-c, #d9a441); color: #2a1a0c;
+  font: 400 10px/1 "Silkscreen", var(--px-font, monospace); text-transform: uppercase; }
+.op-contact:hover { background: color-mix(in srgb, var(--op-c, #d9a441) 45%, #fff8e4); }
+
+.op-thread { flex: 1; min-height: 0; overflow-y: auto; padding: 12px 10px 6px; display: flex; flex-direction: column; gap: 8px; overscroll-behavior: contain;
+  font: 400 14px/1.4 "DM Sans", var(--font, system-ui), sans-serif; }
+.op-thread:focus-visible { outline: 2px solid #ffcb05; outline-offset: -2px; }
+.op-empty { margin: auto 12px; text-align: center; color: #6b5536; font-size: 13px; }
+.op-msg { max-width: 84%; display: flex; flex-direction: column; gap: 3px; }
+.op-msg p { margin: 0; padding: 8px 11px; border-radius: 16px; overflow-wrap: anywhere; }
+.op-msg code { padding: 0 3px; border-radius: 3px; background: rgba(42, 26, 12, .08); font: 400 12px/1.3 "JetBrains Mono", ui-monospace, monospace; }
+.op-msg.them { align-self: flex-start; }
+.op-msg.them p { background: #fff; color: #1e1408; border-bottom-left-radius: 4px; box-shadow: 0 1px 0 #d8c9a4; }
+.op-msg.me { align-self: flex-end; align-items: flex-end; }
+.op-msg.me p { background: #ffcb05; color: #2a1a0c; border-bottom-right-radius: 4px; box-shadow: 0 1px 0 #c79a00; }
+.op-msg.routed p { background: #2b3266; color: #fff8e4; box-shadow: 0 1px 0 #151a3a; }
+.op-msg.failed p { opacity: .65; }
+.op-msg.ask p { box-shadow: inset 0 0 0 2px #ffb020; }
+.op-msg small { font: 400 9px/1.2 "Silkscreen", var(--px-font, monospace); text-transform: uppercase; color: #6b5536; padding: 0 4px; }
+.op-msg.failed small { color: #b3200b; }
+.op-tag { align-self: flex-end; padding: 3px 7px; border-radius: 3px; background: #2b3266; color: #ffcb05; font: 400 9px/1 "Silkscreen", var(--px-font, monospace); text-transform: uppercase; }
+
+.op-compose { display: flex; align-items: flex-end; gap: 6px; flex: none; margin: 4px 8px 0; padding: 5px 5px 5px 12px; border-radius: 20px; background: #fff; box-shadow: inset 0 0 0 2px #e2d4b0; }
+.op-compose:focus-within { box-shadow: inset 0 0 0 2px #2a1a0c; }
+.op-input { flex: 1; min-width: 0; min-height: 28px; max-height: 120px; padding: 5px 0; border: 0; outline: 0; resize: none; background: none; color: #1e1408;
+  font: 400 14px/1.3 "DM Sans", var(--font, system-ui), sans-serif; overflow-y: hidden; }
+.op-send { flex: none; height: 32px; padding: 0 12px; border: 0; border-radius: 16px; background: #ffcb05; color: #2a1a0c; box-shadow: inset 0 0 0 2px #2a1a0c;
+  font: 400 9px/1 "Press Start 2P", var(--px-font, monospace); text-transform: uppercase; cursor: pointer; }
+.op-send:disabled { opacity: .5; cursor: default; }
+.op-to { flex: none; margin: 0; padding: 6px 16px 12px; font: 400 9px/1.2 "Silkscreen", var(--px-font, monospace); text-transform: uppercase; color: #6b5536; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.op-to.routed { color: #2b3266; }
+
+/* ── Phones: a 44 px icon, the panel full width above the safe area, 44 px targets, 16 px type (no zoom) ── */
+@media (max-width: 600px) {
+  .op-icon { width: 44px; height: 44px; }
+  .op-handset { width: 24px; height: 40px; }
+  .op-badge { top: -4px; right: -6px; }
+  .op-panel { left: 0 !important; right: 0; top: auto !important; bottom: 0; width: auto !important; height: min(78vh, 640px) !important;
+    padding: 6px 6px calc(6px + env(safe-area-inset-bottom, 0px)); border-radius: 26px 26px 0 0; transform-origin: 50% 100%; }
+  .op-bezel { border-radius: 20px; }
+  .op-close { width: 44px; height: 44px; }
+  .op-contact { height: 44px; padding: 0 14px 0 12px; border-radius: 22px; }
+  .op-send { height: 44px; padding: 0 14px; border-radius: 22px; }
+  .op-input { font-size: 16px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .op-panel, .op-icon, .op-root, .op-tip { transition: none; }
+  .op-panel { transform: none; }
+  .op-root.op-ringing .op-handset { animation: none; }
+}
