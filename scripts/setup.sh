@@ -120,6 +120,16 @@ iterm_app() {
   mdfind "kMDItemCFBundleIdentifier == 'com.googlecode.iterm2'" 2>/dev/null | head -1
 }
 
+# True once ollama answers on 127.0.0.1:11434, polling for up to $1 seconds.
+ollama_wait() {
+  local i
+  for i in {1..$1}; do
+    curl -fsS --max-time 2 http://127.0.0.1:11434/ >/dev/null 2>&1 && return 0
+    sleep 1
+  done
+  return 1
+}
+
 step_packages() {
   step "4/11 whisper-cpp, ollama, iTerm2 and the terminal font"
   local f
@@ -158,14 +168,18 @@ step_packages() {
     would "brew services start ollama"
   else
     brew services start ollama >/dev/null 2>&1 || true
-    local i
-    for i in {1..20}; do
-      curl -fsS --max-time 2 http://127.0.0.1:11434/ >/dev/null 2>&1 && break
-      sleep 1
-    done
-    curl -fsS --max-time 2 http://127.0.0.1:11434/ >/dev/null 2>&1 \
-      && ok "ollama started" \
-      || fail "ollama is not answering on 127.0.0.1:11434." "Try: brew services restart ollama   or run: ollama serve"
+    ollama_wait 20 && { ok "ollama started"; return; }
+    # launchd can load the service without running it ("runs = 0"); brew services restart
+    # does not help then, but a kickstart does.
+    launchctl kickstart -k "gui/$(id -u)/sh.brew.ollama" >/dev/null 2>&1 || true
+    ollama_wait 15 && { ok "ollama started (kickstarted)"; return; }
+    # Last resort: run the server in the background for this setup run.
+    local ob; ob="$(command -v ollama)"
+    [[ -n "$ob" ]] && nohup "$ob" serve >"${TMPDIR:-/tmp}/goldware-ollama.log" 2>&1 &!
+    ollama_wait 15 && { ok "ollama started (ollama serve in the background; it will not survive a restart)"; return; }
+    fail "ollama is not answering on 127.0.0.1:11434." \
+      "Try: launchctl kickstart -k gui/\$(id -u)/sh.brew.ollama   then rerun." \
+      "Or run it by hand in another terminal: ollama serve"
   fi
 }
 

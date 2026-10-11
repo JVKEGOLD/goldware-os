@@ -32,7 +32,7 @@ if curl -fsS --max-time 2 http://127.0.0.1:11434/ >/dev/null 2>&1; then
   if [[ -n "$MODEL" ]] && ollama list 2>/dev/null | awk 'NR>1{print $1}' | grep -qx "$MODEL"; then row "model pulled" OK "$MODEL"
   else row "model pulled" NO "${MODEL:-unknown}" "ollama pull ${MODEL:-gemma4:e4b}"; fi
 else
-  row "ollama answering" NO "nothing on 127.0.0.1:11434" "brew services start ollama"
+  row "ollama answering" NO "nothing on 127.0.0.1:11434" "brew services start ollama   (if still down: launchctl kickstart -k gui/\$(id -u)/sh.brew.ollama)"
   row "model pulled" NO "cannot check, ollama is down" "ollama pull ${MODEL:-gemma4:e4b}"
 fi
 [[ -f "$MD" ]] && (( $(stat -f%z "$MD") > 190000000 )) && row "whisper model file" OK "$MD" || row "whisper model file" NO "$WFILE" "make setup   (downloads to ~/Library/Application Support/GoldWare OS/models/)"

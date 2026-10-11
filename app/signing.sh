@@ -46,11 +46,15 @@ unlock() {
 
 create() {
   say "Creating a signing certificate for this Mac (once): $NAME"
+  # Apple's openssl on purpose: Homebrew's OpenSSL 3+ writes .p12 files with ciphers that
+  # `security import` cannot read ("MAC verification failed"), and setup puts Homebrew first on PATH.
+  local ossl=/usr/bin/openssl
+  [[ -x "$ossl" ]] || { say "Missing $ossl (part of macOS)."; return 1; }
   mkdir -p "$DIR" && chmod 700 "$DIR" || return 1
   rm -f "$KC" "$PWF"
   local tmp; tmp=$(mktemp -d) || return 1
-  { umask 077; openssl rand -hex 24 > "$PWF"; } || { rm -rf "$tmp"; return 1; }
-  local kpw p12pw; kpw="$(<"$PWF")"; p12pw="$(openssl rand -hex 16)"
+  { umask 077; "$ossl" rand -hex 24 > "$PWF"; } || { rm -rf "$tmp"; return 1; }
+  local kpw p12pw; kpw="$(<"$PWF")"; p12pw="$("$ossl" rand -hex 16)"
   cat > "$tmp/cert.cnf" <<EOF
 [req]
 distinguished_name = dn
@@ -66,9 +70,9 @@ extendedKeyUsage = critical, codeSigning
 subjectKeyIdentifier = hash
 EOF
   # 20 years: the certificate must outlive the app, or grants reset when it is replaced.
-  openssl req -x509 -newkey rsa:2048 -nodes -days 7300 -sha256 -config "$tmp/cert.cnf" \
+  "$ossl" req -x509 -newkey rsa:2048 -nodes -days 7300 -sha256 -config "$tmp/cert.cnf" \
       -keyout "$tmp/key.pem" -out "$tmp/cert.pem" >/dev/null 2>&1 \
-    && openssl pkcs12 -export -inkey "$tmp/key.pem" -in "$tmp/cert.pem" -name "$NAME" \
+    && "$ossl" pkcs12 -export -inkey "$tmp/key.pem" -in "$tmp/cert.pem" -name "$NAME" \
       -passout "pass:$p12pw" -out "$tmp/id.p12" >/dev/null 2>&1 \
     && security create-keychain -p "$kpw" "$KC" >/dev/null \
     && security set-keychain-settings "$KC" \

@@ -37,6 +37,8 @@ git clone https://github.com/JVKEGOLD/goldware-os.git ~/goldware-os
 
 If a box pops up asking to install "command line developer tools", click **Install**. When it finishes, paste the same line again.
 
+If it says `destination path ... already exists and is not empty`, there is already a `goldware-os` folder in your home folder. If it is a GoldWare OS copy, skip to step 2 (or run `make update` in it). If not, move or rename it (for example `mv ~/goldware-os ~/goldware-os-old`) and paste the clone line again.
+
 **2. Set it up.** Paste this and press Return:
 
 ```sh
