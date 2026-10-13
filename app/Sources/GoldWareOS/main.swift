@@ -4,6 +4,7 @@ import ImageIO
 import Vision
 import Speech
 import ServiceManagement
+import SMCKit
 
 // Test entry points, no hotkey, paste, or menu bar:
 //   GoldWareOS --test file.wav [App Name]          dictation pipeline on a file
@@ -1466,6 +1467,128 @@ if args.count >= 2, args[1] == "--test-work" {
     exit(failures == 0 ? 0 : 1)
 }
 
+// Fans: the helper's word whitelist, speed clamping, the lease and disconnect rules on fake fans,
+// a real socket round trip (helper in-process, fake fans), the uid check, and a read-only SMC read.
+// Never writes to the real fans.
+final class TestFans: FanHardware {
+    var fans = [FanReading(actual: 1400, min: 1350, max: 5349, target: 1400, manual: false),
+                FanReading(actual: 1400, min: 1350, max: 5777, target: 1400, manual: false)]
+    func read() -> [FanReading] { fans }
+    func setManual(_ i: Int, rpm: Double) -> Bool { fans[i].manual = true; fans[i].target = rpm; return true }
+    func setAuto(_ i: Int) -> Bool { fans[i].manual = false; return true }
+}
+if args.count >= 2, args[1] == "--test-fans" {
+    var failures = 0
+    func expect(_ what: String, _ ok: Bool) { print("\(ok ? "PASS" : "FAIL")  \(what)"); if !ok { failures += 1 } }
+    expect("the helper takes its exact words", FanCommand(line: "auto") == .auto && FanCommand(line: "max") == .max &&
+           FanCommand(line: "set 0") == .set(0) && FanCommand(line: "set 100") == .set(100) && FanCommand(line: "ping\r") == .ping)
+    let bad = ["set 101", "set -1", "set", "set 5 6", "set 05x", "set 1e2", "auto; rm -rf /", "AUTO", " auto", "set \u{FF15}",
+               "set 0000000001", String(repeating: "a", count: 40), ""]
+    expect("and refuses everything else", bad.allSatisfy { FanCommand(line: $0) == nil })
+    expect("0% is the fan's minimum, 100% its maximum", FanMath.rpm(percent: 0, min: 1350, max: 5349) == 1350 && FanMath.rpm(percent: 100, min: 1350, max: 5349) == 5349)
+    expect("speeds clamp to the fan's range", FanMath.rpm(percent: -20, min: 1350, max: 5349) == 1350 && FanMath.rpm(percent: 150, min: 1350, max: 5349) == 5349)
+    expect("percent reads back", FanMath.percent(rpm: 3350, min: 1350, max: 5350) == 50 && FanMath.percent(rpm: 9000, min: 1350, max: 5350) == 100)
+
+    let hw = TestFans()
+    let marker = FileManager.default.temporaryDirectory.appendingPathComponent("goldware-fan-marker-\(getpid())").path
+    let st = FanState(hardware: hw, markerPath: marker)
+    expect("set 50 puts both fans halfway through their own ranges", st.handle(.set(50), from: 1, now: 0) == "ok" &&
+           hw.fans.allSatisfy(\.manual) && hw.fans[0].target == 3350 && hw.fans[1].target == 3564)
+    expect("a manual speed leaves a marker", FileManager.default.fileExists(atPath: marker))
+    expect("status says what is set", st.handle(.status, from: 1, now: 1) == "ok set 50")
+    st.tick(now: FanHelper.lease - 1)
+    expect("inside the lease the speed holds", hw.fans.allSatisfy(\.manual))
+    _ = st.handle(.ping, from: 1, now: 15)
+    st.tick(now: 15 + FanHelper.lease - 1)
+    expect("a ping renews the lease", hw.fans.allSatisfy(\.manual))
+    _ = st.handle(.ping, from: 2, now: 30)
+    st.tick(now: 15 + FanHelper.lease + 1)
+    expect("silence past the lease returns to auto (another client's ping does not count)", !hw.fans.contains(where: \.manual) && st.manual == nil)
+    expect("auto clears the marker", !FileManager.default.fileExists(atPath: marker))
+    _ = st.handle(.max, from: 3, now: 100)
+    expect("max sets each fan to its own maximum", hw.fans[0].target == 5349 && hw.fans[1].target == 5777)
+    st.disconnected(4)
+    expect("another client hanging up changes nothing", hw.fans.allSatisfy(\.manual))
+    st.disconnected(3)
+    expect("the owner hanging up (GoldWare OS quit or crashed) returns to auto", !hw.fans.contains(where: \.manual))
+    _ = st.handle(.set(30), from: 5, now: 200)
+    let restarted = FanState(hardware: hw, markerPath: marker)
+    restarted.recoverIfNeeded()
+    expect("a restarted helper finds the marker and returns to auto", !hw.fans.contains(where: \.manual))
+    expect("version answers", st.handle(.version, from: 9, now: 0) == "ok \(FanHelper.version)")
+
+    // The socket, end to end: FanControl talks to an in-process helper with fake fans.
+    let hw2 = TestFans()
+    let sock = "/tmp/goldware-fan-test-\(getpid()).sock"
+    let server = FanServer(state: FanState(hardware: hw2), socketPath: sock, allowedUID: getuid())
+    do { try server.start() } catch { expect("test helper listens", false) }
+    let fc = FanControl()
+    fc.socketPath = sock
+    func wait(_ cond: () -> Bool) -> Bool {
+        let end = Date() + 3
+        while !cond() && Date() < end { RunLoop.main.run(until: Date() + 0.05) }
+        return cond()
+    }
+    expect("the app reads the helper's version over the socket", fc.helperVersion() == FanHelper.version)
+    var done: Bool?
+    fc.set(.percent(40)) { done = $0 }
+    expect("set 40% reaches the fans over the socket", wait { done != nil } && done == true && fc.mode == .percent(40) &&
+           hw2.fans[0].target == FanMath.rpm(percent: 40, min: 1350, max: 5349))
+    fc.disconnectForTest()
+    expect("closing the app's connection returns the fans to auto", wait { !hw2.fans.contains(where: \.manual) })
+    done = nil
+    fc.set(.max) { done = $0 }
+    _ = wait { done != nil }
+    fc.set(.auto) { done = $0 }
+    expect("Auto hands the fans back", wait { !hw2.fans.contains(where: \.manual) } && fc.mode == .auto)
+    server.stop()
+    let sock2 = "/tmp/goldware-fan-test2-\(getpid()).sock"
+    let locked = FanServer(state: FanState(hardware: TestFans()), socketPath: sock2, allowedUID: getuid() + 1)
+    try? locked.start()
+    let other = FanControl(); other.socketPath = sock2
+    expect("the helper refuses any other user", other.helperVersion() == nil)
+    locked.stop()
+
+    // Install: the root script parses, the plist is valid and names this user, quoting survives a quote.
+    let script = FanControl.installScript(source: "/Applications/GoldWare's OS.app/Contents/Resources/GoldWareFanHelper", uid: 501)
+    let sh = Process(); sh.executableURL = URL(fileURLWithPath: "/bin/sh"); sh.arguments = ["-n", "-c", script]
+    try? sh.run(); sh.waitUntilExit()
+    expect("the install script is valid shell", sh.terminationStatus == 0)
+    let pl = try? PropertyListSerialization.propertyList(from: Data(FanControl.launchdPlist(uid: 501).utf8), format: nil) as? [String: Any]
+    expect("the LaunchDaemon plist parses and runs the helper for this uid",
+           pl?["Label"] as? String == FanHelper.label && (pl?["ProgramArguments"] as? [String]) == [FanHelper.binary, "--uid", "501"])
+    expect("paths are quoted for the shell", FanControl.shellQuote("a'b") == "'a'\\''b'")
+
+    let live = FanControl().read()
+    // Temperatures: grouping by key prefix, the junk filter, and a live read.
+    let byGroup = Temps.keysByGroup(["Tp00", "Tp04", "Tg0C", "Tm00", "TH0x", "TB0T", "TaLP", "Ts0P", "Tp0", "F0Ac"])
+    expect("temperature keys group by prefix and others are left out", byGroup["CPU"] == ["Tp00", "Tp04"] && byGroup["GPU"] == ["Tg0C"] &&
+           byGroup["MEMORY"] == ["Tm00"] && byGroup["SSD"] == ["TH0x"] && byGroup["BATTERY"] == ["TB0T"] && byGroup.count == 5)
+    let sum = Temps.summarize(["CPU": [50, 60, 0, 400], "GPU": [42], "SSD": [0]])
+    expect("groups average plausible readings only, in order, and drop empty ones",
+           sum.map(\.name) == ["CPU", "GPU"] && sum[0].average == 55 && sum[0].hottest == 60 && sum[0].sensors == 2)
+    let t0 = Date()
+    let liveTemps = FanControl().temps()
+    let scan = Date().timeIntervalSince(t0)
+    let fc2 = FanControl(); _ = fc2.temps()
+    let t1 = Date(); _ = fc2.temps(); let again = Date().timeIntervalSince(t1)
+    expect("live temperatures read (\(liveTemps.map { "\($0.name) \(Int($0.average))°C/\($0.sensors)" }); first \(Int(scan * 1000)) ms, then \(Int(again * 1000)) ms)",
+           liveTemps.first?.name == "CPU" && liveTemps.allSatisfy { $0.average > 10 && $0.average < 110 } && again < 0.05)
+    expect("the SMC reads this Mac's fans (\(live.map { "\(Int($0.actual)) of \(Int($0.min))-\(Int($0.max))" }))",
+           !live.isEmpty && live.allSatisfy { $0.min > 0 && $0.max > $0.min && $0.actual >= 0 })
+    let v = ControlCenterView()
+    v.detail = .fans; let fansOpen = v.intrinsicContentSize.height
+    v.detail = .cpu
+    expect("the Fans dropdown is no taller than the CPU one", fansOpen <= v.intrinsicContentSize.height)
+    expect("the open panel fits a 13-inch screen (\(Int(v.intrinsicContentSize.height)) pt of 997)", v.intrinsicContentSize.height + 6 <= 997 && fansOpen + 6 <= 997)
+    v.fanMode = .auto; v.fans = hw.fans
+    expect("the row tag reads AUTO, MAX, a percent, or OTHER APP", v.fanTag == "AUTO" && { v.fanMode = .max; return v.fanTag == "MAX" }() &&
+           { v.fanMode = .percent(62); return v.fanTag == "62%" }() && { v.fanMode = .auto; v.fans[0].manual = true; return v.fanTag == "OTHER APP" }())
+    print(failures == 0 ? "All fan checks passed" : "\(failures) fan check(s) failed")
+    exit(failures == 0 ? 0 : 1)
+}
+
+
 // Control center gauge details: the ps parser, the top-five sort, and the panel growing for the dropdown.
 if args.count >= 2, args[1] == "--test-control-center" {
     var failures = 0
@@ -1696,7 +1819,8 @@ if args.count >= 3, args[1] == "--render-notch-badges" {
 // Draws the control center (live stats after two samples) to a PNG, to check the design without clicking.
 if args.count >= 3, args[1] == "--render-control-center" {
     let cc = ControlCenter()
-    let detail: ControlCenterView.Detail? = args.contains("--detail-cpu") ? .cpu : args.contains("--detail-memory") ? .memory : nil
+    let detail: ControlCenterView.Detail? = args.contains("--detail-cpu") ? .cpu : args.contains("--detail-memory") ? .memory
+        : args.contains("--detail-fans") || args.contains("--fans-missing") ? .fans : nil
     let work: WorkTab? = args.firstIndex(of: "--work").flatMap { i in
         i + 1 < args.count ? WorkTab.allCases.first { $0.label.lowercased().hasPrefix(args[i + 1].lowercased()) } : nil }
     if work != nil {
@@ -1704,6 +1828,12 @@ if args.count >= 3, args[1] == "--render-control-center" {
         cc.loadWorkForDebug()
     }
     let v = cc.debugView(speed: args.contains("--with-speed"), detail: detail, work: work)
+    // Fans: real readings; --detail-fans shows a 62% manual setting, --fans-missing the install step.
+    v.temps = FanControl.shared.temps()
+    if detail == .fans {
+        v.fanHelper = args.contains("--fans-missing") ? .missing : .ready
+        if !args.contains("--fans-missing") { v.fanMode = .percent(62) }
+    }
     if args.contains("--mid-slide") { v.pageAnim = (work == nil ? .work : .controls, CACurrentMediaTime() - ControlCenter.slideFreeze) }
     let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds)!
     v.cacheDisplay(in: v.bounds, to: rep)

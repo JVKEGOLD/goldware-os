@@ -2,7 +2,8 @@
 
 The native macOS app: a menu bar assistant with voice dictation, a spoken assistant, hand-tracking
 Vision mode, a control center, and a window for the dashboard served by `server/goldware_server.py`.
-It is a SwiftPM executable target named `GoldWareOS`.
+It is a SwiftPM executable target named `GoldWareOS`, plus the `SMCKit` library and the
+`GoldWareFanHelper` executable that the Fans card can install as a root LaunchDaemon.
 
 ## Build
 
@@ -32,8 +33,9 @@ GOLDWARE_DATA=$TMPDIR/gw-data .build/release/GoldWareOS --test-wake
 
 Available: `--test-hand`, `--test-quadrants`, `--test-chord`, `--test-shelf`, `--test-wake`,
 `--test-terminal-commands`, `--test-plan-usage`, `--test-work`, `--test-control-center`,
+`--test-fans` (fan helper rules and temperatures; never writes the real fans),
 `--test-agent-peek` (agents on the pill and both hover glides).
-Renders: `--render-control-center out.png`, `--indicator-sheet out.png`.
+Renders: `--render-control-center out.png` (add `--detail-fans` or `--fans-missing`), `--indicator-sheet out.png`.
 
 ## Where data lives
 

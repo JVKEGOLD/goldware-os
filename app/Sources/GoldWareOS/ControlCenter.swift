@@ -1,4 +1,5 @@
 import AppKit
+import SMCKit
 import Darwin
 
 // MARK: - Live system readings
@@ -184,6 +185,7 @@ final class ControlCenter {
         panel = p
         view.refreshState()
         tick()
+        refreshFanHelper()
         refreshUsage()
         refreshWork(force: true)
         let size = view.intrinsicContentSize
@@ -227,6 +229,7 @@ final class ControlCenter {
 
     /// Once a second while open: fresh stats, and the switches and undo re-read in case voice changed them.
     private func tick() {
+        readFans()
         view.push(stats.sample())
         view.refreshState()
         refreshProcesses()
@@ -279,7 +282,7 @@ final class ControlCenter {
     private var procsAt: Date?
     private var procsBusy = false
     private func refreshProcesses() {
-        guard view.detail != nil, !procsBusy, procsAt.map({ Date().timeIntervalSince($0) >= 2 }) ?? true else { return }
+        guard view.detail != nil, view.detail != .fans, !procsBusy, procsAt.map({ Date().timeIntervalSince($0) >= 2 }) ?? true else { return }
         procsBusy = true
         procsAt = Date()
         DispatchQueue.global(qos: .utility).async {
@@ -290,6 +293,60 @@ final class ControlCenter {
                 self.view.procs = procs
                 self.view.needsDisplay = true
             }
+        }
+    }
+
+    // MARK: Fans
+
+    /// The SMC read is a few IOKit calls, cheap enough for the once-a-second tick while the panel shows.
+    private var tempsBusy = false
+    private func readFans() {
+        // Temperatures: about 110 keys a second (the first read scans the SMC's key list, ~70 ms), off the main thread.
+        if !tempsBusy {
+            tempsBusy = true
+            DispatchQueue.global(qos: .utility).async {
+                let t = FanControl.shared.temps()
+                DispatchQueue.main.async { self.tempsBusy = false; self.view.temps = t; self.view.needsDisplay = true }
+            }
+        }
+        view.fans = FanControl.shared.read()
+        view.fanMode = FanControl.shared.mode
+        view.fanOther = FanControl.shared.otherControllerRunning
+    }
+
+    /// Is the helper installed, current, and answering? Asked off the main thread on open.
+    func refreshFanHelper() {
+        let fc = FanControl.shared
+        DispatchQueue.global(qos: .utility).async {
+            let installed = fc.helperInstalled
+            let v = installed ? fc.helperVersion() : nil
+            let state: ControlCenterView.FanHelperState = !installed ? .missing : v == FanHelper.version ? .ready : .outdated
+            DispatchQueue.main.async { self.view.fanHelper = state; self.view.needsDisplay = true }
+        }
+    }
+
+    func setFans(_ m: FanControl.Mode) {
+        view.fanBusy = true; view.fanMessage = nil; view.needsDisplay = true
+        FanControl.shared.set(m) { [weak self] ok in
+            guard let self else { return }
+            self.view.fanBusy = false
+            self.view.fanMessage = ok ? nil : FanControl.shared.lastError.map { "Couldn't set the fans: \($0)" }
+            if !ok { self.refreshFanHelper() }
+            self.readFans()
+            self.view.needsDisplay = true
+        }
+    }
+
+    func installFanHelper() {
+        guard !view.fanBusy else { return }
+        view.fanBusy = true; view.fanMessage = nil; view.needsDisplay = true
+        FanControl.shared.install { [weak self] err in
+            guard let self else { return }
+            self.view.fanBusy = false
+            self.view.fanMessage = err
+            // launchd needs a moment to open the socket.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.refreshFanHelper() }
+            self.view.needsDisplay = true
         }
     }
 
@@ -391,10 +448,27 @@ final class ControlCenterView: NSView {
     var speedRunning = false
     var speedFailed = false
     var plans: [PlanUsage.Plan] = []
-    enum Detail { case cpu, memory }
+    enum Detail { case cpu, memory, fans }
     var detail: Detail?
     var procs: [TopProcesses.Proc] = []
     static let detailHeight: CGFloat = 208
+    /// The Fans dropdown is shorter than the process lists.
+    static let fanDetailHeight: CGFloat = 190
+    static func height(for d: Detail?) -> CGFloat { d == nil ? 0 : d == .fans ? fanDetailHeight : detailHeight }
+    /// The closed panel; the open one adds the dropdown. The fan row (34) fits because the toggle rows are 3 pt tighter.
+    static let baseHeight: CGFloat = 766
+    // Fans: live readings, the helper's state, and the slider while it is dragged.
+    enum FanHelperState { case unknown, missing, outdated, ready }
+    var fans: [FanReading] = []
+    var temps: [Temps.Group] = []
+    var fanHelper = FanHelperState.unknown
+    var fanMode = FanControl.Mode.auto
+    var fanDrag: Int?
+    var fanBusy = false
+    var fanOther = false
+    var fanMessage: String?
+    var sliders: [(rect: NSRect, change: (Double) -> Void, commit: (Double) -> Void)] = []
+    private var activeSlider: (rect: NSRect, change: (Double) -> Void, commit: (Double) -> Void)?
     enum Page: String { case controls, work }
     var page = Page(rawValue: UserDefaults.standard.string(forKey: "controlCenterPage") ?? "") ?? .controls
     var workTab = WorkTab(rawValue: UserDefaults.standard.integer(forKey: "controlCenterWorkTab")) ?? .needs
@@ -417,7 +491,7 @@ final class ControlCenterView: NSView {
     static let width: CGFloat = 340
     let pad: CGFloat = 18
     override var isFlipped: Bool { true }
-    override var intrinsicContentSize: NSSize { NSSize(width: Self.width, height: 744 + (detail == nil || page == .work ? 0 : Self.detailHeight)) }
+    override var intrinsicContentSize: NSSize { NSSize(width: Self.width, height: Self.baseHeight + (page == .work ? 0 : Self.height(for: detail))) }
 
     func refreshState() {
         guard let a = center?.actions else { return }
@@ -439,8 +513,14 @@ final class ControlCenterView: NSView {
             parts.append("CPU \(Int((s.cpu * 100).rounded())) percent")
             parts.append(String(format: "memory %.1f of %.0f gigabytes", s.memUsed / 1_073_741_824, s.memTotal / 1_073_741_824))
         }
-        if let d = detail {
+        if let d = detail, d != .fans {
             parts.append("top by \(d == .cpu ? "CPU" : "memory"): " + TopProcesses.top(procs, by: d).map(\.name).joined(separator: ", "))
+        }
+        if !temps.isEmpty {
+            parts.append("temperatures " + temps.map { "\($0.name.lowercased()) \(Int($0.average.rounded())) degrees" }.joined(separator: ", "))
+        }
+        if !fans.isEmpty {
+            parts.append("fans " + fans.map { "\(Int($0.actual)) rpm" }.joined(separator: " and ") + ", " + fanTag.lowercased())
         }
         if let s = speed { parts.append(String(format: "download %.0f, upload %.0f megabits, ping %.0f milliseconds", s.down, s.up, s.ping)) }
         for p in plans {
@@ -478,8 +558,23 @@ final class ControlCenterView: NSView {
 
     override func mouseDown(with e: NSEvent) {
         let p = convert(e.locationInWindow, from: nil)
+        if let s = sliders.first(where: { $0.rect.insetBy(dx: -6, dy: -8).contains(p) }) {
+            activeSlider = s
+            s.change(Self.fraction(p.x, in: s.rect))
+            return
+        }
         buttons.first { $0.rect.contains(p) }?.action()
     }
+    override func mouseDragged(with e: NSEvent) {
+        guard let s = activeSlider else { return }
+        s.change(Self.fraction(convert(e.locationInWindow, from: nil).x, in: s.rect))
+    }
+    override func mouseUp(with e: NSEvent) {
+        guard let s = activeSlider else { return }
+        activeSlider = nil
+        s.commit(Self.fraction(convert(e.locationInWindow, from: nil).x, in: s.rect))
+    }
+    static func fraction(_ x: CGFloat, in r: NSRect) -> Double { Double(max(0, min(1, (x - r.minX) / max(1, r.width)))) }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
@@ -487,6 +582,7 @@ final class ControlCenterView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         buttons.removeAll()
+        sliders.removeAll()
         let w = bounds.width
         let body = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 18, yRadius: 18)
         Theme.bg.setFill(); body.fill()
@@ -523,6 +619,7 @@ final class ControlCenterView: NSView {
             drawPage(a.from, top: contentTop, dx: -dir * w * slide, alpha: 1 - slide)
             drawPage(page, top: contentTop, dx: dir * w * (1 - slide), alpha: slide)
             buttons.removeSubrange(headerButtons...)   // nothing is clickable mid-slide
+            sliders.removeAll()
         } else {
             drawPage(page, top: contentTop, dx: 0, alpha: 1)
         }
@@ -547,7 +644,8 @@ final class ControlCenterView: NSView {
         y += 22
         let cardW = (w - pad * 2 - 10) / 2
         drawGauge(NSRect(x: pad, y: y, width: cardW, height: 92), title: "CPU",
-                  value: last.map { "\(Int(($0.cpu * 100).rounded()))%" } ?? "…", sub: "\(ProcessInfo.processInfo.activeProcessorCount) cores",
+                  value: last.map { "\(Int(($0.cpu * 100).rounded()))%" } ?? "…", 
+                  sub: "\(ProcessInfo.processInfo.activeProcessorCount) cores" + (temps.first { $0.name == "CPU" }.map { " · \(Int($0.average.rounded()))°C" } ?? ""),
                   series: cpu, selected: detail == .cpu) { [weak self] in self?.center?.toggleDetail(.cpu) }
         let pressure = last.map { $0.pressure >= 4 ? "pressure critical" : $0.pressure >= 2 ? "pressure warning" : "pressure normal" } ?? ""
         drawGauge(NSRect(x: pad + cardW + 10, y: y, width: cardW, height: 92), title: "MEMORY",
@@ -555,9 +653,15 @@ final class ControlCenterView: NSView {
                   sub: last.map { String(format: "of %.0f GB · %@", $0.memTotal / 1_073_741_824, pressure) } ?? "",
                   series: mem, warn: (last?.pressure ?? 1) >= 2, selected: detail == .memory) { [weak self] in self?.center?.toggleDetail(.memory) }
         y += 104
-        if let d = detail {
+        if let d = detail, d != .fans {
             drawDetail(NSRect(x: pad, y: y - 4, width: w - pad * 2, height: Self.detailHeight - 12), d)
             y += Self.detailHeight
+        }
+        drawFanRow(NSRect(x: pad, y: y - 4, width: w - pad * 2, height: 28))
+        y += 34
+        if detail == .fans {
+            drawFanDetail(NSRect(x: pad, y: y - 4, width: w - pad * 2, height: Self.fanDetailHeight - 12))
+            y += Self.fanDetailHeight
         }
 
         // Network
@@ -714,6 +818,119 @@ final class ControlCenterView: NSView {
         Theme.border.setStroke(); p.lineWidth = 1; p.stroke()
     }
 
+    /// What the fans are doing, in one short word for the row's tag.
+    var fanTag: String {
+        if fanBusy { return "…" }
+        if let p = fanDrag { return "\(p)%" }
+        switch fanMode {
+        case .max: return "MAX"
+        case .percent(let p): return "\(p)%"
+        case .auto: return fans.contains(where: \.manual) ? "OTHER APP" : "AUTO"
+        }
+    }
+
+    /// One line under the gauges: both fans' RPM and the mode; click to open the controls.
+    private func drawFanRow(_ r: NSRect) {
+        let selected = detail == .fans
+        drawCard(r)
+        if selected || hover == r {
+            let p = NSBezierPath(roundedRect: r.insetBy(dx: 0.5, dy: 0.5), xRadius: 12, yRadius: 12)
+            (selected ? Theme.gold : Theme.borderLight).setStroke(); p.lineWidth = 1; p.stroke()
+        }
+        buttons.append((r, { [weak self] in self?.center?.toggleDetail(.fans) }))
+        Theme.draw("FANS", at: NSPoint(x: r.minX + 12, y: r.minY + 8), font: Theme.sans(9.5, "Medium"), color: Theme.textMuted, kern: 1.6)
+        let rpm = fans.isEmpty ? "…" : fans.map { "\(Int($0.actual))" }.joined(separator: " · ")
+        let v = Theme.draw(rpm, at: NSPoint(x: r.minX + 62, y: r.minY + 6), font: Theme.mono(11), color: Theme.text).width
+        if !fans.isEmpty { Theme.draw("rpm", at: NSPoint(x: r.minX + 62 + v + 4, y: r.minY + 8), font: Theme.sans(10.5), color: Theme.textMuted) }
+        let tag = fanTag, tf = Theme.mono(9.5, "Regular")
+        let tw = Theme.size(tag, font: tf, kern: 0.6).width
+        Theme.draw(tag, at: NSPoint(x: r.maxX - 32 - tw, y: r.minY + 8), font: tf,
+                   color: fanMode == .auto && tag != "OTHER APP" ? Theme.textMuted : Theme.goldHi, kern: 0.6)
+        let cx = r.maxX - 16, cy = r.midY
+        let chev = NSBezierPath()
+        chev.move(to: NSPoint(x: cx - 4, y: cy + (selected ? 2 : -2)))
+        chev.line(to: NSPoint(x: cx, y: cy + (selected ? -2 : 2)))
+        chev.line(to: NSPoint(x: cx + 4, y: cy + (selected ? 2 : -2)))
+        (selected || hover == r ? Theme.goldHi : Theme.textMuted).setStroke(); chev.lineWidth = 1.4; chev.lineCapStyle = .round; chev.stroke()
+    }
+
+    /// The dropdown: each fan's speed as a bar, Auto and Max, and one slider for both fans.
+    private func drawFanDetail(_ r: NSRect) {
+        drawCard(r)
+        let names = fans.count == 2 ? ["LEFT", "RIGHT"] : fans.indices.map { "FAN \($0 + 1)" }
+        for (i, f) in fans.prefix(3).enumerated() {
+            let ry = r.minY + 12 + CGFloat(i) * 18
+            Theme.draw(names[i], at: NSPoint(x: r.minX + 14, y: ry), font: Theme.sans(9.5, "Medium"), color: Theme.textMuted, kern: 1.6)
+            let bar = NSRect(x: r.minX + 66, y: ry + 4, width: r.width - 160, height: 5)
+            Theme.surface2.setFill(); NSBezierPath(roundedRect: bar, xRadius: 2.5, yRadius: 2.5).fill()
+            var fill = bar; fill.size.width = bar.width * CGFloat(FanMath.percent(rpm: f.actual, min: f.min, max: f.max)) / 100
+            Theme.goldHi.setFill(); NSBezierPath(roundedRect: fill, xRadius: 2.5, yRadius: 2.5).fill()
+            let t = "\(Int(f.actual)) rpm", vf = Theme.mono(10)
+            Theme.draw(t, at: NSPoint(x: r.maxX - 14 - Theme.size(t, font: vf).width, y: ry + 1), font: vf, color: Theme.text)
+        }
+        if fans.isEmpty {
+            Theme.draw("Reading the fans…", at: NSPoint(x: r.minX + 14, y: r.minY + 12), font: Theme.sans(12), color: Theme.textMuted)
+        }
+        Theme.surface2.setFill()
+        NSRect(x: r.minX + 14, y: r.minY + 52, width: r.width - 28, height: 1).fill()
+        // Temperatures: each group's average; red from 90°C.
+        let tw = (r.width - 28) / 5
+        for (i, t) in temps.prefix(5).enumerated() {
+            let x = r.minX + 14 + CGFloat(i) * tw
+            Theme.draw(t.name == "BATTERY" ? "BATT" : t.name == "MEMORY" ? "MEM" : t.name, at: NSPoint(x: x, y: r.minY + 61),
+                       font: Theme.sans(9.5, "Medium"), color: Theme.textMuted, kern: 1.6)
+            Theme.draw("\(Int(t.average.rounded()))°", at: NSPoint(x: x, y: r.minY + 75), font: Theme.mono(12),
+                       color: t.hottest >= 90 ? Theme.red : Theme.text)
+        }
+        if temps.isEmpty {
+            Theme.draw("Reading temperatures…", at: NSPoint(x: r.minX + 14, y: r.minY + 66), font: Theme.sans(12), color: Theme.textMuted)
+        }
+        Theme.surface2.setFill()
+        NSRect(x: r.minX + 14, y: r.minY + 94, width: r.width - 28, height: 1).fill()
+
+        let row = r.minY + 102
+        switch fanHelper {
+        case .missing, .outdated:
+            Theme.draw(fanHelper == .missing ? "Speed control needs a helper" : "The fan helper needs an update",
+                       at: NSPoint(x: r.minX + 14, y: row), font: Theme.sans(12.5, "SemiBold"), color: Theme.text)
+            Theme.draw(fanMessage ?? "One password prompt, then \(GWConfig.name) sets speeds", at: NSPoint(x: r.minX + 14, y: row + 18),
+                       font: Theme.sans(11), color: fanMessage == nil ? Theme.textMuted : Theme.red)
+            button(NSRect(x: r.minX + 14, y: row + 40, width: 120, height: 28), fanBusy ? "Installing…" : fanHelper == .missing ? "Install" : "Update",
+                   gold: true) { [weak self] in self?.center?.installFanHelper() }
+        case .unknown, .ready:
+            let auto = fanMode == .auto && fanDrag == nil, max = fanMode == .max && fanDrag == nil
+            button(NSRect(x: r.minX + 14, y: row, width: 64, height: 28), "Auto", gold: auto) { [weak self] in self?.center?.setFans(.auto) }
+            button(NSRect(x: r.minX + 84, y: row, width: 64, height: 28), "Max", gold: max) { [weak self] in self?.center?.setFans(.max) }
+            // One slider for both fans: 0% is each fan's minimum, 100% its maximum.
+            let track = NSRect(x: r.minX + 164, y: row + 12, width: r.maxX - 14 - (r.minX + 164) - 34, height: 4)
+            let pct: Int = fanDrag ?? { if case .percent(let p) = fanMode { return p }; if fanMode == .max { return 100 }
+                return fans.first.map { FanMath.percent(rpm: $0.actual, min: $0.min, max: $0.max) } ?? 0 }()
+            Theme.surface2.setFill(); NSBezierPath(roundedRect: track, xRadius: 2, yRadius: 2).fill()
+            let kx = track.minX + track.width * CGFloat(pct) / 100
+            let manual: Bool = { if case .percent = fanMode { return true }; return fanDrag != nil }()
+            (manual ? Theme.goldHi : Theme.textMuted).setFill()
+            NSBezierPath(roundedRect: NSRect(x: track.minX, y: track.minY, width: kx - track.minX, height: track.height), xRadius: 2, yRadius: 2).fill()
+            let knob = NSBezierPath(ovalIn: NSRect(x: kx - 7, y: track.midY - 7, width: 14, height: 14))
+            (manual ? Theme.gold : Theme.textDim).setFill(); knob.fill()
+            (manual ? Theme.goldHi : Theme.borderLight).setStroke(); knob.lineWidth = 1; knob.stroke()
+            let pt = "\(pct)%", pf = Theme.mono(10)
+            Theme.draw(pt, at: NSPoint(x: r.maxX - 14 - Theme.size(pt, font: pf).width, y: row + 7), font: pf, color: manual ? Theme.goldHi : Theme.textMuted)
+            sliders.append((track, { [weak self] f in
+                self?.fanDrag = Int((f * 100).rounded()); self?.needsDisplay = true
+            }, { [weak self] f in
+                guard let self else { return }
+                self.fanDrag = nil
+                self.center?.setFans(.percent(Int((f * 100).rounded())))
+            }))
+            let note: (String, NSColor)
+            if let m = fanMessage { note = (m, Theme.red) }
+            else if fanOther { note = ("Macs Fan Control is running and overrides this", Theme.red) }
+            else if fanMode == .auto { note = ("Auto: macOS sets the speed", Theme.textMuted) }
+            else { note = ("Back to auto when \(GWConfig.name) quits", Theme.textMuted) }
+            Theme.draw(note.0, at: NSPoint(x: r.minX + 14, y: row + 40), font: Theme.sans(11), color: note.1)
+        }
+    }
+
     private func drawGauge(_ r: NSRect, title: String, value: String, sub: String, series: [Double], warn: Bool = false,
                            selected: Bool = false, action: @escaping () -> Void) {
         drawCard(r)
@@ -764,6 +981,8 @@ final class ControlCenterView: NSView {
             let up = Int(ProcessInfo.processInfo.systemUptime)
             let load = (s?.load ?? []).map { String(format: "%.2f", $0) }.joined(separator: " · ")
             note = "Load \(load.isEmpty ? "…" : load)  ·  up \(up / 86_400)d \(up % 86_400 / 3600)h"
+        case .fans:
+            return
         case .memory:
             cols = [("APP", s.map { gb($0.app) } ?? "…"), ("WIRED", s.map { gb($0.wired) } ?? "…"), ("COMPRESSED", s.map { gb($0.compressed) } ?? "…")]
             note = "Cached files \(s.map { gb($0.cached) } ?? "…")  ·  swap \(s.map { gb($0.swapUsed) } ?? "…")"
@@ -802,7 +1021,7 @@ final class ControlCenterView: NSView {
     }
 
     private func toggleRow(_ y: CGFloat, _ title: String, _ sub: String, on: Bool, action: @escaping () -> Void) -> CGFloat {
-        let r = NSRect(x: pad, y: y, width: bounds.width - pad * 2, height: 42)
+        let r = NSRect(x: pad, y: y, width: bounds.width - pad * 2, height: 40)
         if hover == r { let p = NSBezierPath(roundedRect: r, xRadius: 10, yRadius: 10); Theme.surface.setFill(); p.fill() }
         Theme.draw(title, at: NSPoint(x: r.minX + 8, y: r.minY + 5), font: Theme.sans(13, "SemiBold"), color: Theme.text)
         Theme.draw(sub, at: NSPoint(x: r.minX + 8, y: r.minY + 22), font: Theme.sans(11), color: Theme.textMuted)
@@ -814,7 +1033,7 @@ final class ControlCenterView: NSView {
         let knob = NSBezierPath(ovalIn: NSRect(x: on ? sw.maxX - 18 : sw.minX + 2, y: sw.minY + 2, width: 16, height: 16))
         (on ? Theme.bg : Theme.textDim).setFill(); knob.fill()
         buttons.append((r, action))
-        return y + 44
+        return y + 41
     }
 
     func button(_ r: NSRect, _ title: String, gold: Bool, action: @escaping () -> Void) {

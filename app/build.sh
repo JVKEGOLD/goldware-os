@@ -17,6 +17,8 @@ cp Resources/goldware-logo.png "$APP/Contents/Resources/"
 # The checkout this app belongs to (config, server, dashboard). Read by VaultContext.resolveRoot().
 (cd .. && pwd) > "$APP/Contents/Resources/goldware-root.txt"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/"   # regenerate with make_icon.swift (see its header)
+# The fan helper: installed as a root LaunchDaemon only from the control center's Fans card.
+cp .build/release/GoldWareFanHelper "$APP/Contents/Resources/GoldWareFanHelper"
 # Face ID's fingerprint model (SFace, Apache 2.0, see ThirdParty/sface-LICENSE), compiled for Core ML.
 mkdir -p "$APP/Contents/Resources/FaceID"
 # Compiled with the system Core ML framework, so the Command Line Tools are enough (no full Xcode).
@@ -52,6 +54,7 @@ PLIST
 # Same signature on every build, so macOS keeps the permissions across updates (see signing.sh).
 IFS=$'\t' read -r IDENTITY KEYCHAIN <<< "$(./signing.sh)"
 kcargs=(); [[ -n "$KEYCHAIN" ]] && kcargs=(--keychain "$KEYCHAIN")
+codesign --force --sign "$IDENTITY" "${kcargs[@]}" "$APP/Contents/Resources/GoldWareFanHelper"
 codesign --force --sign "$IDENTITY" "${kcargs[@]}" "$APP"
 if [[ "$IDENTITY" == "-" ]]; then
   echo "Built $APP (signed ad-hoc)"

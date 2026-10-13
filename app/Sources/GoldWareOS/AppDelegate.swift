@@ -182,6 +182,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        FanControl.shared.applicationWillTerminate()
         whisper.stop()
         commandCenter.stopIfStartedHere()
     }

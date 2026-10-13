@@ -123,6 +123,8 @@ rm -rf "$HOME/Library/Caches/io.goldware.os" "$HOME/Library/WebKit/io.goldware.o
 defaults delete io.goldware.os
 ```
 
+If you installed the fan helper from the control center's Fans card, remove it too (see Fans and temperatures).
+
 The `tccutil` line clears the camera, microphone, and other permissions you granted. It has to run while the app is still in Applications; if you already deleted it, macOS no longer knows the app and says "No such bundle identifier", which is harmless (the leftover permission entries do nothing). Accessibility may still list GoldWare OS in System Settings > Privacy & Security > Accessibility; select it and click the minus button.
 
 2. Remove the GoldWare iTerm profile (your other iTerm profiles are not touched):
@@ -209,6 +211,21 @@ Say a voice phrase on its own (optionally after "Hey" or the assistant's name) w
 ## Make it yours
 
 GoldWare OS is meant to be reshaped. Rename the assistant, change the wake phrase, add dashboard cards, swap the model, or add voice commands by asking your AI agent. [docs/CUSTOMIZING.md](docs/CUSTOMIZING.md) maps every setting and where it lives.
+
+## Fans and temperatures
+
+The row under the control center's CPU and Memory gauges shows each fan's RPM (read straight from the SMC, no root needed, once a second while the panel is open) and the mode: AUTO, MAX, a percent, or OTHER APP when something else (Macs Fan Control) holds the fans in manual. The CPU gauge adds the CPU's average temperature. Click the Fans row for the dropdown: a bar per fan, live temperatures (CPU, GPU, memory, SSD, battery: each group's average from the SMC's Tp, Tg, Tm, TH, and TB sensors, the Stats app's Apple silicon convention, red from 90°C), Auto, Max, and one slider for both fans (0% is each fan's minimum, 100% its maximum; it sets on release).
+
+Setting speeds needs root, so the first time the dropdown offers Install. One macOS password prompt copies `GoldWareFanHelper` out of the app into `/Library/PrivilegedHelperTools/io.goldware.os.fanhelper` (root-owned) and loads it as the LaunchDaemon `io.goldware.os.fanhelper`. The helper listens on `/var/run/io.goldware.os.fanhelper.sock`, answers only your user, and takes only the words `auto`, `max`, `set 0` to `set 100`, `ping`, `status`, and `version`. A manual speed holds only while GoldWare OS is running: it pings every 5 s, and the helper returns the fans to Apple's control when the app quits, crashes, or goes 20 s silent, and on its own restart. Quit Macs Fan Control first, or the two fight (the dropdown warns while it runs). Nothing is installed until you click Install; reading fans and temperatures never needs it.
+
+Remove the helper:
+
+```sh
+sudo launchctl bootout system/io.goldware.os.fanhelper
+sudo rm /Library/LaunchDaemons/io.goldware.os.fanhelper.plist /Library/PrivilegedHelperTools/io.goldware.os.fanhelper
+```
+
+Test: `GoldWareOS --test-fans` (never writes to the real fans). Code: `app/Sources/GoldWareOS/Fans.swift`, `app/Sources/SMCKit`, `app/Sources/GoldWareFanHelper`.
 
 ## Other permissions
 
