@@ -6,16 +6,13 @@ import ScreenCaptureKit
 /// Tutorial recorder (a Loom of your own): records the screen the pointer is on, a round camera bubble,
 /// a halo around the pointer that ripples on every click, and a pen for drawing on the screen.
 /// The bubble, halo and ink are real windows on that screen, so the capture picks them up as they
-/// are; the Quick Tools ball and its panel (where the tools and Stop live) are left out of the video.
+/// are; the Quick Tools button and its panel (where the tools and Stop live) are left out of the video.
 /// Saves an .mp4 to ~/Movies/<assistant name> Recordings, where the Quick Tools panel lists it.
 ///
 /// Shortcuts while it runs: ⌃⌥R start or stop, ⌃⌥D pen on or off, ⌃⌥C clear the ink, Esc leaves the
 /// pen (or cancels the countdown).
 enum Tutorial {
     static let countdown = 3
-    /// A stroke stays this long after the pen lifts, then fades out, so the screen never clutters.
-    static let strokeHold: TimeInterval = 5
-    static let strokeFade: TimeInterval = 0.6
     static let haloRadius: CGFloat = 24
     static let rippleLength: TimeInterval = 0.45
     static let bubbleSize: CGFloat = 220
@@ -93,7 +90,7 @@ enum Tutorial {
     }
 
     /// What the ink layer must repaint after the pointer moves: the old and new halo spots (and a running
-    /// ripple), or nil for the whole screen when the spotlight, a fade, the countdown or a stroke changes
+    /// ripple), or nil for the whole screen when the spotlight, the countdown or a stroke changes
     /// more than that. A full-screen redraw at 60 Hz for a moving pointer was the main idle cost.
     static func dirtyRect(old: NSPoint?, new: NSPoint?, ripple: NSPoint?, full: Bool) -> NSRect? {
         guard !full else { return nil }
@@ -101,13 +98,6 @@ enum Tutorial {
         let spots = [old, new, ripple].compactMap { $0 }.map { NSRect(x: $0.x - r, y: $0.y - r, width: r * 2, height: r * 2) }
         guard let first = spots.first else { return .zero }
         return spots.dropFirst().reduce(first) { $0.union($1) }
-    }
-
-    /// 1 while drawing and for `strokeHold` after the pen lifts, then a linear fade to 0.
-    static func strokeAlpha(endedAt: TimeInterval?, now: TimeInterval) -> CGFloat {
-        guard let end = endedAt else { return 1 }
-        let t = now - end - strokeHold
-        return t <= 0 ? 1 : CGFloat(max(0, 1 - t / strokeFade))
     }
 
     /// 0 to 1 through a click ripple, nil when there is none.
@@ -151,16 +141,10 @@ final class InkView: NSView {
     var spotlightOn = false
     var now: () -> TimeInterval = { CACurrentMediaTime() }
 
-    /// True while anything still moves (a fade or a ripple), so the timer knows to redraw.
+    /// True while a click ripple still runs, so the timer knows to redraw. Ink stays until cleared.
     var animating: Bool {
         let t = now()
         return Tutorial.ripple(since: rippleAt, now: t) != nil
-            || strokes.contains { $0.endedAt.map { t - $0 >= Tutorial.strokeHold } ?? false }
-    }
-
-    func prune() {
-        let t = now()
-        strokes.removeAll { $0.endedAt != nil && Tutorial.strokeAlpha(endedAt: $0.endedAt, now: t) <= 0 }
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -175,9 +159,7 @@ final class InkView: NSView {
             dim.fill()
         }
         for s in strokes where s.points.count > 0 {
-            let a = Tutorial.strokeAlpha(endedAt: s.endedAt, now: t)
-            guard a > 0 else { continue }
-            s.color.withAlphaComponent(a).setStroke()
+            s.color.setStroke()
             let p = Self.smooth(s.points)
             p.lineWidth = Tutorial.penWidth
             p.lineCapStyle = .round
@@ -272,7 +254,7 @@ final class TutorialSession: NSObject, SCStreamDelegate, SCRecordingOutputDelega
     var onFinish: (URL?, String?) -> Void = { _, _ in }
     /// Called when the phase, a tool, or the elapsed second changes (Quick Tools redraws).
     var onChange: () -> Void = {}
-    /// Windows left out of the video (the Quick Tools ball and panel).
+    /// Windows left out of the video (the Quick Tools button and panel).
     var excludedWindowIDs: () -> [CGWindowID] = { [] }
 
     let url: URL
@@ -356,14 +338,8 @@ final class TutorialSession: NSObject, SCStreamDelegate, SCRecordingOutputDelega
                 throw NSError(domain: "Tutorial", code: 1, userInfo: [NSLocalizedDescriptionKey: "No display to record"])
             }
             let filter = SCContentFilter(display: display, excludingWindows: content.windows.filter { hidden.contains($0.windowID) })
-            let cfg = SCStreamConfiguration()
-            cfg.width = Int(CGFloat(display.width) * scale)
-            cfg.height = Int(CGFloat(display.height) * scale)
-            cfg.minimumFrameInterval = CMTime(value: 1, timescale: 60)
-            cfg.showsCursor = true
-            cfg.capturesAudio = false
-            cfg.captureMicrophone = true
-            cfg.microphoneCaptureDeviceID = Tutorial.micDeviceID()
+            let cfg = Self.streamConfig(width: Int(CGFloat(display.width) * scale), height: Int(CGFloat(display.height) * scale),
+                                        mic: Tutorial.micDeviceID())
             let rc = SCRecordingOutputConfiguration()
             rc.outputURL = url
             rc.outputFileType = .mp4
@@ -383,6 +359,23 @@ final class TutorialSession: NSObject, SCStreamDelegate, SCRecordingOutputDelega
         } catch {
             await MainActor.run { finish(nil, "Couldn't start recording: \(error.localizedDescription)") }
         }
+    }
+
+    /// What the stream records: the display at full resolution and 60 fps with the pointer, your voice,
+    /// and the computer's own sound (videos, apps, browser), leaving out the app's own chimes.
+    static func streamConfig(width: Int, height: Int, mic: String?) -> SCStreamConfiguration {
+        let cfg = SCStreamConfiguration()
+        cfg.width = width
+        cfg.height = height
+        cfg.minimumFrameInterval = CMTime(value: 1, timescale: 60)
+        cfg.showsCursor = true
+        cfg.capturesAudio = true
+        cfg.excludesCurrentProcessAudio = true
+        cfg.sampleRate = 48_000
+        cfg.channelCount = 2
+        cfg.captureMicrophone = true
+        cfg.microphoneCaptureDeviceID = mic
+        return cfg
     }
 
     /// Stops and saves; during the countdown it cancels and saves nothing.
@@ -488,7 +481,6 @@ final class TutorialSession: NSObject, SCStreamDelegate, SCRecordingOutputDelega
         lastPointer = p
         inkView.pointer = p
         inkView.pressed = pressed
-        inkView.prune()
         if dirty {
             if let r = Tutorial.dirtyRect(old: lastDrawn, new: p, ripple: Tutorial.ripple(since: inkView.rippleAt, now: inkView.now()) != nil ? inkView.rippleCenter : nil,
                                           full: inkView.spotlightOn || inkView.animating || inkView.countdown != nil || (inkView.penOn && pressed)) {
@@ -557,7 +549,7 @@ final class TutorialSession: NSObject, SCStreamDelegate, SCRecordingOutputDelega
         v.strokes = [
             .init(points: (0...40).map { i in NSPoint(x: 120 + Double(i) * 8, y: 300 + 50 * sin(Double(i) / 6)) }, endedAt: t - 1),
             .init(points: (0...40).map { i in NSPoint(x: 140 + Double(i) * 8, y: 180 + 30 * cos(Double(i) / 5)) },
-                  endedAt: t - Tutorial.strokeHold - Tutorial.strokeFade / 2, color: Tutorial.penColors[2]),
+                  endedAt: t - 60, color: Tutorial.penColors[2]),
         ]
         v.pointer = NSPoint(x: 640, y: 320)
         v.spotlightOn = true

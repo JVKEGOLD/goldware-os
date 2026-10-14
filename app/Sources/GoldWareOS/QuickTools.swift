@@ -5,7 +5,7 @@ import AVKit
 /// Quick Tools: a small gold button on the right edge of the screen, opening a panel of the tools you use often. While a tutorial records, the panel holds the
 /// recording tools (pen and colours, spotlight, pointer halo, camera bubble, clear) and a big Stop.
 /// Otherwise it holds Record plus the recordings themselves: click one to watch it in the panel, drag
-/// it out to drop the file anywhere. The ball and panel are left out of the video.
+/// it out to drop the file anywhere. The button and panel are left out of the video.
 enum QuickToolsRules {
     static let tab = NSSize(width: 30, height: 30)
     static let width: CGFloat = 340
@@ -17,7 +17,7 @@ enum QuickToolsRules {
         NSRect(x: visible.maxX - tab.width - 2, y: (visible.midY - tab.height / 2).rounded(), width: tab.width, height: tab.height)
     }
 
-    /// Flush with the right edge, centred on the ball, kept on screen.
+    /// Flush with the right edge, centred on the button, kept on screen.
     static func panelFrame(in visible: NSRect, height: CGFloat) -> NSRect {
         let h = min(height, visible.height - 16)
         let y = min(max(visible.midY - h / 2, visible.minY + 8), visible.maxY - 8 - h)
@@ -87,7 +87,7 @@ final class QuickTools: NSObject {
     private var entered = false
     private(set) var isOpen = false
 
-    /// Window ids to leave out of a recording: the ball and the panel (built now if it wasn't yet).
+    /// Window ids to leave out of a recording: the button and the panel (built now if it wasn't yet).
     var windowIDs: [CGWindowID] {
         if panel == nil { panel = makePanel() }
         return [strip, panel].compactMap { $0 }.map { CGWindowID($0.windowNumber) }
@@ -251,7 +251,7 @@ final class ToolPanel: NSPanel {
     override func cancelOperation(_ sender: Any?) { onEscape?() }
 }
 
-// MARK: The ball
+// MARK: The button
 
 /// The Quick Tools button: a small dark disc with a gold ring and a gold record dot, faded at rest,
 /// full on hover or while a tutorial runs (then the dot turns red and the ring with it).
@@ -411,7 +411,7 @@ final class ToolsView: NSView {
     private func idle(y start: CGFloat, w: CGFloat) -> CGFloat {
         var y = start
         let rec = Tile(title: "●  Record a Tutorial", symbol: nil, on: false, danger: true,
-                       detail: "Screen, voice, camera bubble, halo, pen") { [weak self] in self?.onAction("record") }
+                       detail: "Screen, voice, computer sound, camera, pen") { [weak self] in self?.onAction("record") }
         add(rec, x: pad, y: y, w: w, h: 56, id: "record")
         y += 70
         if let sel = selected, FileManager.default.fileExists(atPath: sel.path) {

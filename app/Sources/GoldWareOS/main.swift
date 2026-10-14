@@ -1087,9 +1087,10 @@ if args.count >= 2, args[1] == "--test-tutorial" {
     expect("no key with Command, Shift or one modifier",
            Tutorial.key(15, [.control, .option, .command]) == nil && Tutorial.key(15, [.control, .option, .shift]) == nil &&
            Tutorial.key(15, [.option]) == nil && Tutorial.key(15, []) == nil && Tutorial.key(53, [.command]) == nil && Tutorial.key(12, [.control, .option]) == nil)
-    expect("ink holds while drawing and for the hold time", Tutorial.strokeAlpha(endedAt: nil, now: 50) == 1 && Tutorial.strokeAlpha(endedAt: 10, now: 10 + Tutorial.strokeHold) == 1)
-    expect("ink fades out after the hold", abs(Tutorial.strokeAlpha(endedAt: 10, now: 10 + Tutorial.strokeHold + Tutorial.strokeFade / 2) - 0.5) < 0.01 &&
-           Tutorial.strokeAlpha(endedAt: 10, now: 10 + Tutorial.strokeHold + Tutorial.strokeFade + 1) == 0)
+    let ink = InkView(frame: NSRect(x: 0, y: 0, width: 100, height: 100))
+    ink.strokes = [.init(points: [NSPoint(x: 1, y: 1), NSPoint(x: 9, y: 9)], endedAt: 0)]
+    ink.now = { 3600 }
+    expect("ink stays until cleared (an hour-old stroke is still there, nothing animates)", ink.strokes.count == 1 && !ink.animating)
     expect("a click ripples once, then stops", Tutorial.ripple(since: 5, now: 5) == 0 && Tutorial.ripple(since: 5, now: 5 + Tutorial.rippleLength) == nil &&
            Tutorial.ripple(since: nil, now: 5) == nil && Tutorial.ripple(since: 5, now: 4) == nil)
     let b = Tutorial.bubbleFrame(in: NSRect(x: 0, y: 80, width: 1512, height: 870))
@@ -1113,6 +1114,12 @@ if args.count >= 2, args[1] == "--test-tutorial" {
            f.pathExtension == "mp4" && f.path.contains("/Movies/\(Tutorial.folderName(for: me))/Tutorial "))
     expect("the folder name follows the assistant name and is safe", Tutorial.folderName(for: "GoldWare") == "GoldWare Recordings" &&
            Tutorial.folderName(for: "A/B:C") == "A-B-C Recordings" && Tutorial.folderName(for: "  ") == "GoldWare Recordings")
+    if #available(macOS 15.0, *) {
+        let c = TutorialSession.streamConfig(width: 3024, height: 1964, mic: "built-in")
+        expect("records the computer's sound and your voice, not the app's own chimes",
+               c.capturesAudio && c.excludesCurrentProcessAudio && c.captureMicrophone && c.microphoneCaptureDeviceID == "built-in" && c.sampleRate == 48_000 && c.channelCount == 2)
+        expect("full resolution at 60 fps with the pointer", c.width == 3024 && c.height == 1964 && c.showsCursor && c.minimumFrameInterval == CMTime(value: 1, timescale: 60))
+    }
     expect("AirPods mic falls back to the built-in mic", Tutorial.useBuiltInMic(defaultTransport: kAudioDeviceTransportTypeBluetooth) &&
            Tutorial.useBuiltInMic(defaultTransport: kAudioDeviceTransportTypeBluetoothLE) &&
            !Tutorial.useBuiltInMic(defaultTransport: kAudioDeviceTransportTypeBuiltIn) && !Tutorial.useBuiltInMic(defaultTransport: kAudioDeviceTransportTypeUSB))
@@ -1121,7 +1128,7 @@ if args.count >= 2, args[1] == "--test-tutorial" {
     let tab = QuickToolsRules.tabFrame(in: vis)
     expect("the Quick Tools button hugs the right edge, mid height", tab.maxX >= vis.maxX - 4 && abs(tab.midY - vis.midY) <= 1 && tab.width <= 40)
     let pf = QuickToolsRules.panelFrame(in: vis, height: 420)
-    expect("the panel opens flush right, centred on the ball, on screen", pf.maxX == vis.maxX && abs(pf.midY - vis.midY) <= 1 && vis.contains(pf))
+    expect("the panel opens flush right, centred on the button, on screen", pf.maxX == vis.maxX && abs(pf.midY - vis.midY) <= 1 && vis.contains(pf))
     expect("a panel taller than the screen is clamped", vis.contains(QuickToolsRules.panelFrame(in: vis, height: 5000)))
     expect("it tucks away after the pointer leaves", QuickToolsRules.shouldClose(inside: false, entered: true, busy: false, outsideFor: 0.3))
     expect("it stays while a video plays or a file drags", !QuickToolsRules.shouldClose(inside: false, entered: true, busy: true, outsideFor: 9))
