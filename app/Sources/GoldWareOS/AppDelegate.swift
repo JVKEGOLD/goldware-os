@@ -962,7 +962,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(item("Edit Vocabulary…", #selector(editVocabulary)))
         menu.addItem(item("Edit Snippets…", #selector(editSnippets)))
         menu.addItem(item("Open Data Folder", #selector(openDataFolder)))
-        let tools = item("Quick Tools (Great Ball on the right edge)", #selector(toggleQuickTools))
+        let tools = item("Quick Tools (button on the right edge)", #selector(toggleQuickTools))
         tools.state = QuickTools.enabled ? .on : .off
         menu.addItem(tools)
         let sounds = item("Sounds", #selector(toggleSounds))

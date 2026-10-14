@@ -36,7 +36,7 @@ Available: `--test-hand`, `--test-quadrants`, `--test-chord`, `--test-shelf`, `-
 `--test-fans` (fan helper rules and temperatures; never writes the real fans),
 `--test-agent-peek` (agents on the pill and both hover glides),
 `--test-tutorial` (tutorial recorder and Quick Tools rules; builds the panels offscreen, never records or opens a window).
-Renders: `--render-tutorial out.png` (ink layer, Quick Tools panels, Great Ball), `--render-control-center out.png` (add `--detail-fans` or `--fans-missing`), `--indicator-sheet out.png`.
+Renders: `--render-tutorial out.png` (ink layer, Quick Tools panels, the Quick Tools button), `--render-control-center out.png` (add `--detail-fans` or `--fans-missing`), `--indicator-sheet out.png`.
 
 ## Where data lives
 

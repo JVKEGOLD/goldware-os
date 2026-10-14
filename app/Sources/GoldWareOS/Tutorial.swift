@@ -74,6 +74,35 @@ enum Tutorial {
         NSRect(x: visible.minX + bubbleInset, y: visible.minY + bubbleInset, width: size, height: size)
     }
 
+    /// How close (beyond its edge) the pointer may come before the camera bubble jumps away.
+    static let dodgeMargin: CGFloat = 12
+
+    /// Where the camera bubble goes when the pointer reaches it: the corner of the visible screen
+    /// farthest from the pointer, so whatever sat under the bubble is free. Nil while the pointer is
+    /// clear of it, while Option is held (hold Option to grab and drag the bubble), or while a mouse
+    /// button is down (mid-drag or mid-stroke).
+    static func dodge(bubble: NSRect, pointer: NSPoint, visible: NSRect, option: Bool, mouseDown: Bool) -> NSRect? {
+        guard !option, !mouseDown else { return nil }
+        let c = NSPoint(x: bubble.midX, y: bubble.midY)
+        guard hypot(pointer.x - c.x, pointer.y - c.y) <= bubble.width / 2 + dodgeMargin else { return nil }
+        let s = bubble.width, i = bubbleInset
+        let corners = [NSPoint(x: visible.minX + i, y: visible.minY + i), NSPoint(x: visible.maxX - i - s, y: visible.minY + i),
+                       NSPoint(x: visible.minX + i, y: visible.maxY - i - s), NSPoint(x: visible.maxX - i - s, y: visible.maxY - i - s)]
+        let far = corners.max { hypot($0.x + s / 2 - pointer.x, $0.y + s / 2 - pointer.y) < hypot($1.x + s / 2 - pointer.x, $1.y + s / 2 - pointer.y) }!
+        return NSRect(origin: far, size: bubble.size)
+    }
+
+    /// What the ink layer must repaint after the pointer moves: the old and new halo spots (and a running
+    /// ripple), or nil for the whole screen when the spotlight, a fade, the countdown or a stroke changes
+    /// more than that. A full-screen redraw at 60 Hz for a moving pointer was the main idle cost.
+    static func dirtyRect(old: NSPoint?, new: NSPoint?, ripple: NSPoint?, full: Bool) -> NSRect? {
+        guard !full else { return nil }
+        let r = haloRadius * 2.6 + 4
+        let spots = [old, new, ripple].compactMap { $0 }.map { NSRect(x: $0.x - r, y: $0.y - r, width: r * 2, height: r * 2) }
+        guard let first = spots.first else { return .zero }
+        return spots.dropFirst().reduce(first) { $0.union($1) }
+    }
+
     /// 1 while drawing and for `strokeHold` after the pen lifts, then a linear fade to 0.
     static func strokeAlpha(endedAt: TimeInterval?, now: TimeInterval) -> CGFloat {
         guard let end = endedAt else { return 1 }
@@ -262,6 +291,8 @@ final class TutorialSession: NSObject, SCStreamDelegate, SCRecordingOutputDelega
     private var wasPressed = false
     private var lastPointer: NSPoint?
     private var lastSecond = -1
+    private var dodgeUntil: TimeInterval = 0
+    private var lastDrawn: NSPoint?
     private(set) var countdownLeft: Int?
 
     var penOn: Bool { inkView.penOn }
@@ -286,6 +317,7 @@ final class TutorialSession: NSObject, SCStreamDelegate, SCRecordingOutputDelega
         _ = try await SCShareableContent.current   // throws when Screen Recording is not allowed
         try FileManager.default.createDirectory(at: Tutorial.folder, withIntermediateDirectories: true)
         await MainActor.run {
+            guard phase == .countdown else { return }   // stopped while the permission check ran: show nothing
             ink.orderFrontRegardless()
             showCamera(true)
             timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { [weak self] _ in self?.tick() }
@@ -301,7 +333,7 @@ final class TutorialSession: NSObject, SCStreamDelegate, SCRecordingOutputDelega
                 DispatchQueue.main.asyncAfter(deadline: .now() + Double(i), execute: w)
             }
             let go = DispatchWorkItem { [weak self] in
-                guard let self else { return }
+                guard let self, self.phase == .countdown else { return }
                 self.countdownLeft = nil
                 self.inkView.countdown = nil
                 self.inkView.display()   // the number is gone before the first frame is captured
@@ -457,8 +489,30 @@ final class TutorialSession: NSObject, SCStreamDelegate, SCRecordingOutputDelega
         inkView.pointer = p
         inkView.pressed = pressed
         inkView.prune()
-        if dirty { inkView.needsDisplay = true }
+        if dirty {
+            if let r = Tutorial.dirtyRect(old: lastDrawn, new: p, ripple: Tutorial.ripple(since: inkView.rippleAt, now: inkView.now()) != nil ? inkView.rippleCenter : nil,
+                                          full: inkView.spotlightOn || inkView.animating || inkView.countdown != nil || (inkView.penOn && pressed)) {
+                inkView.setNeedsDisplay(r)
+            } else {
+                inkView.needsDisplay = true
+            }
+            lastDrawn = p
+        }
+        dodgeBubble(m)
         if phase == .recording, Int(elapsed) != lastSecond { lastSecond = Int(elapsed); onChange() }
+    }
+
+    /// The camera bubble slides to the farthest corner when the pointer reaches it.
+    private func dodgeBubble(_ m: NSPoint) {
+        guard let b = bubble, CACurrentMediaTime() >= dodgeUntil,
+              let to = Tutorial.dodge(bubble: b.frame, pointer: m, visible: screen.visibleFrame,
+                                      option: NSEvent.modifierFlags.contains(.option), mouseDown: NSEvent.pressedMouseButtons != 0) else { return }
+        dodgeUntil = CACurrentMediaTime() + 0.35
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.25
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            b.animator().setFrame(to, display: true)
+        }
     }
 
     /// Ends the session with whatever file was written.

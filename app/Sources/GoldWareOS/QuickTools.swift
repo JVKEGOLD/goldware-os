@@ -2,7 +2,7 @@ import AppKit
 import AVFoundation
 import AVKit
 
-/// Quick Tools: a Great Ball on the right edge of the screen, opening a panel of the tools you use often. While a tutorial records, the panel holds the
+/// Quick Tools: a small gold button on the right edge of the screen, opening a panel of the tools you use often. While a tutorial records, the panel holds the
 /// recording tools (pen and colours, spotlight, pointer halo, camera bubble, clear) and a big Stop.
 /// Otherwise it holds Record plus the recordings themselves: click one to watch it in the panel, drag
 /// it out to drop the file anywhere. The ball and panel are left out of the video.
@@ -119,6 +119,7 @@ final class QuickTools: NSObject {
 
     /// A finished recording: open the panel on it, ready to watch or drag.
     func showSaved(_ url: URL) {
+        content.reload()
         content.select(url)
         open(auto: true)
     }
@@ -130,7 +131,7 @@ final class QuickTools: NSObject {
 
     private func stateChanged(from old: RecState) {
         content.state = state
-        (strip?.contentView as? BallTab)?.live = state.phase != .idle
+        (strip?.contentView as? ToolsTab)?.live = state.phase != .idle
         if old.phase == .idle, state.phase != .idle { content.stopPlayback() }
         if isOpen { place() }
     }
@@ -193,7 +194,7 @@ final class QuickTools: NSObject {
 
     private func hover(_ inside: Bool) {
         hoverWork?.cancel()
-        guard inside else { return }
+        guard inside, NSEvent.pressedMouseButtons == 0 else { return }   // not while drawing or dragging past it
         let w = DispatchWorkItem { [weak self] in self?.open() }
         hoverWork = w
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: w)
@@ -202,7 +203,7 @@ final class QuickTools: NSObject {
     private func makeStrip() -> ToolPanel {
         let p = ToolPanel(contentRect: NSRect(origin: .zero, size: QuickToolsRules.tab), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         p.hasShadow = false
-        let v = BallTab(frame: NSRect(origin: .zero, size: QuickToolsRules.tab))
+        let v = ToolsTab(frame: NSRect(origin: .zero, size: QuickToolsRules.tab))
         v.onHover = { [weak self] in self?.hover($0) }
         v.onClick = { [weak self] in self?.isOpen == true ? self?.close() : self?.open() }
         p.contentView = v
@@ -252,9 +253,9 @@ final class ToolPanel: NSPanel {
 
 // MARK: The ball
 
-/// A Great Ball: faded at rest, full colour on hover or while a
-/// tutorial runs, with a red recording ring then.
-final class BallTab: NSView {
+/// The Quick Tools button: a small dark disc with a gold ring and a gold record dot, faded at rest,
+/// full on hover or while a tutorial runs (then the dot turns red and the ring with it).
+final class ToolsTab: NSView {
     var onHover: ((Bool) -> Void)?
     var onClick: (() -> Void)?
     var live = false { didSet { alphaValue = live || hovering ? 1 : 0.6; needsDisplay = true } }
@@ -270,41 +271,20 @@ final class BallTab: NSView {
     override func mouseEntered(with event: NSEvent) { hovering = true; onHover?(true) }
     override func mouseExited(with event: NSEvent) { hovering = false; onHover?(false) }
     override func mouseDown(with event: NSEvent) { onClick?() }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func draw(_ dirtyRect: NSRect) {
-        let c = NSPoint(x: bounds.midX, y: bounds.midY), r: CGFloat = hovering ? 12 : 11
-        Self.drawGreatBall(center: c, radius: r)
-        if hovering || live {
-            let ring = NSBezierPath(ovalIn: NSRect(x: c.x - r - 2, y: c.y - r - 2, width: r * 2 + 4, height: r * 2 + 4))
-            (live ? Tutorial.pen : Theme.goldHi.withAlphaComponent(0.6)).setStroke(); ring.lineWidth = live ? 2 : 1.5; ring.stroke()
-        }
+        Self.drawTab(center: NSPoint(x: bounds.midX, y: bounds.midY), radius: hovering ? 12 : 11, live: live)
     }
 
-    static let ink = Theme.hex(0x202030)
-    static let white = Theme.hex(0xffffff)
-    static let red = Theme.hex(0xe3350d)
-    static let blue = Theme.hex(0x3b6fd8)
-
-    /// A ball with a blue top, two red patches, a dark belt and a button. Flipped: top is minY.
-    static func drawGreatBall(center c: NSPoint, radius r: CGFloat) {
-        let rect = NSRect(x: c.x - r, y: c.y - r, width: r * 2, height: r * 2)
-        ink.setFill(); NSBezierPath(ovalIn: rect).fill()
-        let inner = rect.insetBy(dx: 1, dy: 1)
-        NSGraphicsContext.saveGraphicsState()
-        NSBezierPath(ovalIn: inner).addClip()
-        white.setFill(); inner.fill()
-        blue.setFill(); NSRect(x: inner.minX, y: inner.minY, width: inner.width, height: inner.height / 2).fill()
-        red.setFill()
-        for (x, tilt) in [(c.x - r * 0.56, 1.0), (c.x + r * 0.56, -1.0)] {
-            let patch = NSBezierPath(ovalIn: NSRect(x: -r * 0.16, y: -r * 0.36, width: r * 0.32, height: r * 0.72))
-            patch.transform(using: AffineTransform(rotationByDegrees: CGFloat(-35 * tilt)))
-            patch.transform(using: AffineTransform(translationByX: x, byY: c.y - r * 0.52))
-            patch.fill()
-        }
-        ink.setFill(); NSRect(x: inner.minX, y: c.y - max(1, r * 0.14), width: inner.width, height: max(1.5, r * 0.28)).fill()
-        NSGraphicsContext.restoreGraphicsState()
-        let b = max(2, r * 0.42)
-        ink.setFill(); NSBezierPath(ovalIn: NSRect(x: c.x - b, y: c.y - b, width: b * 2, height: b * 2)).fill()
-        white.setFill(); NSBezierPath(ovalIn: NSRect(x: c.x - b + 1, y: c.y - b + 1, width: b * 2 - 2, height: b * 2 - 2)).fill()
+    static func drawTab(center c: NSPoint, radius r: CGFloat, live: Bool) {
+        let disc = NSBezierPath(ovalIn: NSRect(x: c.x - r, y: c.y - r, width: r * 2, height: r * 2))
+        Theme.surface.setFill(); disc.fill()
+        (live ? Tutorial.pen : Theme.gold).setStroke()
+        let ring = NSBezierPath(ovalIn: NSRect(x: c.x - r + 1, y: c.y - r + 1, width: r * 2 - 2, height: r * 2 - 2))
+        ring.lineWidth = live ? 2 : 1.5; ring.stroke()
+        let d = r * 0.38
+        (live ? Tutorial.pen : Theme.gold).setFill()
+        NSBezierPath(ovalIn: NSRect(x: c.x - d, y: c.y - d, width: d * 2, height: d * 2)).fill()
     }
 }
 
@@ -314,13 +294,23 @@ final class ToolsView: NSView {
     var onAction: (String) -> Void = { _ in }
     var onResize: () -> Void = {}
     var folder = Tutorial.folder
-    var state = RecState() { didSet { if state != oldValue { rebuild() } } }
+    /// A new second only rewrites the status line. Rebuilding every view each second would swap the
+    /// Stop button out from under a click that straddles the tick, and the click would be lost.
+    var state = RecState() {
+        didSet {
+            guard state != oldValue else { return }
+            var a = state, b = oldValue
+            a.elapsed = 0; b.elapsed = 0
+            if a == b, let s = subLabel { s.stringValue = subtitle() } else { rebuild() }
+        }
+    }
+    private var subLabel: NSTextField?
     private(set) var wantedHeight: CGFloat = 300
     /// Each control's frame by id, for tests ("stop", "pen", "record", "row0", "player").
     private(set) var frames: [String: NSRect] = [:]
     private var files: [URL] = []
     private var selected: URL?
-    private let player = AVPlayerView()
+    private let player = FirstClickPlayerView()
     private var dragging = false
     private static var thumbs: [String: NSImage] = [:]
     private static var durations: [String: TimeInterval] = [:]
@@ -369,14 +359,8 @@ final class ToolsView: NSView {
         let w = QuickToolsRules.width - pad * 2
         add(label("Quick Tools", Theme.display(26), Theme.text), x: pad, y: y, w: w, h: 32)
         y += 34
-        let sub: String
-        switch state.phase {
-        case .idle: sub = "Record, then watch or drag your videos.  ⌃⌥R"
-        case .countdown(let n): sub = "Starting in \(n). Esc cancels."
-        case .recording: sub = "Recording \(Tutorial.clock(state.elapsed)). This panel stays out of the video."
-        case .saving: sub = "Saving the video…"
-        }
-        let s = label(sub, Theme.sans(12), state.phase == .idle ? Theme.textMuted : Tutorial.pen)
+        let s = label(subtitle(), Theme.sans(12), state.phase == .idle ? Theme.textMuted : Tutorial.pen)
+        subLabel = s
         s.lineBreakMode = .byWordWrapping
         s.maximumNumberOfLines = 2
         add(s, x: pad, y: y, w: w, h: 32)
@@ -384,6 +368,15 @@ final class ToolsView: NSView {
         y = state.phase == .idle ? idle(y: y, w: w) : recording(y: y, w: w)
         wantedHeight = y + 16
         if abs(frame.height - wantedHeight) > 0.5 { onResize() }
+    }
+
+    func subtitle() -> String {
+        switch state.phase {
+        case .idle: return "Record, then watch or drag your videos.  ⌃⌥R"
+        case .countdown(let n): return "Starting in \(n). Esc cancels."
+        case .recording: return "Recording \(Tutorial.clock(state.elapsed)). This panel stays out of the video."
+        case .saving: return "Saving the video…"
+        }
     }
 
     private func recording(y start: CGFloat, w: CGFloat) -> CGFloat {
@@ -505,6 +498,7 @@ private final class Tile: NSView {
     override func mouseExited(with event: NSEvent) { hovering = false }
     override func mouseUp(with event: NSEvent) { if bounds.contains(convert(event.locationInWindow, from: nil)) { action() } }
     override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     override func draw(_ dirtyRect: NSRect) {
         let box = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 10, yRadius: 10)
@@ -540,6 +534,7 @@ private final class Swatch: NSView {
     required init?(coder: NSCoder) { fatalError() }
     override func mouseUp(with event: NSEvent) { action() }
     override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func draw(_ dirtyRect: NSRect) {
         let r = bounds.insetBy(dx: 4, dy: 4)
         color.setFill(); NSBezierPath(ovalIn: r).fill()
@@ -555,6 +550,7 @@ private final class Link: NSView {
     override var isFlipped: Bool { true }
     override func mouseUp(with event: NSEvent) { action() }
     override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func draw(_ dirtyRect: NSRect) { _ = Theme.draw(title, at: NSPoint(x: 0, y: 1), font: Theme.sans(12, "Medium"), color: Theme.gold) }
 }
 
@@ -579,6 +575,7 @@ private final class RecordingRow: NSView, NSDraggingSource {
     override func mouseEntered(with event: NSEvent) { hovering = true }
     override func mouseExited(with event: NSEvent) { hovering = false }
     override func resetCursorRects() { addCursorRect(bounds, cursor: .openHand) }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     override func mouseDown(with event: NSEvent) { downAt = event.locationInWindow }
     override func mouseDragged(with event: NSEvent) {
@@ -619,4 +616,9 @@ private final class RecordingRow: NSView, NSDraggingSource {
         let meta = [duration.map(Tutorial.clock), size].compactMap { $0 }.joined(separator: "  ·  ")
         _ = Theme.draw(meta, at: NSPoint(x: 114, y: 32), font: Theme.mono(11), color: Theme.textMuted)
     }
+}
+
+/// The panel never becomes key, so the player's controls must take the first click.
+private final class FirstClickPlayerView: AVPlayerView {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }

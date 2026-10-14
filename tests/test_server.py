@@ -617,7 +617,7 @@ class TestHardening(ServerCase):
             html = f.read()
         self.assertEqual(html.count('id="voice-tutorial"'), 1)
         entry = html.split('id="voice-tutorial"', 1)[1].split("</dd></div>", 1)[0]
-        for phrase in ("Start recording", "Great Ball", "stays out of the video", "drag it into Finder", "Spotlight", "Recordings"):
+        for phrase in ("Start recording", "Quick Tools button", "stays out of the video", "drag it into Finder", "Spotlight", "Recordings"):
             self.assertIn(phrase, entry)
 
     def test_shortcut_buttons_and_card(self):

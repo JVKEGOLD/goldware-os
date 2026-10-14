@@ -12,7 +12,7 @@ import CoreAudio
 //   GoldWareOS --assistant file.wav [--execute]    assistant pipeline on a file
 //   GoldWareOS --assistant-text "remind me..." [--execute]
 //   GoldWareOS --test-tutorial                     tutorial recorder and Quick Tools rules, panels built offscreen
-//   GoldWareOS --render-tutorial out.png           ink layer, Quick Tools panels and the Great Ball as pictures
+//   GoldWareOS --render-tutorial out.png           ink layer, Quick Tools panels and the Quick Tools button as pictures
 //   GoldWareOS --flush-outbox                      retry captures saved while offline
 // Assistant runs are dry runs that print what would happen unless --execute is given.
 let args = CommandLine.arguments
@@ -1094,6 +1094,19 @@ if args.count >= 2, args[1] == "--test-tutorial" {
            Tutorial.ripple(since: nil, now: 5) == nil && Tutorial.ripple(since: 5, now: 4) == nil)
     let b = Tutorial.bubbleFrame(in: NSRect(x: 0, y: 80, width: 1512, height: 870))
     expect("camera bubble sits bottom left, clear of the Dock", b.minX == Tutorial.bubbleInset && b.minY == 80 + Tutorial.bubbleInset && b.width == b.height)
+    let vis2 = NSRect(x: 0, y: 80, width: 1512, height: 870)
+    let home = Tutorial.bubbleFrame(in: vis2)
+    let onIt = NSPoint(x: home.midX, y: home.midY)
+    let moved = Tutorial.dodge(bubble: home, pointer: onIt, visible: vis2, option: false, mouseDown: false)
+    expect("pointer on the bubble: it jumps to the far corner (top right)", moved.map { $0.maxX == vis2.maxX - Tutorial.bubbleInset && $0.maxY == vis2.maxY - Tutorial.bubbleInset && $0.size == home.size } ?? false)
+    expect("pointer just outside its round edge also moves it", Tutorial.dodge(bubble: home, pointer: NSPoint(x: home.midX, y: home.maxY + 8), visible: vis2, option: false, mouseDown: false) != nil)
+    expect("pointer clear of it: it stays", Tutorial.dodge(bubble: home, pointer: NSPoint(x: home.maxX + 60, y: home.midY), visible: vis2, option: false, mouseDown: false) == nil)
+    expect("the rect's empty corner is not the bubble: it stays", Tutorial.dodge(bubble: home, pointer: NSPoint(x: home.maxX - 2, y: home.maxY - 2), visible: vis2, option: false, mouseDown: false) == nil)
+    expect("hold Option to grab and drag it: it stays", Tutorial.dodge(bubble: home, pointer: onIt, visible: vis2, option: true, mouseDown: false) == nil)
+    expect("mid-drag or mid-stroke: it stays", Tutorial.dodge(bubble: home, pointer: onIt, visible: vis2, option: false, mouseDown: true) == nil)
+    let topRight = moved ?? home
+    let back = Tutorial.dodge(bubble: topRight, pointer: NSPoint(x: topRight.midX, y: topRight.midY), visible: vis2, option: false, mouseDown: false)
+    expect("from top right it jumps to bottom left", back.map { $0.origin == home.origin } ?? false)
     expect("clock reads 0:07, 1:42, 1:02:03", Tutorial.clock(7) == "0:07" && Tutorial.clock(102) == "1:42" && Tutorial.clock(3723) == "1:02:03")
     let f = Tutorial.fileURL(at: Date(timeIntervalSince1970: 0), in: Tutorial.folder)
     expect("saves an .mp4 named Tutorial <date> in the Recordings folder in Movies",
@@ -1106,7 +1119,7 @@ if args.count >= 2, args[1] == "--test-tutorial" {
     _ = NSApplication.shared
     let vis = NSRect(x: 0, y: 80, width: 1512, height: 870)
     let tab = QuickToolsRules.tabFrame(in: vis)
-    expect("the Great Ball hugs the right edge, mid height", tab.maxX >= vis.maxX - 4 && abs(tab.midY - vis.midY) <= 1 && tab.width <= 40)
+    expect("the Quick Tools button hugs the right edge, mid height", tab.maxX >= vis.maxX - 4 && abs(tab.midY - vis.midY) <= 1 && tab.width <= 40)
     let pf = QuickToolsRules.panelFrame(in: vis, height: 420)
     expect("the panel opens flush right, centred on the ball, on screen", pf.maxX == vis.maxX && abs(pf.midY - vis.midY) <= 1 && vis.contains(pf))
     expect("a panel taller than the screen is clamped", vis.contains(QuickToolsRules.panelFrame(in: vis, height: 5000)))
@@ -1134,6 +1147,16 @@ if args.count >= 2, args[1] == "--test-tutorial" {
     let inside = NSRect(origin: .zero, size: rec.frame.size)
     expect("recording: Stop and every tool sit inside the panel",
            ["stop", "pen", "spotlight", "halo", "camera", "clear", "color0", "color3"].allSatisfy { fr[$0].map { !$0.isEmpty && inside.contains($0) } ?? false })
+    let before = rec.subviews
+    rec.state.elapsed += 1
+    expect("a new second only updates the status line (Stop is never swapped out mid-click)",
+           rec.subviews.count == before.count && zip(rec.subviews, before).allSatisfy { $0 === $1 } && rec.subtitle().contains("1:43"))
+    rec.state.pen = false
+    expect("a tool change does rebuild the panel", !zip(rec.subviews, before).allSatisfy { $0 === $1 })
+    let d = Tutorial.dirtyRect(old: NSPoint(x: 100, y: 100), new: NSPoint(x: 140, y: 100), ripple: nil, full: false)
+    expect("a moving pointer repaints only round the old and new halo", d.map { $0.contains(NSPoint(x: 100 - Tutorial.haloRadius * 2.4, y: 100)) && $0.contains(NSPoint(x: 140 + Tutorial.haloRadius * 2.4, y: 100)) && $0.width < 400 } ?? false)
+    expect("a ripple keeps its ring inside the repaint", Tutorial.dirtyRect(old: nil, new: NSPoint(x: 500, y: 500), ripple: NSPoint(x: 200, y: 200), full: false).map { $0.contains(NSPoint(x: 200 - Tutorial.haloRadius * 2.4, y: 200)) } ?? false)
+    expect("spotlight, fades and the countdown repaint the whole screen", Tutorial.dirtyRect(old: nil, new: NSPoint(x: 1, y: 1), ripple: nil, full: true) == nil)
     let idle = QuickTools.render(state: RecState(), folder: dir, selected: dir.appendingPathComponent("new.mov"))
     expect("idle: Record, the player and a row per video", idle.frames["record"] != nil && idle.frames["player"] != nil &&
            idle.frames["row0"] != nil && idle.frames["row1"] != nil && idle.frames["row2"] == nil && idle.frames["stop"] == nil)
@@ -1147,7 +1170,7 @@ if args.count >= 3, args[1] == "--render-tutorial" {
     _ = NSApplication.shared
     Theme.registerFonts()
     guard TutorialSession.renderPreview(to: args[2]) else { exit(1) }
-    // Quick Tools beside it: recording, idle with the real recordings, and the Great Ball at 4x.
+    // Quick Tools beside it: recording, idle with the real recordings, and the Quick Tools button at 4x.
     func png(_ v: NSView, _ path: String) {
         let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds)!
         v.cacheDisplay(in: v.bounds, to: rep)
@@ -1164,10 +1187,11 @@ if args.count >= 3, args[1] == "--render-tutorial" {
         override func draw(_ r: NSRect) {
             NSColor.white.setFill(); r.fill()
             NSGraphicsContext.current?.cgContext.scaleBy(x: 4, y: 4)
-            BallTab.drawGreatBall(center: NSPoint(x: 15, y: 15), radius: 11)
+            ToolsTab.drawTab(center: NSPoint(x: 15, y: 15), radius: 11, live: false)
+            ToolsTab.drawTab(center: NSPoint(x: 45, y: 15), radius: 11, live: true)
         }
     }
-    png(Balls(frame: NSRect(x: 0, y: 0, width: 120, height: 120)), base + "-balls.png")
+    png(Balls(frame: NSRect(x: 0, y: 0, width: 240, height: 120)), base + "-button.png")
     exit(0)
 }
 
