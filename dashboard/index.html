@@ -333,6 +333,7 @@ details p { color: var(--text-muted); font-size: 14px; margin-top: 8px; }
       <div><dt>Days it understands</dt><dd>&ldquo;Thursday&rdquo;, &ldquo;tomorrow&rdquo;, and &ldquo;end of next week&rdquo; become real due dates. Say &ldquo;urgent&rdquo; to mark a task high priority.</dd></div>
       <div><dt>Snippets</dt><dd>Saved text such as an address or a link, kept only on this Mac. The model sees their names, never their values. Keep passwords and card numbers in a password manager instead.</dd></div>
       <div id="voice-terminals"><dt>Terminal commands</dt><dd>Say &ldquo;Let&rsquo;s work&rdquo; to open a terminal in each corner (what they run is set by <code>letsWork</code> in <code>goldware.json</code>). &ldquo;Finish up&rdquo; asks every Hermes to wrap up. &ldquo;Lock up&rdquo; closes idle terminals and keeps any agent that is mid-task. &ldquo;Clear out&rdquo; closes only the Hermes terminals you have not written in. The whole clip has to be the phrase, so a task that mentions them stays a task.<br><a class="shortcut-inline" href="goldwareos://lets-work">Let&rsquo;s work</a> <a class="shortcut-inline" href="goldwareos://lock-up">Lock up</a> <a class="shortcut-inline" href="goldwareos://clear-out">Clear out</a></dd></div>
+      <div id="voice-tutorial"><dt>Record a tutorial</dt><dd>Hover the Great Ball on the right edge of the screen (Quick Tools) and press Record, say &ldquo;Start recording&rdquo; with <kbd>Right Command</kbd>, or press <kbd>&#8963;&#8997;R</kbd>. After a 3 second countdown it records the screen your pointer is on with your voice, a round camera bubble you can drag anywhere, and a yellow halo around the pointer that ripples on every click. While it records, the Great Ball turns live and its panel holds the tools: Pen with four colours (ink fades 5 seconds after you lift), Spotlight (dims everything but the pointer), Halo, Camera, Clear ink, and a big red Stop. The ball stays out of the video, and so does its panel. When you stop, the panel opens on the new video: click it to watch right there, drag it into Finder, Mail or Slack, or double-click for QuickTime. Videos live in your Movies folder, in a folder named after your assistant with &ldquo;Recordings&rdquo; on the end. Keys: <kbd>&#8963;&#8997;D</kbd> pen, <kbd>&#8963;&#8997;C</kbd> clear, <kbd>Esc</kbd> pen down. Quick Tools can be switched off in the menu bar.</dd></div>
       <div><dt>Where tasks go</dt><dd>Everything arrives in the <b>Tasks</b> card on your dashboard with status inbox, ready for you to check off.</dd></div>
     </dl>
   </section>
@@ -359,7 +360,7 @@ details p { color: var(--text-muted); font-size: 14px; margin-top: 8px; }
     <div class="gsub"><h2>Private by design</h2><span>It runs on this Mac.</span></div>
     <dl class="menu">
       <div><dt>Nothing leaves</dt><dd>Speech recognition and the language model both run locally. Recordings, words, and history stay in the app data folder and out of Git.</dd></div>
-      <div><dt>Permissions</dt><dd>Microphone for hearing you, and Accessibility for pasting and for the right-hand keys.</dd></div>
+      <div><dt>Permissions</dt><dd>Microphone for hearing you, and Accessibility for pasting and for the right-hand keys. Recording a tutorial also asks for Screen Recording and, for the camera bubble, Camera.</dd></div>
     </dl>
   </section>
 

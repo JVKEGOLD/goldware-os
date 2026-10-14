@@ -27,6 +27,7 @@ Repo root detection (app and server): the folder containing `goldware.default.js
 - wakePhrase (string): e.g. "Hey GoldWare". wakeAliases (array of strings): other spellings the
   speech recognizer may produce. Matching is case-insensitive, punctuation-tolerant.
 - letsWork {command, terminal, profile}: what Let's work opens per quadrant (terminal must be "iTerm"; profile defaults to "GoldWare", installed by setup).
+- Quick Tools: `Tutorial.swift` (recorder rules, ink layer, `TutorialSession` on ScreenCaptureKit) and `QuickTools.swift` (the Great Ball and its panel). `AppDelegate` wires the keys (`HotkeyMonitor.onKeyDown`), the voice phrases and the menu items. The ball and panel are excluded from the capture by window id.
 - Dashboard shortcuts: the Shortcuts card (type `shortcuts`) and Voice tab buttons are `goldwareos://lets-work`, `lock-up`, `clear-out` links. The app registers the scheme (Info.plist in app/build.sh), `ShortcutRoute` whitelists the three routes, and each runs the same handler as the voice phrase.
 - accentColor (#RRGGBB). port (int, default 4188, 1024 to 65535, 4177 is rejected).
 - models.local (Ollama model tag), models.whisper (file name under the app data folder models/).

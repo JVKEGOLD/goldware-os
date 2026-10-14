@@ -43,8 +43,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   </dict></array>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>
-  <key>NSCameraUsageDescription</key><string>GoldWare OS shows your camera as a hand mirror while the pointer is behind the notch. Nothing is recorded.</string>
-  <key>NSMicrophoneUsageDescription</key><string>GoldWare OS records while you hold the dictation key, or after you say Hey GoldWare, and transcribes it on this Mac.</string>
+  <key>NSCameraUsageDescription</key><string>GoldWare OS shows your camera as a hand mirror while the pointer is behind the notch, and the tutorial recorder shows it as a bubble in your recording. The hand mirror records nothing.</string>
+  <key>NSMicrophoneUsageDescription</key><string>GoldWare OS records while you hold the dictation key, or after you say Hey GoldWare, and transcribes it on this Mac. Tutorial recordings include your voice.</string>
   <key>NSAppleEventsUsageDescription</key><string>GoldWare OS can type a wrap-up request into your terminals and close them when you ask.</string>
   <key>NSCalendarsFullAccessUsageDescription</key><string>The control center's Today tab shows your next events. Read on this Mac only.</string>
   <key>NSSpeechRecognitionUsageDescription</key><string>With Hey GoldWare on, GoldWare OS listens for its wake phrase using on-device speech recognition. Nothing leaves this Mac.</string>

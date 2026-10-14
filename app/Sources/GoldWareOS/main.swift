@@ -5,11 +5,14 @@ import Vision
 import Speech
 import ServiceManagement
 import SMCKit
+import CoreAudio
 
 // Test entry points, no hotkey, paste, or menu bar:
 //   GoldWareOS --test file.wav [App Name]          dictation pipeline on a file
 //   GoldWareOS --assistant file.wav [--execute]    assistant pipeline on a file
 //   GoldWareOS --assistant-text "remind me..." [--execute]
+//   GoldWareOS --test-tutorial                     tutorial recorder and Quick Tools rules, panels built offscreen
+//   GoldWareOS --render-tutorial out.png           ink layer, Quick Tools panels and the Great Ball as pictures
 //   GoldWareOS --flush-outbox                      retry captures saved while offline
 // Assistant runs are dry runs that print what would happen unless --execute is given.
 let args = CommandLine.arguments
@@ -1063,6 +1066,111 @@ if args.count >= 2, args[1] == "--test-lets-work" {
     exit(failures == 0 ? 0 : 1)
 }
 
+if args.count >= 2, args[1] == "--test-tutorial" {
+    var failures = 0
+    func expect(_ what: String, _ ok: Bool) { print("\(ok ? "PASS" : "FAIL")  \(what)"); if !ok { failures += 1 } }
+    let me = GWConfig.name
+    for s in ["Start recording.", "\(me), start recording", "Hey \(me), record my screen", "record a tutorial", "Start a Loom", "start the screen recording please", "Start recording, \(me)."] {
+        expect("starts on \"\(s)\"", Tutorial.matchesStart(s) && !Tutorial.matchesStop(s))
+    }
+    for s in ["Stop recording", "\(me), stop the recording.", "end recording", "finish the tutorial"] {
+        expect("stops on \"\(s)\"", Tutorial.matchesStop(s) && !Tutorial.matchesStart(s))
+    }
+    for s in ["Remind me to start recording the podcast", "start recording at noon", "recording", "record", "stop", "Let's work", "please stop recording the podcast"] {
+        expect("stays a request on \"\(s)\"", !Tutorial.matchesStart(s) && !Tutorial.matchesStop(s))
+    }
+    expect("the stop phrase is anchored at the start of the clip", !Tutorial.matchesStop("we should stop recording"))
+    expect("a name list of one name still works", Tutorial.matchesStart("Computer, start recording", names: ["computer"]) && !Tutorial.matchesStart("Computer, start recording", names: ["other"]))
+    expect("⌃⌥R toggles, ⌃⌥D pen, ⌃⌥C clear, bare Esc",
+           Tutorial.key(15, [.control, .option]) == .toggle && Tutorial.key(2, [.control, .option]) == .pen &&
+           Tutorial.key(8, [.control, .option]) == .clear && Tutorial.key(53, []) == .escape)
+    expect("no key with Command, Shift or one modifier",
+           Tutorial.key(15, [.control, .option, .command]) == nil && Tutorial.key(15, [.control, .option, .shift]) == nil &&
+           Tutorial.key(15, [.option]) == nil && Tutorial.key(15, []) == nil && Tutorial.key(53, [.command]) == nil && Tutorial.key(12, [.control, .option]) == nil)
+    expect("ink holds while drawing and for the hold time", Tutorial.strokeAlpha(endedAt: nil, now: 50) == 1 && Tutorial.strokeAlpha(endedAt: 10, now: 10 + Tutorial.strokeHold) == 1)
+    expect("ink fades out after the hold", abs(Tutorial.strokeAlpha(endedAt: 10, now: 10 + Tutorial.strokeHold + Tutorial.strokeFade / 2) - 0.5) < 0.01 &&
+           Tutorial.strokeAlpha(endedAt: 10, now: 10 + Tutorial.strokeHold + Tutorial.strokeFade + 1) == 0)
+    expect("a click ripples once, then stops", Tutorial.ripple(since: 5, now: 5) == 0 && Tutorial.ripple(since: 5, now: 5 + Tutorial.rippleLength) == nil &&
+           Tutorial.ripple(since: nil, now: 5) == nil && Tutorial.ripple(since: 5, now: 4) == nil)
+    let b = Tutorial.bubbleFrame(in: NSRect(x: 0, y: 80, width: 1512, height: 870))
+    expect("camera bubble sits bottom left, clear of the Dock", b.minX == Tutorial.bubbleInset && b.minY == 80 + Tutorial.bubbleInset && b.width == b.height)
+    expect("clock reads 0:07, 1:42, 1:02:03", Tutorial.clock(7) == "0:07" && Tutorial.clock(102) == "1:42" && Tutorial.clock(3723) == "1:02:03")
+    let f = Tutorial.fileURL(at: Date(timeIntervalSince1970: 0), in: Tutorial.folder)
+    expect("saves an .mp4 named Tutorial <date> in the Recordings folder in Movies",
+           f.pathExtension == "mp4" && f.path.contains("/Movies/\(Tutorial.folderName(for: me))/Tutorial "))
+    expect("the folder name follows the assistant name and is safe", Tutorial.folderName(for: "GoldWare") == "GoldWare Recordings" &&
+           Tutorial.folderName(for: "A/B:C") == "A-B-C Recordings" && Tutorial.folderName(for: "  ") == "GoldWare Recordings")
+    expect("AirPods mic falls back to the built-in mic", Tutorial.useBuiltInMic(defaultTransport: kAudioDeviceTransportTypeBluetooth) &&
+           Tutorial.useBuiltInMic(defaultTransport: kAudioDeviceTransportTypeBluetoothLE) &&
+           !Tutorial.useBuiltInMic(defaultTransport: kAudioDeviceTransportTypeBuiltIn) && !Tutorial.useBuiltInMic(defaultTransport: kAudioDeviceTransportTypeUSB))
+    _ = NSApplication.shared
+    let vis = NSRect(x: 0, y: 80, width: 1512, height: 870)
+    let tab = QuickToolsRules.tabFrame(in: vis)
+    expect("the Great Ball hugs the right edge, mid height", tab.maxX >= vis.maxX - 4 && abs(tab.midY - vis.midY) <= 1 && tab.width <= 40)
+    let pf = QuickToolsRules.panelFrame(in: vis, height: 420)
+    expect("the panel opens flush right, centred on the ball, on screen", pf.maxX == vis.maxX && abs(pf.midY - vis.midY) <= 1 && vis.contains(pf))
+    expect("a panel taller than the screen is clamped", vis.contains(QuickToolsRules.panelFrame(in: vis, height: 5000)))
+    expect("it tucks away after the pointer leaves", QuickToolsRules.shouldClose(inside: false, entered: true, busy: false, outsideFor: 0.3))
+    expect("it stays while a video plays or a file drags", !QuickToolsRules.shouldClose(inside: false, entered: true, busy: true, outsideFor: 9))
+    expect("opened by a finished recording, it waits for the pointer", !QuickToolsRules.shouldClose(inside: false, entered: false, busy: false, outsideFor: 9))
+    expect("not before the grace time", !QuickToolsRules.shouldClose(inside: false, entered: true, busy: false, outsideFor: 0.1))
+    expect("it never closes with the pointer inside", !QuickToolsRules.shouldClose(inside: true, entered: true, busy: false, outsideFor: 9))
+    var cal = Calendar(identifier: .gregorian); cal.timeZone = TimeZone(identifier: "America/Los_Angeles")!
+    let now = cal.date(from: DateComponents(year: 2026, month: 10, day: 14, hour: 15))!
+    expect("labels read Today, Yesterday, then the date",
+           QuickToolsRules.label(for: now.addingTimeInterval(-2 * 3600), now: now, calendar: cal) == "Today 13:00" &&
+           QuickToolsRules.label(for: now.addingTimeInterval(-24 * 3600), now: now, calendar: cal) == "Yesterday 15:00" &&
+           QuickToolsRules.label(for: now.addingTimeInterval(-72 * 3600), now: now, calendar: cal) == "Oct 11 15:00")
+    let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("qt-test-\(getpid())")
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    for (i, n) in ["old.mp4", "notes.txt", "new.mov", ".hidden.mp4"].enumerated() {
+        let u = dir.appendingPathComponent(n)
+        FileManager.default.createFile(atPath: u.path, contents: Data([1]))
+        try? FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: Double(1000 + i))], ofItemAtPath: u.path)
+    }
+    expect("recordings: videos only, newest first", QuickToolsRules.recordings(in: dir).map(\.lastPathComponent) == ["new.mov", "old.mp4"])
+    let rec = QuickTools.render(state: RecState(phase: .recording, elapsed: 102, pen: true), folder: dir)
+    let fr = rec.frames
+    let inside = NSRect(origin: .zero, size: rec.frame.size)
+    expect("recording: Stop and every tool sit inside the panel",
+           ["stop", "pen", "spotlight", "halo", "camera", "clear", "color0", "color3"].allSatisfy { fr[$0].map { !$0.isEmpty && inside.contains($0) } ?? false })
+    let idle = QuickTools.render(state: RecState(), folder: dir, selected: dir.appendingPathComponent("new.mov"))
+    expect("idle: Record, the player and a row per video", idle.frames["record"] != nil && idle.frames["player"] != nil &&
+           idle.frames["row0"] != nil && idle.frames["row1"] != nil && idle.frames["row2"] == nil && idle.frames["stop"] == nil)
+    try? FileManager.default.removeItem(at: dir)
+    print(failures == 0 ? "All tutorial checks passed" : "\(failures) tutorial check(s) failed")
+    exit(failures == 0 ? 0 : 1)
+}
+
+if args.count >= 3, args[1] == "--render-tutorial" {
+    guard #available(macOS 15.0, *) else { exit(1) }
+    _ = NSApplication.shared
+    Theme.registerFonts()
+    guard TutorialSession.renderPreview(to: args[2]) else { exit(1) }
+    // Quick Tools beside it: recording, idle with the real recordings, and the Great Ball at 4x.
+    func png(_ v: NSView, _ path: String) {
+        let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds)!
+        v.cacheDisplay(in: v.bounds, to: rep)
+        try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+    }
+    let base = (args[2] as NSString).deletingPathExtension
+    png(QuickTools.render(state: RecState(phase: .recording, elapsed: 102, pen: true, spotlight: true, penColor: 0), folder: Tutorial.folder), base + "-tools-recording.png")
+    let files = QuickToolsRules.recordings(in: Tutorial.folder)
+    let idle = QuickTools.render(state: RecState(), folder: Tutorial.folder, selected: files.first)
+    RunLoop.main.run(until: Date().addingTimeInterval(3))   // thumbnails load in the background
+    png(idle, base + "-tools-idle.png")
+    final class Balls: NSView {
+        override var isFlipped: Bool { true }
+        override func draw(_ r: NSRect) {
+            NSColor.white.setFill(); r.fill()
+            NSGraphicsContext.current?.cgContext.scaleBy(x: 4, y: 4)
+            BallTab.drawGreatBall(center: NSPoint(x: 15, y: 15), radius: 11)
+        }
+    }
+    png(Balls(frame: NSRect(x: 0, y: 0, width: 120, height: 120)), base + "-balls.png")
+    exit(0)
+}
+
 if args.count >= 2, args[1] == "--test-terminal-commands" {
     var failures = 0
     func expect(_ what: String, _ ok: Bool) { print("\(ok ? "PASS" : "FAIL")  \(what)"); if !ok { failures += 1 } }
@@ -1885,6 +1993,11 @@ if args.count >= 3, args[1] == "--assistant" || args[1] == "--assistant-text" {
         if LetsWork.matches(spoken) {
             let s = LetsWork.settings
             print("WOULD OPEN LET'S WORK: four iTerm windows (\(s.profile.isEmpty ? "default profile" : "profile " + s.profile)) running \(s.command.isEmpty ? "a plain shell" : s.command)")
+            return
+        }
+        if Tutorial.matchesStart(spoken) || Tutorial.matchesStop(spoken) {
+            print(Tutorial.matchesStart(spoken) ? "WOULD START A TUTORIAL RECORDING: screen, camera bubble, pointer halo, pen; saves to \(Tutorial.folder.path)"
+                                                : "WOULD STOP THE TUTORIAL RECORDING and save it")
             return
         }
         if TerminalCommands.matchesFinishUp(spoken) {

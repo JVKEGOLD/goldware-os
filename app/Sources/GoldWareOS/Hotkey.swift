@@ -46,6 +46,8 @@ final class HotkeyMonitor {
     var onChord: () -> Void = {}
     /// A real key press or click (not one GoldWare posted): the text box may have changed.
     var onUserInput: () -> Void = {}
+    /// Every key press with its modifiers (the tutorial recorder's ⌃⌥ keys).
+    var onKeyDown: (NSEvent) -> Void = { _ in }
     /// Key presses and clicks the system has counted, including ones it kept for itself.
     var activity: () -> UInt32 = {
         [CGEventType.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown]
@@ -94,6 +96,7 @@ final class HotkeyMonitor {
             if event.cgEvent?.getIntegerValueField(.eventSourceUserData) != Paster.marker { onUserInput() }
             let held = active != nil
             active = nil
+            onKeyDown(event)
             onOtherKey(event.keyCode, held)
             return
         default:

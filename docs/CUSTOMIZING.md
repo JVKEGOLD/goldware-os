@@ -90,7 +90,7 @@ Voice commands are Swift code in `app/Sources/GoldWareOS`:
 
 - Fixed phrases: `AppDelegate.swift`, function `handleAssistant(_:record:)`. It first checks `LetsWork.matches`, then `TerminalCommands.matchesFinishUp`, `matchesLockUp`, and `matchesClearOut` (defined with their actions in `TerminalCommands.swift`). For a phrase such as "open Spotify", write a `matchesX` function and an action the same way, call it from `handleAssistant` before the generic request handling, and show feedback with `self.hud.show(...)`.
 - Anything else goes to the language model in `Assistant.swift`: `interpret` returns an intent from a fixed list (task, draft, note, paste, recall, agenda, complete, undo, closeout, vision_on, vision_off) and `perform` acts on it. A new intent means editing the prompt text, the schema `enum`, and `perform`.
-- Tests are `--test-*` flags handled in `app/Sources/GoldWareOS/main.swift` (phrase matching: `--test-terminal-commands`, `--test-lets-work`). Add cases there.
+- Tests are `--test-*` flags handled in `app/Sources/GoldWareOS/main.swift` (phrase matching: `--test-terminal-commands`, `--test-lets-work`, `--test-tutorial`). Add cases there.
 
 Pattern: find an existing command, copy its shape, add your trigger phrases and the action, then:
 

@@ -155,6 +155,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self?.hud.show("Learned “\(terms.joined(separator: "”, “"))” from your edit", orb: .breathing, tint: .assistant, autoHide: 2.5)
         }
         hud.showIdle()
+        startQuickTools()
         vision.configure(agent: assistant, store: store)
         vision.onNotice = { [weak self] text in self?.hud.show(text, orb: .breathing, tint: .assistant, autoHide: 3) }
         vision.onDictate = { [weak self] start in self?.visionDictate(start) }
@@ -171,6 +172,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         hotkey.onOtherKey = { [weak self] code, held in self?.otherKey(code, whileHeld: held) }
         hotkey.onChord = { [weak self] in self?.toggleVisionMode() }
         hotkey.onUserInput = { [weak self] in self?.typedSince = true }
+        hotkey.onKeyDown = { [weak self] e in
+            if !e.isARepeat, let k = Tutorial.key(e.keyCode, e.modifierFlags) { self?.tutorialKey(k) }
+        }
         hotkey.start()
         wasTrusted = AXIsProcessTrusted()
         permissionTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.checkPermissions() }
@@ -703,6 +707,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             await openLetsWork()
             return
         }
+        if Tutorial.matchesStart(raw) || Tutorial.matchesStop(raw) {
+            let start = Tutorial.matchesStart(raw)
+            await MainActor.run { if start != self.tutorialRunning { self.toggleTutorial() } }
+            return
+        }
         if TerminalCommands.matchesFinishUp(raw) {
             await MainActor.run { self.hud.show("Asking every Hermes to finish up…", orb: .connecting, tint: .assistant) }
             let (sent, error) = await Task.detached { TerminalCommands.finishUp() }.value
@@ -935,6 +944,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         undo.isEnabled = undoTitle != nil
         menu.addItem(undo)
         menu.addItem(item("Open Tasks", #selector(openTasks)))
+        menu.addItem(item(tutorialRunning ? "Stop Recording and Save   ⌃⌥R" : "Record a Tutorial (screen, camera, pen)   ⌃⌥R", #selector(toggleTutorial)))
         menu.addItem(item("Open History", #selector(openHistory)))
         menu.addItem(.separator())
 
@@ -952,6 +962,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(item("Edit Vocabulary…", #selector(editVocabulary)))
         menu.addItem(item("Edit Snippets…", #selector(editSnippets)))
         menu.addItem(item("Open Data Folder", #selector(openDataFolder)))
+        let tools = item("Quick Tools (Great Ball on the right edge)", #selector(toggleQuickTools))
+        tools.state = QuickTools.enabled ? .on : .off
+        menu.addItem(tools)
         let sounds = item("Sounds", #selector(toggleSounds))
         sounds.state = Sounds.enabled ? .on : .off
         menu.addItem(sounds)
@@ -1155,6 +1168,109 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func toggleSounds() {
         Sounds.enabled.toggle()
+    }
+
+    // MARK: Tutorial recorder and Quick Tools
+
+    private var tutorial: AnyObject?
+    private var tutorialRunning: Bool { tutorial != nil }
+    private let quickTools = QuickTools()
+
+    private func startQuickTools() {
+        quickTools.onAction = { [weak self] a in self?.quickToolsAction(a) }
+        quickTools.start()
+    }
+
+    /// Starts a tutorial recording on the screen the pointer is on, or stops and saves the one running.
+    @objc private func toggleTutorial() {
+        guard #available(macOS 15.0, *) else {
+            hud.show("Tutorial recording needs macOS 15 or later", orb: .shaping, autoHide: 3)
+            return
+        }
+        if let running = tutorial as? TutorialSession { running.stop(); return }
+        let m = NSEvent.mouseLocation
+        guard let screen = NSScreen.screens.first(where: { $0.frame.contains(m) }) ?? NSScreen.main else { return }
+        let session = TutorialSession(screen: screen)
+        session.excludedWindowIDs = { [weak self] in self?.quickTools.windowIDs ?? [] }
+        session.onChange = { [weak self] in self?.syncQuickTools() }
+        session.onFinish = { [weak self] url, error in
+            guard let self else { return }
+            self.tutorial = nil
+            self.syncQuickTools()
+            if let url {
+                Sounds.play(.done)
+                self.hud.show("Saved. It's in Quick Tools on the right edge", orb: .breathing, tint: .assistant, autoHide: 3)
+                if QuickTools.enabled { self.quickTools.showSaved(url) } else { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+            } else if let error {
+                Sounds.play(.error)
+                self.hud.show(error, orb: .shaping, tint: .assistant, autoHide: 6)
+            }
+        }
+        tutorial = session
+        syncQuickTools()
+        Task {
+            do { try await session.start() } catch {
+                await MainActor.run {
+                    self.tutorial = nil
+                    self.syncQuickTools()
+                    Sounds.play(.error)
+                    self.hud.show("Allow \(GWConfig.name) under Screen Recording in System Settings, then try again", orb: .shaping, tint: .assistant, autoHide: 6)
+                    NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")!)
+                }
+            }
+        }
+    }
+
+    /// Mirrors the running session into the Quick Tools panel.
+    private func syncQuickTools() {
+        guard #available(macOS 15.0, *), let s = tutorial as? TutorialSession else { quickTools.state = RecState(); return }
+        var r = RecState()
+        switch s.phase {
+        case .countdown: r.phase = .countdown(s.countdownLeft ?? Tutorial.countdown)
+        case .recording: r.phase = .recording
+        case .stopping: r.phase = .saving
+        case .done: r.phase = .idle
+        }
+        r.elapsed = s.elapsed
+        r.pen = s.penOn
+        r.spotlight = s.spotlightOn
+        r.halo = s.haloOn
+        r.camera = s.cameraOn
+        r.penColor = Tutorial.penColors.firstIndex(of: s.penColor) ?? 0
+        quickTools.state = r
+    }
+
+    private func quickToolsAction(_ a: String) {
+        guard #available(macOS 15.0, *) else { return }
+        let s = tutorial as? TutorialSession
+        switch a {
+        case "record": if s == nil { toggleTutorial() }
+        case "stop": s?.stop()
+        case "pen": s?.togglePen()
+        case "clear": s?.clearInk()
+        case "spotlight": s?.toggleSpotlight()
+        case "halo": s?.toggleHalo()
+        case "camera": s?.toggleCamera()
+        default:
+            if a.hasPrefix("color:"), let i = Int(a.dropFirst(6)), Tutorial.penColors.indices.contains(i) { s?.setPenColor(Tutorial.penColors[i]) }
+        }
+    }
+
+    private func tutorialKey(_ key: Tutorial.Key) {
+        guard #available(macOS 15.0, *) else { return }
+        let running = tutorial as? TutorialSession
+        switch key {
+        case .toggle: toggleTutorial()
+        case .pen: running?.togglePen()
+        case .clear: running?.clearInk()
+        case .escape:
+            if running?.phase == .countdown { running?.stop() } else if running?.penOn == true { running?.togglePen() }
+        }
+    }
+
+    @objc private func toggleQuickTools() {
+        QuickTools.enabled.toggle()
+        QuickTools.enabled ? startQuickTools() : quickTools.stop()
     }
 
     @objc private func toggleIndicator() {

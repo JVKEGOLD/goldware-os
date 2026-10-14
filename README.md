@@ -208,6 +208,18 @@ Say a voice phrase on its own (optionally after "Hey" or the assistant's name) w
 - **Lock up** closes every terminal except those with an agent mid-task (a Hermes chat holding a turn lease, or Claude Code or Codex using CPU). If the busy state cannot be read, nothing is closed.
 - **Clear out** closes only the Hermes terminals nobody has written in. Without Hermes installed it finds nothing to close.
 
+## Record a tutorial (Quick Tools)
+
+A small Great Ball sits on the right edge of your screen. Hover it (or click it) and the Quick Tools panel slides out. It holds a **Record a Tutorial** button and your recordings, newest first: click one to watch it right in the panel, drag it into Finder, Mail, Slack or an upload box to share the file, or double-click it to open it in QuickTime.
+
+To start, press the Record button, say "Start recording" (or "Record my screen") with Right Command or after the wake phrase, press Control-Option-R, or use **Record a Tutorial** in the menu bar. After a 3 second countdown, GoldWare OS records the screen your pointer is on, plus your voice. A round camera bubble sits at the bottom left (drag it anywhere), and a yellow halo follows your pointer and ripples when you click.
+
+While it records, the ball gets a red ring and the panel turns into the tools: a big **Stop**, **Pen** in four colours (each stroke fades five seconds after you lift the pen), **Spotlight** (dims everything except a circle around the pointer), **Halo**, **Camera** and **Clear ink**. The ball and its panel never show up in the video. Keys: Control-Option-R start or stop, Control-Option-D pen, Control-Option-C clear, Esc puts the pen down (or cancels the countdown). Say "Stop recording" or press Stop to save. The panel then opens on your new video.
+
+Videos are saved in your Movies folder, in a folder named after your assistant with "Recordings" on the end. If your default microphone is Bluetooth (AirPods), the built-in microphone is used so your music does not drop to phone quality. Switch the ball off any time with **Quick Tools** in the menu bar. It needs macOS 15, and the first recording asks for Screen Recording (plus Camera and Microphone for the bubble and voice). Allow only what you want.
+
+Tests: `GoldWareOS --test-tutorial` (phrases, keys, ink fade, click ripple, bubble spot, file name, microphone choice, ball and panel placement, when the panel tucks away, the recordings list, every tool inside the panel) and `GoldWareOS --render-tutorial out.png` (pictures of the ink layer, the panels and the Great Ball). Code: `app/Sources/GoldWareOS/Tutorial.swift`, `QuickTools.swift`.
+
 ## Make it yours
 
 GoldWare OS is meant to be reshaped. Rename the assistant, change the wake phrase, add dashboard cards, swap the model, or add voice commands by asking your AI agent. [docs/CUSTOMIZING.md](docs/CUSTOMIZING.md) maps every setting and where it lives.
@@ -229,7 +241,7 @@ Test: `GoldWareOS --test-fans` (never writes to the real fans). Code: `app/Sourc
 
 ## Other permissions
 
-The "Let's work", "Finish up", "Lock up", and "Clear out" commands, which talk to your open terminals, ask for Automation access the first time you use them, and the control center's Today tab asks for Calendar access. Allow them only if you want those features.
+The "Let's work", "Finish up", "Lock up", and "Clear out" commands, which talk to your open terminals, ask for Automation access the first time you use them, and the control center's Today tab asks for Calendar access. Recording a tutorial asks for Screen Recording the first time, and for Camera if you want the bubble. Allow them only if you want those features.
 
 ## License
 

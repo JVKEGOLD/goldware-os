@@ -612,6 +612,14 @@ class TestHardening(ServerCase):
         self.assertIsInstance(self.req("/api/office/agents")[1]["agents"], list)
         self.assertEqual(self.req("/api/office/screen?id=nope")[0], 404)
 
+    def test_voice_guide_explains_tutorial_recorder(self):
+        with open(os.path.join(REPO, "dashboard", "index.html"), encoding="utf-8") as f:
+            html = f.read()
+        self.assertEqual(html.count('id="voice-tutorial"'), 1)
+        entry = html.split('id="voice-tutorial"', 1)[1].split("</dd></div>", 1)[0]
+        for phrase in ("Start recording", "Great Ball", "stays out of the video", "drag it into Finder", "Spotlight", "Recordings"):
+            self.assertIn(phrase, entry)
+
     def test_shortcut_buttons_and_card(self):
         with open(os.path.join(REPO, "dashboard", "index.html"), encoding="utf-8") as f:
             html = f.read()
